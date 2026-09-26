@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Backrooms: harness pages</title>
+    <link rel="icon" href="data:," />
+    <!-- WP14 (§7.3): index of the harness pages. Sets a HarnessDebugAPI that is ready immediately. -->
+    <style>
+      :root { --fg: #ece6cd; --dim: rgba(236, 230, 205, 0.56); --faint: rgba(236, 230, 205, 0.3); --rule: rgba(236, 230, 205, 0.12); --amber: #e4c56f; }
+      html, body { margin: 0; min-height: 100%; background: #0b0a07; color: var(--fg); }
+      body { font: 13px/1.5 "IBM Plex Mono", "JetBrains Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; letter-spacing: 0.04em; padding: 8vh 7vw; }
+      h1 { margin: 0 0 6px; font-weight: 300; font-size: 26px; letter-spacing: 0.4em; text-transform: uppercase; }
+      .sub { color: var(--dim); margin-bottom: 40px; text-transform: uppercase; letter-spacing: 0.24em; font-size: 11px; }
+      section { border-top: 1px solid var(--rule); padding: 18px 0 22px; display: grid; grid-template-columns: 220px 1fr; gap: 24px; max-width: 1100px; }
+      h2 { margin: 0; font-weight: 400; font-size: 13px; letter-spacing: 0.3em; text-transform: uppercase; }
+      h2 small { display: block; margin-top: 6px; color: var(--faint); letter-spacing: 0.2em; font-size: 10.5px; }
+      p { margin: 0 0 10px; color: var(--dim); }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li { margin: 4px 0; }
+      a { color: var(--amber); text-decoration: none; border-bottom: 1px solid transparent; }
+      a:hover { border-bottom-color: var(--amber); }
+      code { color: var(--faint); font-size: 11.5px; }
+    </style>
+  </head>
+  <body>
+    <h1>Harness</h1>
+    <div class="sub">Isolated test pages · each sets <code>window.__backrooms.ready</code> for tools/shoot.mjs</div>
+
+    <section>
+      <h2>Materials<small>WP8 · textures</small></h2>
+      <div>
+        <p>Procedural texture gallery, per-layer albedo check and tiling seam check.</p>
+        <ul>
+          <li><a href="./materials.html?view=albedo">view=albedo</a> · <a href="./materials.html?view=normal">normal</a> · <a href="./materials.html?view=ormh">ormh</a> · <a href="./materials.html?view=lit">lit</a></li>
+          <li><a href="./materials.html?view=lit&amp;layer=0">single layer (layer=0)</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Chunk<small>WP10 · streaming</small></h2>
+      <div>
+        <p>One chunk through the real worker pipeline with the material system; fly camera, atlas stats.</p>
+        <ul>
+          <li><a href="./chunk.html?seed=1&amp;cx=0&amp;cz=0">seed=1, chunk 0,0</a></li>
+          <li><a href="./chunk.html?seed=1&amp;cx=0&amp;cz=0&amp;view=lightmap">lightmap view</a> · <a href="./chunk.html?seed=1&amp;cx=0&amp;cz=0&amp;view=texel">texel density</a></li>
+          <li><a href="./chunk.html?seed=7&amp;zone=POOLROOMS">zone=POOLROOMS</a> · <a href="./chunk.html?seed=7&amp;zone=PARKING&amp;bake=preview">PARKING (preview bake)</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Post<small>WP11 · lighting &amp; post</small></h2>
+      <div>
+        <p>The calibrated post stack on a synthetic HDR room; the shimmer GLSL/TS parity check.</p>
+        <ul>
+          <li><a href="./post.html?scene=panels">scene=panels</a> · <a href="./post.html?scene=dark">dark</a> · <a href="./post.html?scene=shimmer">shimmer</a></li>
+          <li><a href="./post.html?scene=panels&amp;preset=low">panels at preset=low</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>Game<small>WP14 · app</small></h2>
+      <div>
+        <p>The full game. Automation adds <code>autostart=1</code>; see §7.1 for every URL parameter.</p>
+        <ul>
+          <li><a href="../index.html">title screen</a></li>
+          <li><a href="../index.html?seed=1&amp;autostart=1&amp;debug=1">seed=1, autostart, F3 overlay</a></li>
+          <li><a href="../index.html?testScene=cornell&amp;autostart=1&amp;view=lightmap&amp;bakeTerm=indirect">cornell box, indirect lightmap</a></li>
+          <li><a href="../index.html?testScene=leak&amp;autostart=1&amp;view=lightmap&amp;bakeTerm=direct">leak scene, direct lightmap</a></li>
+        </ul>
+      </div>
+    </section>
+
+    <script>
+      // §7.3: every harness page sets a HarnessDebugAPI; this page has nothing to wait for.
+      window.__backrooms = { ready: true, isReady: () => true, stats: () => ({ page: 'index' }) };
+    </script>
+  </body>
+</html>

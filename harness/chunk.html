@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Backrooms harness: chunk</title>
+    <link rel="icon" href="data:," />
+    <!-- WP10 (§7.3): one chunk through the real worker pipeline (WorkerPool -> chunk.worker -> handleRequest -> ChunkStreamer)
+         rendered with the MaterialSystem and a minimal post. Params: seed, s, cx, cz, zone, view, tpc, bake (see src/harness/chunk.ts). -->
+    <style>html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }</style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/harness/chunk.ts"></script>
+  </body>
+</html>

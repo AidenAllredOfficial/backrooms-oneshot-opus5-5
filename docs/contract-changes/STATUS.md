@@ -1,0 +1,42 @@
+# Contract change merge log (orchestrator only)
+
+| Date | WP | Proposal | Decision | Applied in |
+|---|---|---|---|---|
+| 2026-09-24 | WP1 | createChunkGrid seed param | ACCEPTED: `createChunkGrid(layout, seed = 0)` (WP1-owned signature, optional 2nd param) | WP1 |
+| 2026-09-24 | WP1 | fixturesNear semantics | ACCEPTED (doc comment) | core/world.ts |
+| 2026-09-24 | WP2 | LightingProfile.decayAdd | ACCEPTED: `decayAdd?: number`; WP1 chunkgen wraps ctx.fields | core/world.ts |
+| 2026-09-24 | WP5 | per-cell wallMat/trimMat | ACCEPTED: `ChunkLayout.wallMat`, `ChunkLayout.trimMat` (Uint8Array per cell); WP1 writes from palette; WP10 validates; WP1 layoutHash includes them | core/layout.ts |
+| 2026-09-24 | WP9 | MaterialGlobals.reflY | ACCEPTED | core/runtime.ts |
+| 2026-09-24 | WP10 | LightVolume index order | ACCEPTED (doc comment): index ((j*NY+k)*NX+i)*4; Data3DTexture(NX, NY, NZ) | core/mesh.ts |
+| 2026-09-24 | WP13 | synthEmitter mainsHz | ACCEPTED: trailing optional `mainsHz: 50 \| 60 = 60` (WP13-owned) | WP13 |
+| 2026-09-24 | WP13 | AudioSystem.setQuality | ACCEPTED; WP14 must call it on runtime quality change | core/runtime.ts |
+| 2026-09-24 | WP14 | parseLaunchParams randomSeedText | ACCEPTED: optional 3rd param (WP14-owned) | WP14 |
+| 2026-09-24 | WP0 | HarnessDebugAPI.tileSeamCheck | ACCEPTED (optional method) | core/debug.ts |
+| 2026-09-24 | WP0 | ready frame count | DECISION: §6.1 is authoritative — 10 frames after the boot gate and after teleport | WP14 |
+| 2026-09-24 | WP0 | resolveQuality before renderer | DECISION: create the renderer first and pass its gl context (no probe context) | WP14 |
+| 2026-09-24 | WP0 | capture size | DECISION: capture(w,h) returns w×h RGBA8 (runtime.ts is authoritative) | WP11 |
+| 2026-09-25 | WP4 | cctRange direction | ACCEPTED: warmth 1 → low-Kelvin (warm) end, any pair order; documented in core/world.ts; WP2 l0common fixed; golden.json regenerated | core/world.ts, l0common.ts |
+| 2026-09-25 | WP6 | PROP_AUX aux.x roughness override | ACCEPTED (doc comment) | core/ids.ts |
+| 2026-09-25 | WP7 | Light-volume a.rgb meaning | ACCEPTED as implemented (irradiance facing the dominant direction; matches WP9 decode) | — |
+| 2026-09-25 | WP7 | preview / time-to-ready gates | DECISION: preview p95 gate relaxed to 300 ms and time-to-ready to 4 s on this machine; full-bake gates unchanged (600 ms warm p95, 900 ms cold max) | bench |
+| 2026-09-25 | WP11 | BLOOM_SCALE 0.12 | ACCEPTED (calibration of table values to pmndrs mip-chain gain) | PostStack.ts |
+| 2026-09-25 | WP3 | PIPEWORKS triangles/tile | DECISION: budget raised to 64k tris/tile (GPU at 1.4-2.4 ms/frame on target) | — |
+| 2026-09-25 | R2 B4 | LandmarkKind 13-37 (12 lottery kinds + 13 hero rooms), LANDMARK_COUNT 38; STRATA_WEIGHTS[2] + PIPEWORKS/CONCRETE; LANDMARK_LIGHT_R entries for tall new kinds | PROPOSED (additive, append-only ids; for the lead to accept); see R2-landmarks.md | core/ids.ts, core/zones.ts |
+| 2026-09-25 | R2 B7 | Settings.cameraShake / walkSpeed + WalkSpeed type (additive); DEFAULT_SETTINGS.mouseSensitivity 0.0022 -> 0.0014 (stored untouched old default migrates); PLAYER.walk 1.45 -> 1.75, sprint 3.2 -> 4.0, sprintTired 2.4 -> 3.2 (pace; autowalk/attract keep exact speeds via DEFAULT_CONTROLLER) | PROPOSED (for the lead to accept); see R2-ux.md | core/settings.ts, core/constants.ts |
+| 2026-09-25 | R2 B9 | core/debug.ts: LaunchParams.bake adds 'interactive' (default without autostart; autostart keeps 'full'); MemoryStats + DebugStats.memory?; AutowalkReport.frameMsMax? / displacement? (frameMsMax5s deprecated alias); autowalk({ heading? }); BackroomsDebugAPI.flickerWindow?(). core/quality.ts: values only (high maxDpr 1.5, bakeWorkers 8; ultra renderScale 1.5 + dynamicResolution, maxDpr 2, planarReflectionScale 1, bloomLevels 9, bakeWorkers 8) | PROPOSED (additive); see R2-robustness.md | core/debug.ts, core/quality.ts |
+| 2026-09-25 | R2 integration | Accepted the R2 B4 / B7 / B9 proposals above as merged. golden.json regenerated (GEN_VERSION kept at 1 so seeds and QA preset coordinates stay valid). Tests updated to the B4 rules: landmark spacing >= 2 chunks (LANDMARK_MIN_DIST), cross-storey RED_ROOM / LOCKED_EXIT / VENDING_ALCOVE / SERVER_ROOM storeys, POOLROOMS variants (TUNNELS walkable floor 0.4, per-variant lighting spec, DRAINED basin lights not submerged) | ACCEPTED | tests/world/{seams,structures,zones-deep}.test.ts, tests/world/golden.json |
+| 2026-09-25 | R2 integration | StreamStats.tilesOtherStoreys + DebugStats.tiles.otherStoreys (additive): live tiles of the other storeys kept by the tower / elevator / pit / glitch prefetch keep-alive. The soak preset now bounds geometries / textures / bytes after idle against all live tiles, with the texture pool excluded | ACCEPTED | core/runtime.ts, core/debug.ts, stream/ChunkStreamer.ts, app/debugApi.ts, tools/qa-presets.json |
+| 2026-09-25 | R2 integration | LANDMARK_EV_MIN (lighting/atmospheres.ts): exposure floor while the eye is inside a landmark footprint; RED_ROOM EV 6.5 (auto exposure metered luma opened to EV 4.3, clipping red to pastel pink) | ACCEPTED | lighting/atmospheres.ts, lighting/LightingRuntime.ts |
+| 2026-09-25 | R2 integration | Metal rust / primer toned down (RUST_COLOR [0.2,0.085,0.03] -> [0.15,0.085,0.045], rust threshold 0.45 -> 0.5, METAL_PAINTED chips rarer and primer 122,64,46 -> 112,80,62): red specks on pale lockers / beams read as blood spatter | ACCEPTED | materials/chunks/{params,surface}.ts, textures/layers/metal.ts |
+| 2026-09-25 | R2 integration | QA preset changes: leak-direct gets nopost=1 (raw lightmap); leak-final room-B limit 0.02 -> 0.08 (B1 sensor black pedestal ~0.058); force-DARK-flicker class dark -> mixed (frames the district's one lit troffer); landmark-ATRIUM level0 false (pool-tile interior) | ACCEPTED | tools/qa-presets.json |
+| 2026-09-26 | R3 perf | ChunkStreamer.isReadyNear(nearM, viewM, needFull) | ADDED (core/runtime.ts); player gate (bake interactive/preview) = preview tiles within 20 m + in view within 40 m; bake=full (automation) unchanged | loop.ts, ChunkStreamer.ts |
+| 2026-09-26 | R3 perf | job priorities | CHANGED: base = ring*20 + frustum 30 + distance*2; bake offset +60; own-chunk offset no longer applies to bakes | stream/priorities.ts |
+| 2026-09-26 | R3 perf | worker pool sizes | CHANGED: bakeWorkers low 3 / medium 4 / high 4 / ultra 6; boot pool = steady size (bake is memory-bandwidth bound: 4 workers 3.4 s vs 10 workers 4.3 s to ready) | core/quality.ts, WorkerPool.ts |
+| 2026-09-26 | R3 perf | QualityConfig.shaderDetail, aa 'off' | ADDED: low = lite surface shader (BR_LITE) + no AA pass | core/quality.ts, materials, PostStack.ts |
+| 2026-09-26 | R3 perf | dynamic resolution | CHANGED: budget = max(refresh, 11.1 ms); misses count only when GPU p90 >= 0.5 x budget (scale changes cost ~100 ms hitches) | DynamicResolution.ts |
+| 2026-09-26 | R3 perf | auto quality | CHANGED: weak iGPUs (Radeon 610M, Intel UHD/HD) -> low; other AMD APUs / Arc Graphics -> medium; title-screen note on integrated GPUs | qualityAuto.ts, App.ts, ui/title.ts |
+| 2026-09-26 | R3 perf | GPU context priming + early pool | ADDED: throwaway context absorbs Chromium's first-context loss on NVIDIA/Vulkan; worker pool starts during the wait | app/renderer.ts, App.ts, boot.ts |
+| 2026-09-26 | R3 perf | npm run play | ADDED tools/play.mjs: prod build + Chromium with NVIDIA PRIME offload (else DRI_PRIME / ANGLE Vulkan), own profile | tools/play.mjs |
+| 2026-09-26 | R3 black frames | DynamicResolution.beforeRender() | ADDED: update() only queues a scale change; loop step 0 applies it before the frame draws. The step-12 apply resized the canvas after the frame was drawn, which presented the cleared (black) drawing buffer on every scale change | DynamicResolution.ts, appState.ts, loop.ts |
+| 2026-09-26 | R3 black frames | npm run play under XWayland | CHANGED: on Wayland sessions the launcher adds --ozone-platform=x11 (native Wayland = software compositing with a per-frame canvas readback: ultra 94/79 fps idle/walking and 100-160 ms resize stalls; XWayland: 149/128 fps, <= 18 ms); BACKROOMS_OZONE=wayland opts out | tools/play.mjs, README |
+| 2026-09-26 | R3 black frames | launch param noprime=1 (LaunchParams.prime) | ADDED: skips primeGpuContext's first-context-loss wait (that loss is the Wayland GPU-process restart; none under XWayland; ~0.55 s off the boot); npm run play sets it under XWayland | urlParams.ts, core/debug.ts, renderer.ts, App.ts |

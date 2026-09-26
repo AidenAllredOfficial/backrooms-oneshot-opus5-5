@@ -1,0 +1,447 @@
+// src/materials/chunks/surface.ts — fragment-stage surface chunks: fade, texture sampling with anti-tiling,
+// macro variation, mask-driven grime, hashed world features, Toksvig roughness, metalness, normal mapping and
+// emission. Albedo/normal/ormh are sampled ONCE (in the map_fragment replacement) and stashed in main-scope
+// variables, because in r186 roughnessmap_fragment runs before normal_fragment_maps.
+
+import { DecalKind } from '../../core/ids.ts';
+
+/** Texture-set uniforms (shared objects) + layer table; appended to the fragment common block. */
+export const SURFACE_PARS_GLSL = /* glsl */ `
+// BR_DETAIL 0 (quality low): skip the per-pixel world features (constant-folded away by the compiler)
+#ifdef BR_LITE
+#define BR_DETAIL 0
+#else
+#define BR_DETAIL 1
+#endif
+uniform sampler2DArray uBrAlbedo;
+uniform sampler2DArray uBrNormal;
+uniform sampler2DArray uBrOrmh;
+uniform sampler2D uBrGrime;
+uniform vec4 uBrLayerA[ BR_MAT_COUNT ];
+uniform vec4 uBrLayerB[ BR_MAT_COUNT ];
+
+// salt per tile and face axis: rotated physical tiles never straddle a tile (tileSize | repeat | TILE_SIZE),
+// so a per-tile salt only decorrelates neighbours
+uint brTileSalt( vec3 n ) {
+	ivec2 t = ivec2( floor( uNoiseOrigin.xz / BR_TILE + 0.5 ) );
+	vec3 a = abs( n );
+	uint axis = a.y >= max( a.x, a.z ) ? ( n.y > 0.0 ? 1u : 2u ) : ( a.x > a.z ? 3u : 4u );
+	return uint( t.x ) * 73856093u ^ uint( t.y ) * 19349663u ^ axis * 83492791u;
+}
+bool brIsChalk( vec2 uv ) {
+	ivec2 s = ivec2( clamp( uv * 4.0, vec2( 0.0 ), vec2( 3.999 ) ) );
+	return s.x + 4 * s.y == ${DecalKind.CHALK_ARROW}; // DecalKind.CHALK_ARROW slot
+}
+`;
+
+/** After `#include <clipping_planes_fragment>` (main start): dithered fade + props culling in the reflection pass. */
+export const FRAG_MAIN_START_GLSL = /* glsl */ `
+if ( uFade < 1.0 && brBayer4( gl_FragCoord.xy ) >= uFade ) discard;
+#ifdef BR_PROPS
+if ( uBrReflPass > 0.5 && length( vViewPosition ) > BR_REFL_PROP_DIST ) discard;
+#endif
+`;
+
+/** Replaces `#include <map_fragment>`. */
+export const FRAG_MAP_GLSL = /* glsl */ `
+// ==== WP9 surface sampling
+int brL = int( vBrLayer + 0.5 );
+int brF = int( vBrFlags + 0.5 );
+vec4 brAuxB = floor( vBrAux4 * 255.0 + 0.5 );
+vec4 brLA = uBrLayerA[ brL ];
+vec4 brLB = uBrLayerB[ brL ];
+float brLayerF = float( brL );
+vec3 brNWg = normalize( vBrNrmW );
+bool brHoriz = brIsHoriz( brNWg );
+// world-anchored lookup position: xz wrapped by the noise origin, y storey-relative (§2.2)
+vec3 brPW = vec3( vBrLocal.x + uNoiseOrigin.x, vBrLocal.y, vBrLocal.z + uNoiseOrigin.z );
+vec2 brS2 = brSurf2D( brPW, brNWg );
+vec2 brUv = vBrUv;
+vec2 brDx = dFdx( brUv );
+vec2 brDy = dFdy( brUv );
+// wallpaper rolls (world-anchored 0.6 m strips): each roll is hung with its own vertical pattern offset (the print
+// mismatches at the seams) and has its own shade / warmth (dye lot, fading)
+bool brRoll = ! brHoriz && ( brL == BR_M_WALLPAPER_L0 || brL == BR_M_WALLPAPER_MANILA );
+uint brRollH = 0u;
+if ( brRoll ) {
+	vec3 brAn = abs( brNWg );
+	uint brOr = brAn.x > brAn.z ? ( brNWg.x > 0.0 ? 0u : 1u ) : ( brNWg.z > 0.0 ? 2u : 3u );
+	brRollH = brHash2u( brWrap( ivec2( int( floor( brS2.x / BR_WALL_ROLL ) ), 0 ), ivec2( BR_WALL_ROLL_P, 1 ) ), 611u + brOr * 13u );
+	brUv.y += ( brU01( brRollH ) - 0.5 ) * 0.06 / brLB.y;
+}
+vec4 brAlb;
+vec4 brNrm; // xyz: filtered tangent normal (length |n̄|) in the continuous uv frame, w: height
+vec4 brOrmh;
+float brNLen;
+int brRotIdx = - 1;
+if ( brLA.x > 0.0 ) {
+	// ---- physical tiles: hashed 90° rotation + flip per tile cell, anisotropic footprint follows the rotation
+	vec2 cells = brLA.xy;
+	vec2 cu = brUv * cells;
+	vec2 cc = floor( cu );
+	vec2 fr = cu - cc - 0.5;
+	uint h = brHash2u( ivec2( cc ), brTileSalt( brNWg ) );
+	int rot = int( h & 3u );
+	float flp = ( h & 4u ) != 0u ? - 1.0 : 1.0;
+	vec2 cs = rot == 0 ? vec2( 1.0, 0.0 ) : rot == 1 ? vec2( 0.0, 1.0 ) : rot == 2 ? vec2( - 1.0, 0.0 ) : vec2( 0.0, - 1.0 );
+	mat2 M = mat2( cs.x, cs.y, - cs.y, cs.x ) * mat2( flp, 0.0, 0.0, 1.0 );
+	vec2 offs = floor( vec2( brU01( brPcg( h ) ), brU01( brPcg( h ^ 0x68bc21ebu ) ) ) * cells );
+	vec2 uvR = ( cc + offs + 0.5 + M * fr ) / cells;
+	// d(uvR) = diag(1/cells) · M · diag(cells) · d(uv) (the rotation acts in square cell space)
+	vec2 gx = ( M * ( brDx * cells ) ) / cells;
+	vec2 gy = ( M * ( brDy * cells ) ) / cells;
+	brAlb = textureGrad( uBrAlbedo, vec3( uvR, brLayerF ), gx, gy );
+	vec4 nt = textureGrad( uBrNormal, vec3( uvR, brLayerF ), gx, gy );
+	brOrmh = textureGrad( uBrOrmh, vec3( uvR, brLayerF ), gx, gy );
+	vec3 nd = nt.xyz * 2.0 - 1.0;
+	brNLen = length( nd );
+	nd.xy = transpose( M ) * nd.xy; // counter-rotate into the continuous uv frame (M orthonormal)
+	brNrm = vec4( nd, nt.w );
+	brRotIdx = rot + ( flp < 0.0 ? 4 : 0 );
+} else if ( BR_DETAIL == 1 && brLA.z > 0.0 ) {
+	// ---- stochastic (offset-only) tiling on a world-anchored sheared triangle lattice: vertices at
+	// (i·hexX + j·hexX/2, j·hexR), near-equilateral triangles whose vertex (blend) cells are hexagons of ~hexM.
+	// Horizontal faces use world xz, periodic over NOISE_WRAP on both axes (hPz even, see brHexWrap), so the
+	// noise-origin wrap never seams. Vertical faces use (along, storey-relative y) with an even row count per
+	// STOREY_PITCH (tower periodicity) and hexX the nearest divisor of NOISE_WRAP (twin: params.ts hexLattice()).
+	float hexM = brLA.z;
+	float hexX; float hexR; int hPx; int hPz;
+	if ( brHoriz ) {
+		hexX = hexM;
+		hexR = hexM * BR_HEX_ROW;
+		hPx = int( BR_NOISE_WRAP / hexX + 0.5 );
+		hPz = int( BR_NOISE_WRAP / hexR + 0.5 );
+	} else {
+		hPz = max( 2, 2 * int( BR_PITCH / ( 2.0 * hexM * BR_HEX_ROW ) + 0.5 ) );
+		hexR = BR_PITCH / float( hPz );
+		hPx = int( BR_NOISE_WRAP * BR_HEX_ROW / hexR + 0.5 );
+		hexX = BR_NOISE_WRAP / float( hPx );
+	}
+	float sy = brS2.y / hexR;
+	vec2 q = vec2( brS2.x / hexX - 0.5 * sy, sy );
+	vec2 qi = floor( q );
+	vec2 qf = q - qi;
+	ivec2 c0 = ivec2( qi );
+	ivec2 v0; ivec2 v1; ivec2 v2; vec3 w;
+	if ( qf.x + qf.y < 1.0 ) {
+		v0 = c0; v1 = c0 + ivec2( 1, 0 ); v2 = c0 + ivec2( 0, 1 );
+		w = vec3( 1.0 - qf.x - qf.y, qf.x, qf.y );
+	} else {
+		v0 = c0 + ivec2( 1, 1 ); v1 = c0 + ivec2( 0, 1 ); v2 = c0 + ivec2( 1, 0 );
+		w = vec3( qf.x + qf.y - 1.0, 1.0 - qf.x, 1.0 - qf.y );
+	}
+	float sharp = max( 1.0, hexX / ( 2.0 * BR_HEX_FEATHER ) );
+	uint hSalt = brHoriz ? 977u : 983u;
+	w = pow( max( w, vec3( 1e-5 ) ), vec3( sharp ) );
+	w /= w.x + w.y + w.z;
+	uint h0 = brHash2u( brHexWrap( v0, hPx, hPz ), hSalt );
+	uint h1 = brHash2u( brHexWrap( v1, hPx, hPz ), hSalt );
+	uint h2 = brHash2u( brHexWrap( v2, hPx, hPz ), hSalt );
+	vec2 o0 = vec2( brU01( h0 ), brU01( brPcg( h0 ) ) );
+	vec2 o1 = vec2( brU01( h1 ), brU01( brPcg( h1 ) ) );
+	vec2 o2 = vec2( brU01( h2 ), brU01( brPcg( h2 ) ) );
+	vec4 a0 = textureGrad( uBrAlbedo, vec3( brUv + o0, brLayerF ), brDx, brDy );
+	vec4 a1 = textureGrad( uBrAlbedo, vec3( brUv + o1, brLayerF ), brDx, brDy );
+	vec4 a2 = textureGrad( uBrAlbedo, vec3( brUv + o2, brLayerF ), brDx, brDy );
+	vec4 n0 = textureGrad( uBrNormal, vec3( brUv + o0, brLayerF ), brDx, brDy );
+	vec4 n1 = textureGrad( uBrNormal, vec3( brUv + o1, brLayerF ), brDx, brDy );
+	vec4 n2 = textureGrad( uBrNormal, vec3( brUv + o2, brLayerF ), brDx, brDy );
+	vec4 r0 = textureGrad( uBrOrmh, vec3( brUv + o0, brLayerF ), brDx, brDy );
+	vec4 r1 = textureGrad( uBrOrmh, vec3( brUv + o1, brLayerF ), brDx, brDy );
+	vec4 r2 = textureGrad( uBrOrmh, vec3( brUv + o2, brLayerF ), brDx, brDy );
+	// variance-preserving blend around the layer mean (1x1 mip)
+	vec4 muA = textureLod( uBrAlbedo, vec3( 0.5, 0.5, brLayerF ), 16.0 );
+	vec4 muR = textureLod( uBrOrmh, vec3( 0.5, 0.5, brLayerF ), 16.0 );
+	float wn = inversesqrt( dot( w, w ) );
+	brAlb = clamp( muA + ( w.x * ( a0 - muA ) + w.y * ( a1 - muA ) + w.z * ( a2 - muA ) ) * wn, 0.0, 1.0 );
+	brOrmh = clamp( muR + ( w.x * ( r0 - muR ) + w.y * ( r1 - muR ) + w.z * ( r2 - muR ) ) * wn, 0.0, 1.0 );
+	vec3 nd0 = n0.xyz * 2.0 - 1.0;
+	vec3 nd1 = n1.xyz * 2.0 - 1.0;
+	vec3 nd2 = n2.xyz * 2.0 - 1.0;
+	brNLen = w.x * length( nd0 ) + w.y * length( nd1 ) + w.z * length( nd2 );
+	vec3 nb = w.x * nd0 + w.y * nd1 + w.z * nd2;
+	brNrm = vec4( normalize( nb + vec3( 0.0, 0.0, 1e-4 ) ) * brNLen, w.x * n0.w + w.y * n1.w + w.z * n2.w );
+} else {
+	// explicit gradients: the per-roll wallpaper offset makes brUv discontinuous at the roll seams
+	brAlb = textureGrad( uBrAlbedo, vec3( brUv, brLayerF ), brDx, brDy );
+	vec4 nt = textureGrad( uBrNormal, vec3( brUv, brLayerF ), brDx, brDy );
+	brOrmh = textureGrad( uBrOrmh, vec3( brUv, brLayerF ), brDx, brDy );
+	vec3 nd = nt.xyz * 2.0 - 1.0;
+	brNLen = length( nd );
+	brNrm = vec4( nd, nt.w );
+}
+
+// ---- alpha: soft (decal variant) or alpha-tested (DECAL flag in shell/props)
+float brAlpha = 1.0;
+#ifdef BR_DECAL
+brAlpha = brAlb.a;
+if ( brL == BR_M_SIGNAGE || ( brL == BR_M_DECAL_ATLAS && brIsChalk( brUv ) ) ) {
+	if ( brAlpha < 0.5 ) discard;
+	brAlpha = 1.0;
+}
+brAlpha *= vBrTint.a; // DecalPlacement.alpha (WP5 writes it to tint.a on decal-buffer vertices)
+if ( brAlpha < 0.004 ) discard;
+#else
+if ( ( brF & BR_F_DECAL ) != 0 && brAlb.a < 0.5 ) discard;
+#endif
+
+vec3 brA = brAlb.rgb;
+float brMacro = brLB.w;
+// ---- macro variation: value ±6 %, hue ±2 % from low-frequency world noise + the coarse-mip luminance
+if ( BR_DETAIL == 1 && brMacro > 0.0 ) {
+	float n1 = brSurfNoise( brS2, brHoriz, BR_MACRO_CELL, BR_MACRO_P, BR_MACRO_CELL_Y, BR_MACRO_PY, 101u );
+	float n2 = brSurfNoise( brS2, brHoriz, BR_MACRO_CELL * 2.0, BR_MACRO_P / 2, BR_MACRO_CELL_Y, BR_MACRO_PY, 202u );
+	vec2 mt = brHoriz ? brS2 / BR_MACRO_TEX_SCALE : vec2( brS2.x / BR_MACRO_TEX_SCALE, brS2.y / BR_PITCH );
+	float lc = brLuma( textureLod( uBrAlbedo, vec3( mt, brLayerF ), BR_MACRO_MIP ).rgb );
+	float lm = max( brLuma( textureLod( uBrAlbedo, vec3( 0.5, 0.5, brLayerF ), 16.0 ).rgb ), 1e-3 );
+	float v = clamp( ( n1 * 2.0 - 1.0 ) * 0.8 + ( lc / lm - 1.0 ) * 1.5, - 1.0, 1.0 );
+	float hh = n2 * 2.0 - 1.0;
+	brA *= 1.0 + BR_MACRO_VALUE * brMacro * v;
+	brA *= vec3( 1.0 + BR_MACRO_HUE * brMacro * hh, 1.0, 1.0 - BR_MACRO_HUE * brMacro * hh );
+}
+if ( brRoll ) {
+	float rv = brU01( brPcg( brRollH ) ) * 2.0 - 1.0;
+	float rw = brU01( brPcg( brRollH ^ 0x5bd1e995u ) ) * 2.0 - 1.0;
+	brA *= ( 1.0 + 0.03 * rv ) * vec3( 1.0 + 0.015 * rw, 1.0, 1.0 - 0.015 * rw );
+	// nicotine / dust yellowing toward the ceiling (storey-relative height)
+	brA *= mix( vec3( 1.0 ), vec3( 1.0, 0.975, 0.925 ), smoothstep( 1.1, 2.8, vBrLocal.y ) );
+}
+
+// ---- mask-driven grime (LAYER_DEFS.grime profile) + hashed world features
+vec4 brMask = vec4( 0.0 );
+#if defined( BR_SHELL ) || defined( BR_DECAL )
+brMask = texture( uLmMask, vBrLmUv );
+#endif
+float brRoughMul = 1.0;
+// absolute wet-roughness target (carpet: water fills the pile, so the filtered-normal variance no longer roughens it)
+float brRoughTo = 1.0;
+float brRoughToW = 0.0;
+float brMetal = brOrmh.b;
+float brNrmScale = brLB.z;
+int brGrime = int( brLA.w + 0.5 );
+if ( ( brF & BR_F_NO_GRIME ) != 0 ) brGrime = 0;
+// submerged: the water body's depth below its plane (aux.w = plane byte on UNDERWATER faces), < 0 above it
+float brSubDepth = ( brF & BR_F_UNDERWATER ) != 0 ? brAuxB.w * 0.05 - 3.2 - vBrLocal.y : - 1.0;
+if ( brGrime != 0 ) {
+	vec2 gA = brHoriz ? brS2 / BR_GRIME_A : vec2( brS2.x / BR_GRIME_A, brS2.y / BR_GRIME_YA );
+	vec2 gB = brHoriz ? brS2 / BR_GRIME_B : vec2( brS2.x / BR_GRIME_B, brS2.y / BR_GRIME_YB );
+	vec4 g1 = texture( uBrGrime, gA );
+	vec4 g2 = texture( uBrGrime, gB + 0.37 );
+	// wide ramp: the mask's damp patches fade over ~0.5 m; a narrow threshold would re-sharpen their borders.
+	// Perturbed by the smooth tide field (g2.r), not the speckle channel: speckle made the fringes sparkle.
+	float wetRaw = brMask.b + ( g2.r - 0.5 ) * 0.3;
+	float wet = smoothstep( 0.22, 0.62, wetRaw );
+	if ( brSubDepth > 0.0 ) wet = 1.0; // under water everything porous is soaked
+	if ( brGrime == 1 ) {
+		// carpet: damage (A) = trodden wear paths / thresholds / lanes; grime (G) = dirt near walls; wet patches (B)
+		float wear = smoothstep( 0.25, 0.75, brMask.a + ( g1.b - 0.5 ) * 0.3 );
+		vec3 worn = mix( brA, vec3( brLuma( brA ) ), 0.25 ) * ( 1.0 + BR_CARPET_WEAR_LIGHTEN );
+		brA = mix( brA, worn, wear * 0.8 );
+		brNrmScale *= 1.0 - BR_CARPET_WEAR_NORMAL * wear;
+		brA *= 1.0 - 0.35 * clamp( brMask.g * ( 0.55 + 0.9 * g1.g ), 0.0, 1.0 );
+		if ( BR_DETAIL == 1 && brHoriz ) {
+			float b = brBlotch( brS2, true, 301u, 0.42, 0.25, 0.75, ( g2.g - 0.5 ) * 0.5 );
+			brA *= mix( vec3( 1.0 ), vec3( 0.7, 0.64, 0.55 ), b * clamp( 0.35 + brMask.g + brMask.a, 0.0, 1.0 ) );
+			// pile lean: soft world patches (1.2 m) where the pile leans one way read lighter from one side and
+			// darker from the other (view-dependent sheen of cut pile); crushed / worn pile shows less of it
+			vec3 brVW = ( vec4( vViewPosition, 0.0 ) * viewMatrix ).xyz;
+			float brVL = length( brVW.xz );
+			if ( brVL > 1e-4 ) {
+				float pa = brVNoise( brS2 / BR_CARPET_PILE_CELL, ivec2( BR_CARPET_PILE_P ), 331u ) * 12.566;
+				float pamp = smoothstep( 0.2, 0.8, brVNoise( brS2 / ( 2.0 * BR_CARPET_PILE_CELL ), ivec2( BR_CARPET_PILE_P / 2 ), 337u ) );
+				float sh = dot( brVW.xz / brVL, vec2( cos( pa ), sin( pa ) ) );
+				brA *= 1.0 + BR_CARPET_PILE_SHADE * ( 0.3 + 0.7 * pamp ) * sh * ( 1.0 - 0.5 * wear ) * ( 1.0 - wet );
+			}
+			if ( brL == BR_M_CARPET_L0 ) {
+				// broadloom: seams every 3.84 m along x (3 mm darker line) and a dye lot per width (±3 %)
+				float bx = brS2.x / BR_CARPET_BROADLOOM;
+				uint hl = brHash2u( brWrap( ivec2( int( floor( bx ) ), 0 ), ivec2( BR_CARPET_BROADLOOM_P, 1 ) ), 341u );
+				float lv = brU01( hl ) * 2.0 - 1.0, lh = brU01( brPcg( hl ) ) * 2.0 - 1.0;
+				brA *= ( 1.0 + 0.03 * lv ) * vec3( 1.0 + 0.012 * lh, 1.0, 1.0 - 0.012 * lh );
+				float dm = abs( fract( bx + 0.5 ) - 0.5 ) * BR_CARPET_BROADLOOM;
+				float fw = max( fwidth( brS2.x ), 1e-4 );
+				float seamL = clamp( 0.003 / fw, 0.0, 1.0 ) * ( 1.0 - smoothstep( 0.0015, 0.0015 + fw, dm ) );
+				brA *= 1.0 - 0.35 * seamL * ( 0.6 + 0.4 * g1.g );
+			}
+#ifdef BR_SHELL
+			// filtration soiling: a dark line on the carpet along the wall faces (air drawn under the baseboards),
+			// from the tile wall mask, broken up by the tide field
+			ivec2 wcl = ivec2( floor( vBrLocal.xz / BR_CELL ) );
+			int wbits = brWallBits( wcl );
+			if ( wbits != 0 ) {
+				vec2 wfr = vBrLocal.xz - vec2( wcl ) * BR_CELL;
+				float wd = 9.0;
+				if ( ( wbits & 1 ) != 0 ) wd = min( wd, wfr.y );
+				if ( ( wbits & 2 ) != 0 ) wd = min( wd, BR_CELL - wfr.x );
+				if ( ( wbits & 4 ) != 0 ) wd = min( wd, BR_CELL - wfr.y );
+				if ( ( wbits & 8 ) != 0 ) wd = min( wd, wfr.x );
+				float soil = 1.0 - smoothstep( 0.075, 0.095 + 0.03 * g2.r, wd );
+				brA *= mix( vec3( 1.0 ), vec3( 0.7, 0.66, 0.6 ), soil * ( 0.55 + 0.45 * g2.r ) );
+			}
+#endif
+		}
+		// damp: a dried tide ring at the patch edge, saturated deeper mustard-brown inside, mottled
+		float ring = smoothstep( 0.1, 0.2, wetRaw ) * ( 1.0 - smoothstep( 0.2, 0.32, wetRaw ) );
+		brA *= mix( vec3( 1.0 ), vec3( 0.8, 0.7, 0.55 ), 0.5 * ring );
+		vec3 damp = pow( max( brA, vec3( 0.0 ) ), vec3( 1.45 ) ) * 1.25 * mix( 0.85, 1.0, g1.r ) * vec3( 1.04, 0.97, 0.86 );
+		brA = mix( brA, damp, wet );
+		brRoughTo = mix( BR_CARPET_WET_ROUGH, BR_CARPET_SOAK_ROUGH, max( smoothstep( 0.9, 0.98, brMask.b ), step( 0.0, brSubDepth ) ) );
+		brRoughToW = wet;
+	} else if ( brGrime == 2 ) {
+		// wallpaper: tide-band stains (R: leaks, rising damp, ceiling seepage; sharp edge from grime.r), dirt / dust /
+		// hand smudges (G), peeling at roll seams (A)
+		float s = brMask.r + ( g1.r - 0.5 ) * 0.3 * step( 0.02, brMask.r );
+		float stain = smoothstep( 0.42, 0.5, s );
+		float tide = ( 1.0 - smoothstep( 0.0, 0.045, abs( s - 0.46 ) ) ) * step( 0.02, brMask.r );
+		brA *= mix( vec3( 1.0 ), BR_WALL_STAIN * mix( 0.92, 1.05, g2.r ), stain * 0.7 );
+		brA *= mix( vec3( 1.0 ), BR_WALL_TIDE, tide * 0.75 );
+		brA *= 1.0 - 0.25 * g1.a * stain;
+		brA *= mix( vec3( 1.0 ), BR_WALL_DIRT, clamp( brMask.g * ( 0.45 + 0.9 * g2.g ), 0.0, 1.0 ) );
+		float seamM = abs( fract( brUv.x * 2.0 + 0.5 ) - 0.5 ) * 0.5 * brLB.x; // metres to the nearest 0.6 m roll seam
+		float seam = 1.0 - smoothstep( 0.0, 0.07, seamM );
+		float peel = smoothstep( 0.55, 0.7, brMask.a * ( 0.45 + 0.8 * seam ) + ( g2.b - 0.5 ) * 0.3 );
+		brA = mix( brA, BR_WALL_BACKING, peel );
+		brNrm.x += peel * ( 1.0 - peel ) * 2.4 * brNrm.z; // lifted edge catches the light
+		brRoughMul *= mix( 1.0, 0.9, stain );
+		float mould = smoothstep( 0.6, 0.85, g2.g ) * clamp( brMask.b + brMask.r * 0.5, 0.0, 1.0 );
+		brA *= mix( vec3( 1.0 ), vec3( 0.45, 0.47, 0.38 ), mould * 0.6 );
+		if ( BR_DETAIL == 1 && ! brHoriz ) {
+			// sun-less "fades": large soft paler patches
+			float fz = smoothstep( 0.62, 0.9, brSurfNoise( brS2, false, BR_FEATURE_CELL, BR_FEATURE_P, BR_FEATURE_CELL_Y, BR_FEATURE_PY, 401u ) );
+			brA = mix( brA, vec3( brLuma( brA ) ) * vec3( 1.1, 1.06, 0.95 ), fz * 0.22 );
+		}
+	} else if ( brGrime == 3 ) {
+		// ceiling tile: stain rings (R and iso-rings), sag darkening, grime
+		float s = brMask.r;
+		float ring = smoothstep( 0.75, 0.95, fract( s * 3.0 + g1.r * 0.25 ) ) * step( 0.04, s );
+		brA *= mix( vec3( 1.0 ), vec3( 0.78, 0.66, 0.45 ), smoothstep( 0.05, 0.6, s ) * 0.55 );
+		brA *= mix( vec3( 1.0 ), vec3( 0.55, 0.43, 0.27 ), ring * 0.6 );
+		brA *= 1.0 - 0.18 * smoothstep( 0.35, 0.9, s + brMask.b * 0.5 );
+		brA *= mix( vec3( 1.0 ), vec3( 0.72, 0.68, 0.6 ), clamp( brMask.g * ( 0.4 + 1.2 * g2.g ), 0.0, 1.0 ) * 0.45 );
+		// a few yellowed tiles (hash per 0.6 m ceiling tile)
+		ivec2 cti = ivec2( floor( brS2 / 0.6 ) );
+		ivec2 ctP = ivec2( int( BR_NOISE_WRAP / 0.6 + 0.5 ) );
+		uint ht = brHash2u( brWrap( cti, ctP ), 503u );
+		brA *= mix( vec3( 1.0 ), vec3( 0.93, 0.88, 0.74 ), step( 0.86, brU01( ht ) ) * brU01( brPcg( ht ) ) );
+		// old water stains on a few tiles: an off-centre blotch with 1-3 brown tide rings, clipped to the tile
+		uint hs = brHash2u( brWrap( cti, ctP ), 509u );
+		if ( brHoriz && brU01( hs ) < BR_CEIL_STAIN_P ) {
+			vec2 tfr = brS2 / 0.6 - vec2( cti );
+			vec2 ctr = 0.3 + 0.28 * vec2( brU01( brPcg( hs ) ), brU01( brPcg( hs + 1u ) ) ) - 0.14;
+			float R = mix( 0.08, 0.26, brU01( brPcg( hs + 2u ) ) );
+			vec2 dv = ( tfr * 0.6 - ctr ) * vec2( 1.0, mix( 0.75, 1.25, brU01( brPcg( hs + 3u ) ) ) );
+			float d = length( dv ) / R + ( g1.r - 0.5 ) * 0.5 + ( g2.b - 0.5 ) * 0.15;
+			int nr = 1 + int( brU01( brPcg( hs + 4u ) ) * 2.99 );
+			float clipT = smoothstep( 0.012, 0.03, min( min( tfr.x, 1.0 - tfr.x ), min( tfr.y, 1.0 - tfr.y ) ) * 0.6 );
+			float inside = ( 1.0 - smoothstep( 0.9, 1.0, d ) ) * clipT;
+			float rings = 0.0;
+			for ( int k = 0; k < 3; k ++ ) {
+				if ( k >= nr ) break;
+				float rk = 1.0 - float( k ) * 0.3;
+				rings = max( rings, ( 1.0 - smoothstep( 0.0, 0.05, abs( d - rk ) ) ) * ( 1.0 - 0.25 * float( k ) ) );
+			}
+			brA *= mix( vec3( 1.0 ), vec3( 0.88, 0.8, 0.6 ), inside * ( 0.45 + 0.25 * g2.r ) );
+			brA *= mix( vec3( 1.0 ), vec3( 0.6, 0.47, 0.3 ), rings * clipT * 0.7 );
+		}
+	} else if ( brGrime == 4 ) {
+		// concrete: oil and wet patches; floors: saw-cut control joints; walls: damp, efflorescence, tie-hole rust
+		float oil = smoothstep( 0.55, 0.8, g1.b * 0.6 + brMask.g * 0.7 );
+		if ( brHoriz ) oil = max( oil, brBlotch( brS2, true, 311u, 0.18, 0.15, 0.45, ( g2.b - 0.5 ) * 0.6 ) * 0.8 );
+		brA *= mix( vec3( 1.0 ), vec3( 0.5, 0.48, 0.46 ), oil * 0.65 );
+		brA *= mix( vec3( 1.0 ), vec3( 0.62, 0.58, 0.52 ), clamp( brMask.g * ( 0.4 + g2.g ), 0.0, 1.0 ) * 0.8 );
+		if ( brHoriz && brL == BR_M_CONCRETE_FLOOR && brNWg.y > 0.0 ) {
+			vec2 jd = abs( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT; // m to the joint lines
+			vec2 fw = max( fwidth( brS2 ), vec2( 1e-4 ) );
+			float hw = 0.002 + 0.003 * smoothstep( 0.6, 0.9, g1.b ) + 0.0015 * ( g2.r - 0.5 ); // spalled edges
+			vec2 ln = clamp( 2.0 * hw / fw, 0.0, 1.0 ) * ( 1.0 - smoothstep( vec2( hw ), hw + fw, jd ) );
+			vec2 dz = 1.0 - smoothstep( 0.0, 0.03, jd ); // dirt collected beside the cut
+			brA *= 1.0 - 0.6 * max( ln.x, ln.y ) - 0.08 * max( dz.x, dz.y );
+		}
+		if ( ! brHoriz ) {
+			float s = brMask.r + ( g1.r - 0.5 ) * 0.3 * step( 0.02, brMask.r );
+			float damp = smoothstep( 0.42, 0.5, s );
+			float front = ( 1.0 - smoothstep( 0.0, 0.05, abs( s - 0.47 ) ) ) * step( 0.02, brMask.r );
+			brA *= mix( 1.0, 0.78, damp );
+			// efflorescence: white-grey salts at the drying front and in streaks down the damp area
+			float eff = clamp( front * 0.8 + damp * smoothstep( 0.5, 0.8, g1.a ) * 0.7, 0.0, 1.0 );
+			brA = mix( brA, vec3( 0.6, 0.59, 0.56 ), eff * 0.5 );
+			brRoughMul *= mix( 1.0, 1.1, eff );
+			if ( brL == BR_M_CONCRETE_WALL ) {
+				// rust bleeding from some formwork tie holes (holes at along = 0.3 + 0.6 k, y = 0.375 + 0.75 k)
+				float hx = ( floor( ( brS2.x - 0.3 ) / 0.6 + 0.5 ) ) * 0.6 + 0.3;
+				float hy = ceil( ( brS2.y - 0.375 ) / 0.75 ) * 0.75 + 0.375;
+				uint hh = brHash2u( brWrap( ivec2( int( floor( hx / 0.6 ) ), int( floor( hy / 0.75 ) ) ), ivec2( int( BR_NOISE_WRAP / 0.6 + 0.5 ), 4 ) ), 719u );
+				float dy = hy - brS2.y;
+				float L = 0.15 + 0.6 * brU01( brPcg( hh ) );
+				float w = 0.008 + 0.03 * dy / L;
+				float rs = step( brU01( hh ), 0.35 ) * exp( - ( brS2.x - hx ) * ( brS2.x - hx ) / ( w * w ) ) * ( 1.0 - smoothstep( 0.2, 1.0, dy / L ) ) * step( 0.01, dy );
+				rs *= 0.5 + 0.5 * g1.a;
+				brA = mix( brA, vec3( 0.32, 0.16, 0.07 ), rs * 0.6 );
+			}
+		}
+		brA *= mix( 1.0, BR_CONCRETE_WET_DARKEN, wet );
+		brRoughMul = mix( 1.0, BR_CONCRETE_WET_ROUGH, wet ) * mix( 1.0, 0.7, oil );
+	} else if ( brGrime == 5 ) {
+		// tile: grout grime (G), wet film (B -> roughness x 0.5). Grout = markedly rougher than the layer's mean AND low:
+		// height alone is ambiguous (WP8 tilts glazed tiles by +-1.5 deg, so tile corners sink to grout height)
+		float brMuRough = textureLod( uBrOrmh, vec3( 0.5, 0.5, brLayerF ), 16.0 ).g;
+		float grout = smoothstep( 0.12, 0.28, brOrmh.g - brMuRough ) * ( 1.0 - smoothstep( 0.35, 0.6, brNrm.w ) );
+		brA *= mix( vec3( 1.0 ), vec3( 0.5, 0.52, 0.42 ), clamp( grout * ( brMask.g * 1.6 + 0.25 * g2.g ), 0.0, 1.0 ) );
+		brA *= mix( 1.0, 0.94, wet );
+		brRoughMul = mix( 1.0, BR_TILE_WET_ROUGH, wet );
+		if ( ! brHoriz && brSubDepth > 0.0 ) {
+			// pool walls: a limescale band just under the waterline, faint algae below it
+			float lime = 1.0 - smoothstep( 0.035, 0.05, brSubDepth + ( g2.r - 0.5 ) * 0.02 );
+			float algae = smoothstep( 0.03, 0.06, brSubDepth ) * ( 1.0 - smoothstep( 0.1, 0.3, brSubDepth + ( g1.r - 0.5 ) * 0.1 ) );
+			brA *= mix( vec3( 1.0 ), vec3( 0.86, 0.84, 0.76 ), lime * ( 0.7 + 0.3 * g1.g ) );
+			brA *= mix( vec3( 1.0 ), vec3( 0.8, 0.88, 0.72 ), algae * smoothstep( 0.3, 0.8, g1.g ) * 0.7 );
+			brRoughMul *= mix( 1.0, 4.0, lime );
+		}
+	} else if ( brGrime == 6 ) {
+		// metal: rust streaks
+		float rust = smoothstep( 0.5, 0.85, brMask.g * 0.8 + g1.a * 0.6 + g2.g * 0.2 );
+		brA = mix( brA, BR_RUST * ( 0.8 + 0.4 * g2.g ), rust * 0.75 );
+		brMetal *= 1.0 - rust;
+		brRoughMul = mix( 1.0, 1.6, rust );
+	}
+}
+diffuseColor.rgb = brA * vBrTint.rgb;
+diffuseColor.a = brAlpha;
+`;
+
+/** Replaces `#include <roughnessmap_fragment>`: ormh.g with Toksvig (filtered-normal variance) × wetness. */
+export const FRAG_ROUGHNESS_GLSL = /* glsl */ `
+float brVar = clamp( ( 1.0 - brNLen ) / max( brNLen, 1e-3 ) - BR_TOKSVIG_DEADZONE, 0.0, BR_TOKSVIG_MAX_VAR );
+float brR = brOrmh.g;
+// props: a non-zero aux.x is a per-part roughness override (WP6: car paint, CRT glass, polished metal)
+if ( ( brF & BR_F_PROP_AUX ) != 0 && brAuxB.x > 0.5 ) brR = brAuxB.x / 255.0;
+float roughnessFactor = clamp( mix( sqrt( brR * brR + brVar ) * brRoughMul, brRoughTo, brRoughToW ), 0.02, 1.0 );
+`;
+
+/** Replaces `#include <metalnessmap_fragment>`. */
+export const FRAG_METALNESS_GLSL = /* glsl */ `
+float metalnessFactor = clamp( brMetal, 0.0, 1.0 );
+`;
+
+/** Replaces `#include <normal_fragment_maps>`. brNg = the unperturbed normal (the baked lighting divides by it). */
+export const FRAG_NORMAL_GLSL = /* glsl */ `
+vec3 brNg = normal;
+{
+	mat3 brTbn = brTangentFrame( - vViewPosition, normal, vBrUv );
+	vec3 brMapN = vec3( brNrm.xy * brNrmScale, max( brNrm.z, 1e-3 ) );
+	normal = normalize( brTbn * brMapN );
+}
+`;
+
+/** Replaces `#include <emissivemap_fragment>`. LENS_SHIMMER_GLSL (core/flicker.ts, WP11) provides brLensShimmer. */
+export const FRAG_EMISSIVE_GLSL = /* glsl */ `
+if ( vBrEmit > 0.0 ) {
+	float brIsLens = ( brL == BR_M_PANEL_LENS || brL == BR_M_SIGNAGE ) ? 1.0 : 0.0;
+	float brDyn = ( brF & BR_F_DYN_EMIT ) != 0 ? brLuma( uFlick[ 0 ] ) : 1.0;
+	float brSh = 1.0;
+	if ( ( brF & BR_F_SHIMMER ) != 0 ) brSh = brLensShimmer( int( brAuxB.w ), floor( vBrTint.a * 255.0 + 0.5 ), uTime, uFlickerMode );
+	totalEmissiveRadiance = vBrEmit * vBrTint.rgb * mix( 1.0, brOrmh.a * 1.3, brIsLens ) * brDyn * brSh;
+} else {
+	totalEmissiveRadiance = vec3( 0.0 );
+}
+`;

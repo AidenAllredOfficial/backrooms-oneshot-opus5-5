@@ -1,0 +1,234 @@
+// tests/props/fixtures.test.ts — WP6 surface fixtures (§5 WP6 "Surface fixtures" + acceptance "Emitter
+// calibration"): for every non-recessed kind and several mountings, (emissive nits x projected emissive area along
+// the fixture normal) is within 20% of the intensity (SPHERE / disk) or of L*w*h (RECT); SPHERE geometry has radius
+// exactly w/2 and the HIGHBAY disk radius w/2; state handling (OFF / DYING / BUZZ / dynamic FLICKER / ANOMALY):
+// emit scale, DYN_EMIT / SHIMMER flags, aux.w = state and tint.a = seed & 255 on those vertices; tint = colour;
+// suspensions reach the ceiling (HIGHBAY: the joist at ceil - 0.6); winding follows normals; no NaN.
+
+import { describe, expect, it } from 'vitest';
+import { DYING_MEAN, FixtureKind, LightState, Mat, VFlag, type FixtureKindId, type LightStateId } from '../../src/core/ids.ts';
+import { fixtureRadiance, type Fixture } from '../../src/core/layout.ts';
+import type { MeshBuffers } from '../../src/core/mesh.ts';
+import { GeometryWriter } from '../../src/core/writer.ts';
+import { emitFixture } from '../../src/props/index.ts';
+import { emitFixtureInto } from '../../src/props/fixtures.ts';
+import { bounds, mirroredAtlasTris, triNormal, validate, windingMismatch } from './meshUtil.ts';
+
+/** Typical generation dimensions (mirrors WP4's FIXTURE_DIMS and the zone generators' custom fixtures). */
+const DIMS: Readonly<Record<number, { shape: 0 | 1; w: number; h: number; lum: number }>> = {
+  [FixtureKind.TUBE_STRIP]: { shape: 0, w: 1.2, h: 0.1, lum: 8600 },
+  [FixtureKind.CAGE_BULB]: { shape: 1, w: 0.1, h: 0.1, lum: 64 },
+  [FixtureKind.HIGHBAY]: { shape: 1, w: 0.45, h: 0.45, lum: 9000 },
+  [FixtureKind.PENDANT_LINEAR]: { shape: 0, w: 1.2, h: 0.12, lum: 6000 },
+  [FixtureKind.SODIUM]: { shape: 0, w: 0.45, h: 0.25, lum: 9000 },
+  [FixtureKind.EXIT_SIGN]: { shape: 0, w: 0.3, h: 0.15, lum: 150 },
+  [FixtureKind.UNDERWATER]: { shape: 0, w: 0.3, h: 0.3, lum: 2500 },
+  [FixtureKind.VENDING]: { shape: 0, w: 0.7, h: 1.4, lum: 600 },
+  [FixtureKind.RED_BULB]: { shape: 1, w: 0.08, h: 0.08, lum: 150 },
+};
+const SURFACE_KINDS = Object.keys(DIMS).map(Number) as FixtureKindId[];
+const WALL_KINDS = new Set<number>([FixtureKind.EXIT_SIGN, FixtureKind.UNDERWATER, FixtureKind.VENDING]);
+
+interface Mount { name: string; n: [number, number, number]; t: [number, number, number] }
+const DOWN_X: Mount = { name: 'ceiling, t=+x', n: [0, -1, 0], t: [1, 0, 0] };
+const DOWN_Z: Mount = { name: 'ceiling, t=+z', n: [0, -1, 0], t: [0, 0, 1] };
+const WALL_E: Mount = { name: 'wall facing +x', n: [1, 0, 0], t: [0, 0, 1] };
+const WALL_N: Mount = { name: 'wall facing -z', n: [0, 0, -1], t: [1, 0, 0] };
+const WALL_S_UPT: Mount = { name: 'wall facing +z, t up', n: [0, 0, 1], t: [0, 1, 0] };
+const mountsOf = (k: number): Mount[] => (WALL_KINDS.has(k) ? [WALL_E, WALL_N, WALL_S_UPT] : [DOWN_X, DOWN_Z]);
+
+function fixture(kind: FixtureKindId, m: Mount, state: LightStateId = LightState.ON, extra: Partial<Fixture> = {}): Fixture {
+  const d = DIMS[kind];
+  return {
+    id: 0x1234567, kind, state, shape: d.shape, px: 25.3, py: 2.2, pz: 7.9,
+    nx: m.n[0], ny: m.n[1], nz: m.n[2], tx: m.t[0], ty: m.t[1], tz: m.t[2],
+    w: d.w, h: d.h, color: [1, 0.8, 0.55], luminance: d.lum, seed: 0xabcdef57, hum: 0.5, bakeGroup: 0,
+    dynamic: false, ...extra,
+  };
+}
+
+function build(f: Fixture, ceilY = Number.NaN, ox = 19.2, oz = 0): MeshBuffers {
+  const w = new GeometryWriter(512);
+  if (Number.isNaN(ceilY)) emitFixture(w, f, ox, oz);
+  else emitFixtureInto(w, f, ox, oz, ceilY, 0, 54);
+  return w.finish();
+}
+
+/** Sum over emissive triangles of emit * area * max(0, n_tri . n): radiant intensity along n (cd for nits*m^2). */
+function emittedIntensity(m: MeshBuffers, n: readonly number[]): number {
+  const tn = [0, 0, 0];
+  let sum = 0;
+  for (let t = 0; t < m.indexCount / 3; t++) {
+    const a = m.index[t * 3], b = m.index[t * 3 + 1], c = m.index[t * 3 + 2];
+    const e = (m.emit[a] + m.emit[b] + m.emit[c]) / 3;
+    if (e <= 0) continue;
+    const area = triNormal(m, t, tn);
+    const cos = tn[0] * n[0] + tn[1] * n[1] + tn[2] * n[2];
+    if (cos > 0) sum += e * area * cos;
+  }
+  return sum;
+}
+const emissiveVerts = (m: MeshBuffers): number[] => {
+  const out: number[] = [];
+  for (let i = 0; i < m.vertexCount; i++) if (m.emit[i] > 0) out.push(i);
+  return out;
+};
+const expected = (f: Fixture): number => (f.shape === 1 ? f.luminance : f.luminance * f.w * f.h);
+
+describe('WP6 surface fixtures', () => {
+  for (const kind of SURFACE_KINDS) {
+    for (const m of mountsOf(kind)) {
+      it(`kind ${kind}: calibration, validity, winding (${m.name})`, () => {
+        const f = fixture(kind, m);
+        const mesh = build(f);
+        expect(mesh.indexCount).toBeGreaterThan(0);
+        expect(validate(mesh)).toEqual([]);
+        expect(windingMismatch(mesh)).toBe(0);
+        // tile-local: chunk-local centre (25.3, 7.9) minus the tile origin (19.2, 0)
+        const b = bounds(mesh);
+        expect(b[0]).toBeLessThan(25.3 - 19.2 + 0.05);
+        expect(b[3]).toBeGreaterThan(25.3 - 19.2 - 0.05);
+        const I = emittedIntensity(mesh, m.n);
+        const want = expected(f);
+        expect(Math.abs(I / want - 1), `kind ${kind}: emitted ${I.toFixed(2)} vs ${want.toFixed(2)}`).toBeLessThanOrEqual(0.2);
+        // every emissive vertex: nits = fixtureRadiance, tint = colour, PROP_AUX metadata
+        for (const i of emissiveVerts(mesh)) {
+          expect(mesh.emit[i]).toBeCloseTo(fixtureRadiance(f), 1);
+          expect(mesh.tint[i * 4]).toBe(255);
+          expect(mesh.tint[i * 4 + 1]).toBe(Math.round(0.8 * 255));
+          expect(mesh.tint[i * 4 + 2]).toBe(Math.round(0.55 * 255));
+          expect(mesh.flags[i] & (VFlag.DYN_EMIT | VFlag.SHIMMER)).toBe(0);
+        }
+        for (let i = 0; i < mesh.vertexCount; i++) {
+          expect(mesh.flags[i] & VFlag.PROP_AUX).toBe(VFlag.PROP_AUX);
+          expect(mesh.lmUv[i * 2] + mesh.lmUv[i * 2 + 1]).toBe(0);
+        }
+      });
+    }
+  }
+
+  it('SPHERE emitters have radius exactly w/2; the HIGHBAY disk has radius w/2', () => {
+    for (const kind of [FixtureKind.CAGE_BULB, FixtureKind.RED_BULB] as FixtureKindId[]) {
+      const f = fixture(kind, DOWN_X);
+      const m = build(f);
+      let rMax = 0, rMin = Infinity;
+      for (const i of emissiveVerts(m)) {
+        const r = Math.hypot(m.position[i * 3] - (f.px - 19.2), m.position[i * 3 + 1] - f.py, m.position[i * 3 + 2] - f.pz);
+        rMax = Math.max(rMax, r); rMin = Math.min(rMin, r);
+      }
+      expect(rMax).toBeCloseTo(f.w / 2, 4);
+      expect(rMin).toBeCloseTo(f.w / 2, 4); // every sphere vertex (poles included) lies on the sphere
+    }
+    const hb = fixture(FixtureKind.HIGHBAY, DOWN_X);
+    const m = build(hb);
+    let rMax = 0;
+    for (const i of emissiveVerts(m)) {
+      rMax = Math.max(rMax, Math.hypot(m.position[i * 3] - (hb.px - 19.2), m.position[i * 3 + 2] - hb.pz));
+      expect(Math.abs(m.position[i * 3 + 1] - hb.py)).toBeLessThan(0.005); // a flat disk at the emitter plane
+    }
+    expect(rMax).toBeCloseTo(hb.w / 2, 4);
+  });
+
+  it('a 64 cd CAGE_BULB shows about 8,150 nits (clips into bloom)', () => {
+    const m = build(fixture(FixtureKind.CAGE_BULB, DOWN_X));
+    const nits = m.emit[emissiveVerts(m)[0]];
+    expect(nits).toBeGreaterThan(8000);
+    expect(nits).toBeLessThan(8300);
+  });
+
+  it('states: OFF emits nothing, DYING x DYING_MEAN + SHIMMER, BUZZ SHIMMER, dynamic FLICKER / ANOMALY DYN_EMIT', () => {
+    for (const kind of SURFACE_KINDS) {
+      const m0 = mountsOf(kind)[0];
+      const on = build(fixture(kind, m0));
+      const L = fixtureRadiance(fixture(kind, m0));
+      // OFF: same topology, no emission, an unlit lens
+      const off = build(fixture(kind, m0, LightState.OFF));
+      expect(off.indexCount).toBe(on.indexCount);
+      expect(emissiveVerts(off)).toEqual([]);
+      const cases: [LightStateId, boolean, number, number][] = [
+        [LightState.DYING, false, L * DYING_MEAN, VFlag.SHIMMER],
+        [LightState.BUZZ, false, L, VFlag.SHIMMER],
+        [LightState.FLICKER, true, L, VFlag.DYN_EMIT],
+        [LightState.ANOMALY, true, L, VFlag.DYN_EMIT],
+      ];
+      for (const [state, dynamic, emit, flag] of cases) {
+        const f = fixture(kind, m0, state, { dynamic });
+        const m = build(f);
+        const ev = emissiveVerts(m);
+        expect(ev.length).toBe(emissiveVerts(on).length);
+        for (const i of ev) {
+          expect(m.emit[i]).toBeCloseTo(emit, 1);
+          expect(m.flags[i] & (VFlag.DYN_EMIT | VFlag.SHIMMER)).toBe(flag);
+          expect(m.aux[i * 4 + 3]).toBe(state); // aux.w = LightState
+          expect(m.tint[i * 4 + 3]).toBe(f.seed & 255); // tint.a = seed & 255
+        }
+      }
+    }
+  });
+
+  it('suspensions reach the ceiling; the HIGHBAY drop rod ends at the joist (ceil - 0.6)', () => {
+    const ceil = 4.0;
+    const cases: [FixtureKindId, number, number][] = [
+      [FixtureKind.TUBE_STRIP, ceil - 0.3, ceil],
+      [FixtureKind.PENDANT_LINEAR, ceil - 1.2, ceil],
+      [FixtureKind.CAGE_BULB, ceil - 0.5, ceil],
+      [FixtureKind.SODIUM, ceil - 0.4, ceil],
+      [FixtureKind.RED_BULB, ceil - 1.0, ceil],
+      [FixtureKind.HIGHBAY, ceil - 2.5, ceil - 0.6],
+    ];
+    for (const [kind, py, top] of cases) {
+      const m = build(fixture(kind, DOWN_X, LightState.ON, { py }), ceil);
+      expect(bounds(m)[4], `kind ${kind}`).toBeCloseTo(top, 2);
+      expect(bounds(m)[1], `kind ${kind}`).toBeGreaterThan(py - (DIMS[kind].shape === 1 ? DIMS[kind].w : 0.05));
+    }
+  });
+
+  it('EXIT_SIGN: a SIGNAGE face (the EXIT slot) reading upright from the front', () => {
+    for (const m of [WALL_E, WALL_N, WALL_S_UPT]) {
+      const mesh = build(fixture(FixtureKind.EXIT_SIGN, m));
+      const ev = emissiveVerts(mesh);
+      expect(ev.length).toBe(4);
+      expect(mirroredAtlasTris(mesh)).toBe(0);
+      for (const i of ev) {
+        expect(mesh.layer[i]).toBe(Mat.SIGNAGE);
+        expect(mesh.uv[i * 2]).toBeGreaterThanOrEqual(0); // EXIT = slot 0: u,v in [0, 0.25]
+        expect(mesh.uv[i * 2]).toBeLessThanOrEqual(0.25);
+        expect(mesh.uv[i * 2 + 1]).toBeLessThanOrEqual(0.25);
+      }
+      // +v (glyph up) must point to world +y and +u to the viewer's right (the viewer looks along -n):
+      // uv gradients of the quad from the centred sums (u - mean u) * p and (v - mean v) * p
+      const du = [0, 0, 0], dv = [0, 0, 0];
+      let mu = 0, mv = 0;
+      for (const i of ev) { mu += mesh.uv[i * 2] / 4; mv += mesh.uv[i * 2 + 1] / 4; }
+      for (const i of ev) {
+        for (let k = 0; k < 3; k++) {
+          du[k] += (mesh.uv[i * 2] - mu) * mesh.position[i * 3 + k];
+          dv[k] += (mesh.uv[i * 2 + 1] - mv) * mesh.position[i * 3 + k];
+        }
+      }
+      expect(dv[1]).toBeGreaterThan(0);
+      expect(Math.abs(dv[1])).toBeGreaterThan(Math.hypot(dv[0], dv[2])); // upright, not rotated
+      const right = [m.n[2], 0, -m.n[0]]; // up x n
+      expect(du[0] * right[0] + du[2] * right[2]).toBeGreaterThan(0);
+    }
+  });
+
+  it('recessed kinds (TROFFER_2x4, TROFFER_2x2, SKY_PANEL) are WP5 shell geometry: emitFixture writes nothing', () => {
+    for (const kind of [FixtureKind.TROFFER_2x4, FixtureKind.TROFFER_2x2, FixtureKind.SKY_PANEL] as FixtureKindId[]) {
+      const f: Fixture = { ...fixture(FixtureKind.TUBE_STRIP, DOWN_X), kind, w: 1.2, h: 0.6, luminance: 3300 };
+      const w = new GeometryWriter(64);
+      emitFixture(w, f, 0, 0);
+      expect(w.indexCount).toBe(0);
+      expect(emitFixtureInto(w, f, 0, 0, 2.7, 0, 54)).toBe(0);
+      expect(w.vertexCount).toBe(0);
+    }
+  });
+
+  it('fixtures are deterministic and independent of the tile origin up to translation', () => {
+    const f = fixture(FixtureKind.PENDANT_LINEAR, DOWN_Z);
+    const a = build(f, 3.5, 19.2, 0), b = build(f, 3.5, 19.2, 0), c = build(f, 3.5, 0, 0);
+    expect(Array.from(a.position)).toEqual(Array.from(b.position));
+    expect(Array.from(a.index)).toEqual(Array.from(b.index));
+    for (let i = 0; i < a.vertexCount; i++) expect(c.position[i * 3] - a.position[i * 3]).toBeCloseTo(19.2, 3);
+  });
+});

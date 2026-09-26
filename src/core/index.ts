@@ -1,0 +1,23 @@
+// src/core/index.ts — barrel (type + value re-exports). Pure modules may import from here.
+export * from './constants.ts';
+export * from './ids.ts';
+export * from './grid.ts';
+export * from './rng.ts';
+export * from './noise.ts';
+export * from './half.ts';
+export * from './edges.ts';
+export * from './layout.ts';
+export * from './world.ts';
+export * from './materials.ts';
+export * from './props.ts';
+export * from './zones.ts';
+export * from './quality.ts';
+export * from './settings.ts';
+export * from './events.ts';
+export * from './mesh.ts';
+export * from './writer.ts';
+export * from './worker.ts';
+export * from './flicker.ts';
+export * from './player.ts';
+export * from './debug.ts';
+export type * from './runtime.ts';

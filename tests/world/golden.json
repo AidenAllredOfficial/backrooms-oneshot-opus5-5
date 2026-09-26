@@ -1,0 +1,258 @@
+{
+ "genVersion": 1,
+ "seed": 1,
+ "entries": [
+  {
+   "zone": "LOBBY",
+   "s": 0,
+   "cx": -10,
+   "cz": 7,
+   "hash": 610522799
+  },
+  {
+   "zone": "LOBBY",
+   "s": 1,
+   "cx": -9,
+   "cz": 7,
+   "hash": 515300494
+  },
+  {
+   "zone": "LOBBY",
+   "s": 2,
+   "cx": -8,
+   "cz": 7,
+   "hash": 1727392835
+  },
+  {
+   "zone": "MANILA",
+   "s": 0,
+   "cx": -7,
+   "cz": 5,
+   "hash": 1619133666
+  },
+  {
+   "zone": "MANILA",
+   "s": 1,
+   "cx": -6,
+   "cz": 5,
+   "hash": 412853108
+  },
+  {
+   "zone": "MANILA",
+   "s": 2,
+   "cx": -5,
+   "cz": 5,
+   "hash": 766682914
+  },
+  {
+   "zone": "DARK",
+   "s": 0,
+   "cx": -4,
+   "cz": 3,
+   "hash": 3727377436
+  },
+  {
+   "zone": "DARK",
+   "s": 1,
+   "cx": -3,
+   "cz": 3,
+   "hash": 1092836620
+  },
+  {
+   "zone": "DARK",
+   "s": 2,
+   "cx": -2,
+   "cz": 3,
+   "hash": 620606754
+  },
+  {
+   "zone": "MAZE",
+   "s": 0,
+   "cx": -1,
+   "cz": 1,
+   "hash": 4198832619
+  },
+  {
+   "zone": "MAZE",
+   "s": 1,
+   "cx": 0,
+   "cz": 1,
+   "hash": 3981694873
+  },
+  {
+   "zone": "MAZE",
+   "s": 2,
+   "cx": 1,
+   "cz": 1,
+   "hash": 2777418757
+  },
+  {
+   "zone": "LOW_EXPANSE",
+   "s": 0,
+   "cx": 2,
+   "cz": -1,
+   "hash": 2819925388
+  },
+  {
+   "zone": "LOW_EXPANSE",
+   "s": 1,
+   "cx": 3,
+   "cz": -1,
+   "hash": 4021232510
+  },
+  {
+   "zone": "LOW_EXPANSE",
+   "s": 2,
+   "cx": 4,
+   "cz": -1,
+   "hash": 1851903952
+  },
+  {
+   "zone": "PILLAR_HALL",
+   "s": 0,
+   "cx": 5,
+   "cz": -3,
+   "hash": 1035988207
+  },
+  {
+   "zone": "PILLAR_HALL",
+   "s": 1,
+   "cx": 6,
+   "cz": -3,
+   "hash": 3240404322
+  },
+  {
+   "zone": "PILLAR_HALL",
+   "s": 2,
+   "cx": 7,
+   "cz": -3,
+   "hash": 2536891649
+  },
+  {
+   "zone": "OFFICE",
+   "s": 0,
+   "cx": 8,
+   "cz": -5,
+   "hash": 1869446792
+  },
+  {
+   "zone": "OFFICE",
+   "s": 1,
+   "cx": 9,
+   "cz": -5,
+   "hash": 1299871776
+  },
+  {
+   "zone": "OFFICE",
+   "s": 2,
+   "cx": 10,
+   "cz": -5,
+   "hash": 225989172
+  },
+  {
+   "zone": "POOLROOMS",
+   "s": 0,
+   "cx": 11,
+   "cz": -7,
+   "hash": 3473578241
+  },
+  {
+   "zone": "POOLROOMS",
+   "s": 1,
+   "cx": 12,
+   "cz": -7,
+   "hash": 3736882879
+  },
+  {
+   "zone": "POOLROOMS",
+   "s": 2,
+   "cx": 13,
+   "cz": -7,
+   "hash": 2659666953
+  },
+  {
+   "zone": "PARKING",
+   "s": 0,
+   "cx": 14,
+   "cz": -9,
+   "hash": 1673421007
+  },
+  {
+   "zone": "PARKING",
+   "s": 1,
+   "cx": 15,
+   "cz": -9,
+   "hash": 4226708761
+  },
+  {
+   "zone": "PARKING",
+   "s": 2,
+   "cx": 16,
+   "cz": -9,
+   "hash": 2949235452
+  },
+  {
+   "zone": "PIPEWORKS",
+   "s": 0,
+   "cx": 17,
+   "cz": -11,
+   "hash": 666796064
+  },
+  {
+   "zone": "PIPEWORKS",
+   "s": 1,
+   "cx": 18,
+   "cz": -11,
+   "hash": 816107653
+  },
+  {
+   "zone": "PIPEWORKS",
+   "s": 2,
+   "cx": 19,
+   "cz": -11,
+   "hash": 2580463039
+  },
+  {
+   "zone": "WAREHOUSE",
+   "s": 0,
+   "cx": 20,
+   "cz": -13,
+   "hash": 104154879
+  },
+  {
+   "zone": "WAREHOUSE",
+   "s": 1,
+   "cx": 21,
+   "cz": -13,
+   "hash": 286061686
+  },
+  {
+   "zone": "WAREHOUSE",
+   "s": 2,
+   "cx": 22,
+   "cz": -13,
+   "hash": 582830912
+  },
+  {
+   "zone": "CONCRETE",
+   "s": 0,
+   "cx": 23,
+   "cz": -15,
+   "hash": 613976407
+  },
+  {
+   "zone": "CONCRETE",
+   "s": 1,
+   "cx": 24,
+   "cz": -15,
+   "hash": 812538183
+  },
+  {
+   "zone": "CONCRETE",
+   "s": 2,
+   "cx": 25,
+   "cz": -15,
+   "hash": 2487032827
+  }
+ ]
+}

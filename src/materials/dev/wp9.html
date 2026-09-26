@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WP9 materials dev harness</title>
+    <link rel="icon" href="data:," />
+    <!-- WP9-private dev page (src/materials/dev): the surface/water shaders on a synthetic baked tile. -->
+    <style>html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+      #hud { position: fixed; left: 8px; top: 6px; color: #cfc; font: 12px monospace; white-space: pre; pointer-events: none; text-shadow: 0 0 2px #000; }</style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud"></div>
+    <script type="module" src="./harness.ts"></script>
+  </body>
+</html>

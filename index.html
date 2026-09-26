@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="An infinite, procedurally generated backrooms. Found footage, walked in real time." />
+    <title>Backrooms</title>
+    <link rel="icon" href="data:," />
+    <!-- Black before the module loads; the UI stylesheet (src/ui/style.css) arrives with the app bundle. -->
+    <style>html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }</style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <noscript>
+      <p style="font: 13px monospace; color: #cfc9b0; padding: 2em; letter-spacing: 0.1em">
+        BACKROOMS needs JavaScript and WebGL 2.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
