@@ -29,6 +29,7 @@ const EVENT_LOG_SIZE = 200;
 export interface DebugHost {
   setQuality(q: QualityName): Promise<void>;
   setFlicker(mode: FlickerMode): void;
+  newSeed(seed: string): Promise<void>;
 }
 
 const EVENT_NAMES: readonly (keyof GameEvents)[] = [
@@ -66,10 +67,11 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
   for (const name of EVENT_NAMES) core.bus.on(name, (e: unknown) => push(describe(name, e)));
 
   let gen: WorldGen | null = null;
+  let genInit: object | null = null;
   const worldGen = (): WorldGen | null => {
     const s = core.sys;
     if (!s) return null;
-    if (!gen) gen = createWorldGen(s.init.opts);
+    if (!gen || genInit !== s.init) { gen = createWorldGen(s.init.opts); genInit = s.init; }
     return gen;
   };
   const need = <T>(what: string, f: (sys: NonNullable<AppCore['sys']>) => T): T => {
@@ -146,7 +148,8 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
     isReady: () => api.ready,
     readyPhase: 'boot',
     version: APP_VERSION,
-    seed: core.params.seedText,
+    get seed() { return core.params.seedText; },
+    newSeed: (seed) => host.newSeed(seed),
     stats,
     teleport: (t) => teleportPlayer(core, t),
     async goto(target) {

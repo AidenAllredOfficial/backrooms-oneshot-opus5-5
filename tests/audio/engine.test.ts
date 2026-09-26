@@ -16,6 +16,8 @@ import { DEFAULT_SETTINGS } from '../../src/core/settings.ts';
 import { createAudioSystem } from '../../src/audio/AudioEngine.ts';
 import type { AudioEnv } from '../../src/audio/env.ts';
 import { Foley } from '../../src/audio/foley.ts';
+import { Ambience } from '../../src/audio/ambience.ts';
+import { OneShots } from '../../src/audio/oneShots.ts';
 import { AudioGraph, sliderGain } from '../../src/audio/graph.ts';
 import { Voice } from '../../src/audio/voice.ts';
 import { createResolution } from '../../src/audio/propagation.ts';
@@ -147,6 +149,25 @@ beforeAll(() => { restore = installWebAudioMock(); });
 afterAll(() => restore());
 
 describe('AudioSystem runtime (Web Audio mock)', () => {
+  it('disconnects old ambience beds and wading nodes after a world reset', () => {
+    const ctx = new MockContext();
+    const amb = ctx.createGain(), water = ctx.createGain();
+    const buffer = ctx.createBuffer(1, 48000, 48000);
+    const env = {
+      ctx, bank: { ensure: () => buffer }, rng: { float: () => 0.5 }, log: () => {},
+      graph: { buses: { amb, water }, registerRate: () => null, unregisterRate: () => {} },
+    } as unknown as AudioEnv;
+    const beds = new Ambience(env, new OneShots(env));
+    beds.refresh(Zone.LOBBY, Mood.NORMAL);
+    beds.wade(1, 0.4);
+    expect(amb.connected).toBeGreaterThan(0);
+    expect(water.connected).toBeGreaterThan(0);
+    beds.stopAll();
+    ctx.advance(1);
+    expect(amb.connected).toBe(0);
+    expect(water.connected).toBe(0);
+  });
+
   it('starts, runs, voices the hum at lit fixtures and measures RT60 LOBBY < PARKING', async () => {
     const r = await rig();
     expect(r.audio.stats().state).toBe('running');
@@ -161,6 +182,14 @@ describe('AudioSystem runtime (Web Audio mock)', () => {
     expect(s1.rt60).toBeGreaterThan(0.12);
     expect(s1.rt60).toBeLessThan(0.6);
     expect(s1.ir).toBeGreaterThanOrEqual(0);
+    const buffers = r.ctx.buffers;
+    const nodes = r.ctx.nodes;
+    r.audio.reset();
+    expect(MockContext.last).toBe(r.ctx);
+    expect(r.ctx.nodes).toBe(nodes); // no second footstep echo or foley chain
+    run(r, lobby, 1);
+    expect(r.ctx.buffers).toBe(buffers);
+    expect(r.audio.stats().voices).toBeGreaterThan(0);
 
     const parking = roomWorld({ w: 34, l: 34, h: 2.6, zone: Zone.PARKING, floor: Mat.CONCRETE_FLOOR, wall: Mat.CONCRETE_WALL, ceil: Mat.CONCRETE_CEIL, fixtures: grid(34, 34) });
     place(r.player, 20, 20);
@@ -560,4 +589,3 @@ describe('AudioSystem runtime (Web Audio mock)', () => {
     expect(a.stats().state).toBe('closed');
   });
 });
-

@@ -1,6 +1,6 @@
 // src/post/capture.ts (WP11) — display blit + frame capture.
-// The last post pass renders the finished, sRGB-ENCODED image into an RGBA8 target (`display`). Every frame that
-// target is blitted 1:1 to the canvas (raw copy, no colour conversion). capture(w, h) downsamples the same
+// On capture frames, the last post pass renders the finished, sRGB-ENCODED image into an RGBA8 target (`display`).
+// That target is blitted 1:1 to the canvas (raw copy, no colour conversion). capture(w, h) downsamples the same
 // target into a w x h RGBA8 target (box filter in linear light, rows flipped so row 0 is the TOP of the image)
 // and reads it back with readRenderTargetPixelsAsync.
 
@@ -54,7 +54,7 @@ export interface DisplayCapture {
   setSize(w: number, h: number): void;
   /** Blit `display` to the canvas (renderer target null). */
   blit(renderer: THREE.WebGLRenderer): void;
-  /** Compile the downsample program once (keeps renderer.info.programs constant after ready). */
+  /** Compile the downsample program once; the display blit is compiled on first capture. */
   warm(renderer: THREE.WebGLRenderer): void;
   /** Downsample `display` into a w x h RGBA8 image (top row first) and read it back. */
   read(renderer: THREE.WebGLRenderer, w: number, h: number): Promise<Uint8Array>;

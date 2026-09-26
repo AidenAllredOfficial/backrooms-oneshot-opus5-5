@@ -196,7 +196,12 @@ export class Ambience {
     const t = this.env.ctx.currentTime;
     for (const b of this.beds.values()) {
       b.gain.gain.setTargetAtTime(0, t, 0.1);
-      stopSource(b.src, t + 0.5);
+      const src = b.src;
+      stopSource(src, t + 0.5);
+      if (src) {
+        const ended = src.onended;
+        src.onended = (ev): void => { ended?.call(src, ev); b.gain.disconnect(); };
+      } else b.gain.disconnect();
       this.env.graph.unregisterRate(b.rate);
       b.src = null;
     }
@@ -204,5 +209,10 @@ export class Ambience {
     stopSource(this.wadeSrc);
     this.env.graph.unregisterRate(this.wadeRate);
     this.wadeSrc = null;
+    this.wadeFilter?.disconnect();
+    this.wadeGain?.disconnect();
+    this.wadeFilter = this.wadeGain = null;
+    this.wadeRate = null;
+    this.wadeLastG = this.wadeLastF = -1;
   }
 }

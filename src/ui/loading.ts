@@ -12,6 +12,7 @@ export interface PhaseList {
   setProgress(p: LoadPhaseName, fraction: number): void;
   /** every phase done */
   complete(): void;
+  reset(): void;
   setCompact(c: boolean): void;
 }
 
@@ -55,6 +56,11 @@ export function createPhaseList(): PhaseList {
       if (i < 0) return;
       if (i > current) { current = i; }
       setFrac(i, f);
+      mark();
+    },
+    reset() {
+      current = -1;
+      for (const r of rows) { r.frac = 0; r.fill.style.width = '0%'; r.pct.textContent = ''; }
       mark();
     },
     complete() {

@@ -681,3 +681,33 @@ describe('residency state machine', () => {
     expect(r.st.isReady(0, false)).toBe(true);
   });
 });
+
+describe('seed reset', () => {
+  it('releases the previous world and ignores late replies even when new tiles reuse its keys', async () => {
+    const r = rig();
+    r.tick(C / 2, C / 2);
+    await r.answerLayouts();
+    await r.answerBuilds();
+    for (let i = 0; i < 80; i++) r.tick(C / 2, C / 2);
+    expect(r.st.stats().tilesResident).toBe(36);
+    const oldBake = r.pool.pending('bake')[0];
+    const key = (oldBake.req as Extract<WorkerRequest, { t: 'bake' }>).key;
+    await r.st.reset({
+      opts: { seed: 2, seedText: '2', forceZone: null, forceMood: null, forceLandmark: null, testScene: null, lights: 'default' },
+      bake: bakeQualityOf(QUALITY.low), bakeTerm: 'all', validate: false,
+    });
+    expect(r.st.stats().tilesResident).toBe(0);
+    expect(r.st.query.isLoaded(C / 2, C / 2)).toBe(false);
+    expect(r.up.disposed.size).toBe(36);
+    r.tick(C / 2, C / 2);
+    await r.answerLayouts(() => true, () => 100);
+    await r.answerBuilds();
+    oldBake.resolve({ t: 'bake', job: oldBake.id, lightmap: fakeLm(key, 'full', 7), ms: 5 });
+    await flush();
+    for (let i = 0; i < 80; i++) r.tick(C / 2, C / 2);
+    expect(r.st.query.floorAt(C / 2, C / 2, 1)).toBe(1);
+    expect(r.st.stats().tilesFull).toBe(0);
+    expect(r.st.stats().tilesResident).toBe(36);
+    r.st.dispose();
+  });
+});

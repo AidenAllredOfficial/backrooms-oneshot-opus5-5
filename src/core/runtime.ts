@@ -11,6 +11,7 @@ import type { QualityConfig } from './quality.ts';
 import type { FlickerMode, Settings } from './settings.ts';
 import type { GameBus } from './events.ts';
 import type { SpawnPoint } from './world.ts';
+import type { WorkerInit } from './worker.ts';
 
 // ---------------------------------------------------------------- textures (WP8 -> WP9)
 export interface TextureSet {
@@ -196,6 +197,8 @@ export interface WorldStreamer {
   isIdle(): boolean;
   /** radius change: re-desire; BakeQuality change: await pool.reinit(init) then rebuild everything */
   setQuality(q: QualityConfig): Promise<void>;
+  /** Replace the seed, releasing old residency while keeping the GPU uploader and workers. */
+  reset(init: WorkerInit): Promise<void>;
   findNearest(query: string, from: { s: StoreyId; x: number; z: number }, maxChunks: number): Promise<SpawnPoint | null>;
   spawn(s: StoreyId): Promise<SpawnPoint>;
   asciiMap(s: StoreyId, cx0: number, cz0: number, cx1: number, cz1: number): Promise<string>;
@@ -212,6 +215,7 @@ export interface Flashlight {
   update(player: PlayerState, camera: THREE.Camera, dt: number): void;
 }
 export interface LightingRuntime {
+  reset(): void;
   readonly flashlight: Flashlight;
   /** evaluate flicker for all resident tiles' dynamic lights; write TileBindings.flick; emit lightToggle */
   update(t: number, dt: number, tiles: Iterable<TileRuntime>, player: PlayerState, camera: THREE.Camera, world: WorldQuery): void;
@@ -261,6 +265,8 @@ export interface InputSource {
 // ---------------------------------------------------------------- audio (WP13)
 export interface AudioStats { state: string; voices: number; rt60: number; ir: number }
 export interface AudioSystem {
+  /** Clear world-specific voices while retaining the audio context and synthesized buffers. */
+  reset(): void;
   start(): Promise<void>; // create/resume AudioContext (gesture or autostart)
   update(t: number, dt: number, player: PlayerState, world: WorldQuery, lighting: LightingRuntime): void;
   setVolumes(v: Settings['volume']): void;

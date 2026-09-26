@@ -127,7 +127,7 @@ export async function generateTextures(renderer: THREE.WebGLRenderer, size: 512 
     renderer.setRenderTarget(null);
     // wait for the GPU so genMs measures the work, not just its submission
     const probe = new Uint8Array(4);
-    renderer.readRenderTargetPixels(cookieRT, 0, 0, 1, 1, probe);
+    await renderer.readRenderTargetPixelsAsync(cookieRT, 0, 0, 1, 1, probe);
     genMs = performance.now() - tg;
   } catch (e) {
     albedoRT.dispose(); normalRT.dispose(); ormhRT.dispose();

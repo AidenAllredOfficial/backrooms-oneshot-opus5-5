@@ -139,10 +139,14 @@ platform" to X11.
 
 **Loading.** The world is ready once the tiles within 20 m of you, and the tiles in view within 40 m, have their
 first (preview) lighting; the rest of the streaming radius fades in behind the haze and the full-quality lighting
-swaps in over the next seconds. On the development laptop (RTX 5070 Ti, Ryzen 9 8940HX, production build) that is
-about 4.5-5 s from opening the page. The light baker is memory-bandwidth bound, so more worker threads do not help:
+swaps in over the next seconds. Nearby geometry and preview lighting start while textures and shaders initialize.
+Loading another seed keeps the renderer, textures, compiled shaders and synthesized audio. In the September 2026
+audit, seed changes reached ready in about 2 s; opening a fresh page took about 6 s. The light baker is
+memory-bandwidth bound, so more worker threads do not help:
 4 workers reached ready faster than 10. Screenshot and QA runs (`autostart=1`) still wait for full lighting on the
 whole 3 x 3 chunk ring so their images are deterministic; `bake=preview` / `bake=interactive` give the player gate.
+
+See [the performance audit](docs/PERFORMANCE_AUDIT.md) for measurements, changes and reproduction steps.
 
 **First-context loss.** Under native Wayland, Chromium on this laptop loses the first WebGL context of a fresh
 browser session on the NVIDIA GPU and restores it about a second later: that is the GPU process restarting after GPU
@@ -327,6 +331,7 @@ npm run map -- --seed 1 --s 0 --cx0 -2 --cz0 -2 --cx1 2 --cz1 2 --png map.png # 
 node tools/map.ts --seed 1 --s 0 --cx0 0 --cz0 0 --cx1 1 --cz1 1 --zones       # zone letters and a district summary
 node tools/map.ts --seed 1 --bench 100                                          # chunk generation timing (JSON)
 npm run bakebench -- --zones LOBBY,POOLROOMS --quality high                      # light-baker timings and gates
+node tools/workerbench.ts 7 42                                                # serial spawn, geometry, preview and full-bake timings
 ```
 
 `tools/map.ts` also accepts `--force ZONE`, `--mood MOOD`, `--landmark NAME` and `--scene NAME`. `tools/bakebench.ts`

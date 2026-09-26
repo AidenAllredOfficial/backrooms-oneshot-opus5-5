@@ -95,7 +95,7 @@ export function createGate(core: AppCore): ReadyGate {
       const still = now.s === fromS && Math.hypot(now.x - fromX, now.z - fromZ) <= SNAP_STILL_M;
       const moved = sp !== null && (Math.abs(sp.x - fromX) > 1e-3 || Math.abs(sp.z - fromZ) > 1e-3 || sp.s !== fromS);
       // a URL position without yaw= faces the spot's most open direction (not a wall at yaw 0)
-      const aim = reason === 'boot' && core.params.x !== null && core.params.yaw === null;
+      const aim = (reason === 'boot' || reason === 'seed') && core.params.x !== null && core.params.yaw === null;
       if (sp && still && (moved || aim)) {
         s.player.teleport(sp.s, sp.x, null, sp.z, aim ? sp.yaw : yaw, pitch);
         core.bus.emit('teleport', { s: sp.s, x: sp.x, y: s.player.state.y, z: sp.z });
@@ -114,14 +114,14 @@ export function createGate(core: AppCore): ReadyGate {
       gen++;
       core.debug.ready = false;
       core.debug.readyPhase = 'chunks';
-      if (!active || o.reason === 'boot') reason = o.reason;
-      if (o.reason === 'boot') togglesPending = true;
+      if (!active || o.reason === 'boot' || o.reason === 'seed') reason = o.reason;
+      if (o.reason === 'boot' || o.reason === 'seed') togglesPending = true;
       active = true;
       phase = 'stream';
       frames = 0;
       startMs = performance.now();
       snap = o.snapToWalkable ? 'waitChunk' : 'none';
-      snapFloor = o.snapToWalkable && (o.snapFloor ?? (o.reason === 'boot' && core.params.y === null));
+      snapFloor = o.snapToWalkable && (o.snapFloor ?? ((o.reason === 'boot' || o.reason === 'seed') && core.params.y === null));
       return new Promise<void>((resolve) => { waiters.push(resolve); });
     },
     tick() {
@@ -150,6 +150,7 @@ export function createGate(core: AppCore): ReadyGate {
       core.debug.ready = true;
       core.debug.readyPhase = 'ready';
       const now = performance.now();
+      performance.mark('br:ready', { detail: reason });
       core.bus.emit('ready', { ms: now - (reason === 'boot' ? core.bootT0 : startMs) });
       // the boot pool's extra workers (~155 MB each) retire once the first radius is in (busy ones after their job)
       if (s.pool.size > s.poolTarget) void s.pool.resize(s.poolTarget);

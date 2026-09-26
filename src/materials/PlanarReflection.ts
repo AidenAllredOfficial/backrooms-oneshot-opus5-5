@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import type { MaterialGlobals } from '../core/runtime.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import { REFL_PASS } from './shared.ts';
+import { TUNE } from './chunks/params.ts';
 
 export interface PlanarReflection {
   readonly enabled: boolean;
@@ -94,6 +95,19 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
   reflCam.matrixAutoUpdate = true;
   const scratch = createReflScratch();
   const baseProj = new THREE.Matrix4();
+  const hidden: THREE.Object3D[] = [];
+  const propBounds = new THREE.Sphere();
+  const cullReflection = (object: THREE.Object3D): void => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+    const variant = mesh.material.userData.brVariant;
+    let hide = variant === 'water';
+    if (variant === 'props' && mesh.geometry.boundingSphere) {
+      propBounds.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+      hide = propBounds.center.distanceTo(reflCam.position) - propBounds.radius > TUNE.REFL_PROP_DIST;
+    }
+    if (hide) { hidden.push(object); object.visible = false; }
+  };
   globals.reflOn.value = 0;
   globals.reflTex.value = null;
 
@@ -141,14 +155,23 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
       REFL_PASS.value = 1;
       renderer.xr.enabled = false;
       renderer.shadowMap.autoUpdate = false;
-      renderer.setRenderTarget(rt);
-      renderer.state.buffers.depth.setMask(true);
-      if (renderer.autoClear === false) renderer.clear();
-      renderer.render(scene, reflCam);
-      renderer.setRenderTarget(prevRT);
-      renderer.shadowMap.autoUpdate = prevShadow;
-      renderer.xr.enabled = prevXr;
-      REFL_PASS.value = 0;
+      try {
+        // These draws would discard every fragment. Cull whole meshes first;
+        // partly visible props still use the shader's exact distance test.
+        scene.updateMatrixWorld();
+        scene.traverseVisible(cullReflection);
+        renderer.setRenderTarget(rt);
+        renderer.state.buffers.depth.setMask(true);
+        if (renderer.autoClear === false) renderer.clear();
+        renderer.render(scene, reflCam);
+      } finally {
+        for (const object of hidden) object.visible = true;
+        hidden.length = 0;
+        renderer.setRenderTarget(prevRT);
+        renderer.shadowMap.autoUpdate = prevShadow;
+        renderer.xr.enabled = prevXr;
+        REFL_PASS.value = 0;
+      }
 
       globals.reflTex.value = rt.texture;
       globals.reflY.value = waterY;

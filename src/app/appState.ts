@@ -26,7 +26,7 @@ export interface Systems {
   lighting: LightingRuntime;
   post: PostStack;
   reflection: PlanarReflection;
-  anomaly: { update(t: number, dt: number, player: PlayerState, world: WorldQuery): void };
+  anomaly: { reset(): void; update(t: number, dt: number, player: PlayerState, world: WorldQuery): void };
   /** load-driven render scale: update(frame interval, main-thread cost, GPU timer ms or null) queues a change,
    * beforeRender() (loop step 0) applies it before the frame draws */
   dynRes: { update(frameMs: number, cpuMs: number, gpuMs: number | null): void; beforeRender(): void; refreshDpr(): void; readonly scale: number };
@@ -59,7 +59,7 @@ export type FrameHook = (frameMs: number) => boolean;
 
 export interface GateOptions {
   /** 'boot' applies the launch toggles (§6.1 step 7) once the stream is ready */
-  reason: 'boot' | 'teleport' | 'quality';
+  reason: 'boot' | 'seed' | 'teleport' | 'quality';
   /** snap an explicit position that lies inside a wall to the nearest walkable cell (x/z teleports) */
   snapToWalkable: boolean;
   /** also snap a position given without y to standable floor: out of prop footprints (a desk top), under a ceiling

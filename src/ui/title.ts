@@ -31,6 +31,7 @@ export interface TitleScreen {
   readonly visible: boolean;
   /** world ready (ENTER label changes from LOADING) */
   setReady(r: boolean): void;
+  setSeed(seed: string, storeyName: string): void;
   setContinue(c: TitleContinue | null): void;
   /** mounts the phase list in the status slot (null removes it) */
   setStatus(list: PhaseList | null): void;
@@ -166,6 +167,12 @@ export function createTitle(seedText: string, cb: TitleCallbacks, storeyName = '
     setInteractive(on) {
       interactive = on;
       if (on && visible) nav.focusFirst();
+    },
+    setSeed(value, storey) {
+      seedText = value;
+      seed.value = value;
+      sub.replaceChildren('Tape ', el('b', '', value), ` · ${storey}`);
+      hint.classList.remove('is-on');
     },
     refresh(fs) {
       camcorder.setDetail(cb.camcorder() ? 'on' : 'off');

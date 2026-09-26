@@ -164,6 +164,11 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
   };
 
   const rt: LightingRuntime = {
+    reset() {
+      overrides.clear(); stamp.clear(); cur.clear(); onState.clear(); pendingToggle.clear();
+      lastEyeX = lastEyeZ = NaN;
+      flashlight.set(false);
+    },
     flashlight,
     update(t: number, dt: number, tiles: Iterable<TileRuntime>, player: PlayerState, camera: THREE.Camera, world: WorldQuery) {
       frame++;

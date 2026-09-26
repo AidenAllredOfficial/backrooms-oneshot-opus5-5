@@ -37,7 +37,7 @@ import type { PauseInfo } from '../ui/pause.ts';
 import { createUI } from '../ui/ui.ts';
 import type { UI } from '../ui/ui.ts';
 import type { AppCore, AppMode } from './appState.ts';
-import { applyQuality, bootSystems, buildQuality, filmOf, startEarlyPool } from './boot.ts';
+import { applyQuality, bootSystems, buildQuality, filmOf, resolveSpawn, startEarlyPool, workerInitOf } from './boot.ts';
 import type { LoadPhase } from './boot.ts';
 import { createClock } from './clock.ts';
 import { createContinueStore, createTapeLogStore } from './continueStore.ts';
@@ -45,7 +45,7 @@ import { createDebugApi } from './debugApi.ts';
 import { createGate, createLoop, teleportPlayer } from './loop.ts';
 import { createFrameStats, createGpuTimer } from './perf.ts';
 import { isIntegratedRenderer, rendererString, resolveQuality, resolveQualityName } from './qualityAuto.ts';
-import { UnsupportedError, createRenderer, primeGpuContext } from './renderer.ts';
+import { UnsupportedError, createRenderer, pixelRatioFor, primeGpuContext } from './renderer.ts';
 import { createSettingsStore } from './settingsStore.ts';
 import type { SettingsStore } from './settingsStore.ts';
 import { locationSearch, parseLaunchParams } from './urlParams.ts';
@@ -184,6 +184,7 @@ export function createApp(root: HTMLElement): App {
   const handle = createDebugApi(core, {
     setQuality: (name: QualityName) => queueQuality(() => buildQuality(name, settings.get(), params)),
     setFlicker,
+    newSeed: (seed) => changeTape(`?seed=${encodeURIComponent(seed)}`),
   });
   core.debug = handle.api;
   logEvent = handle.log;
@@ -214,7 +215,7 @@ export function createApp(root: HTMLElement): App {
   const uiSound = (name: GameEvents['ui']['name']): void => bus.emit('ui', { name });
 
   // ---------------------------------------------------------------- tape log + discovery (R2, B7)
-  const tapeLog = tapeStore.load(params.seedText);
+  let tapeLog = tapeStore.load(params.seedText);
   const disc = {
     t: 0, candZone: -1, candT: 0, capZone: -1, capS: -1, lastX: NaN, lastZ: NaN, lastS: -1,
     landmark: -1, landmarksSeen: new Set<string>(), zone: -1,
@@ -429,6 +430,87 @@ export function createApp(root: HTMLElement): App {
     location.search = search;
   };
 
+  let changingTape = false;
+  const changeTape = async (search: string): Promise<void> => {
+    if (changingTape || lost) return;
+    changingTape = true;
+    try {
+      // Keep the current video/audio controls, replacing only world and starting-position parameters.
+      const next = new URLSearchParams(location.search);
+      for (const k of ['seed', 's', 'x', 'y', 'z', 'yaw', 'pitch', 'yawDeg', 'pitchDeg', 'goto', 'zone', 'forceZone', 'forceMood', 'forceLandmark', 'testScene', 'lights']) next.delete(k);
+      for (const [k, v] of new URLSearchParams(search)) next.set(k, v);
+      const nextParams = parseLaunchParams(`?${next}`, settings.get(), randomSeedText());
+      if (!params.autostart) core.sys?.input.lock();
+      startAudio();
+      await bootDone;
+      await qualityChain;
+      const s = core.sys, r = core.renderer;
+      if (!s || !r || lost) return;
+      startAudio(); // the request may have arrived before boot created the audio system
+      saveContinue();
+      setMode('entering');
+      core.attract = null;
+      core.driver = null;
+      ui.title.hide(); ui.pause.hide(); ui.hidePrompt(); ui.hud.hideTransient();
+      core.clock.paused = true;
+      bus.emit('pause', { paused: true });
+      await ui.curtain(1, 180);
+      r.setAnimationLoop(null);
+      core.debug.ready = false;
+      core.debug.readyPhase = 'spawn';
+      Object.assign(params, nextParams);
+      settings.set({ lastSeed: params.seedText });
+      history.replaceState(null, '', `?${next}`);
+      ui.title.setSeed(params.seedText, storeyTitle(params.s ?? 0));
+      ui.phases.reset();
+      ui.phases.setPhase('world');
+      ui.loading.show(ui.phases, params.seedText);
+      tapeLog = tapeStore.load(params.seedText);
+      playSeconds = autosaveT = 0;
+      Object.assign(disc, { t: 0, candZone: -1, candT: 0, capZone: -1, capS: -1, lastX: NaN, lastZ: NaN, lastS: -1, landmark: -1, zone: -1 });
+      disc.landmarksSeen.clear();
+      s.anomaly.reset();
+      s.lighting.reset();
+      s.audio.reset();
+      s.post.glitch(0, 0);
+      s.post.setExposureLock(null);
+      s.init = workerInitOf(params, s.q);
+      const start = performance.now();
+      await s.streamer.reset(s.init);
+      const { sp, explicit } = await resolveSpawn(core, s.streamer);
+      s.spawn = { ...sp, reason: explicit ? 'explicit' : sp.reason };
+      s.streamer.switchStorey(sp.s);
+      s.player.teleport(sp.s, sp.x, explicit && params.y === null ? null : sp.y, sp.z, sp.yaw, sp.pitch);
+      s.player.setFly(params.fly);
+      bus.emit('teleport', { s: sp.s, x: sp.x, y: sp.y, z: sp.z });
+      s.player.applyToCamera(camera, core.fov());
+      core.clock.set(0); core.clock.set(null);
+      core.frameStats.reset();
+      // A new loop clears water-plane and zone caches belonging to the previous seed.
+      frameLoop = createLoop(core, onFrame);
+      const ready = core.gate.open({ reason: 'seed', snapToWalkable: explicit });
+      readyOnce = ready;
+      core.clock.paused = false;
+      bus.emit('pause', { paused: false });
+      if (innerWidth > 0 && innerHeight > 0) r.setAnimationLoop(frameLoop);
+      await ready;
+      performance.measure('br:newSeed', { start, end: performance.now() });
+      ui.phases.complete(); ui.loading.hide(true);
+      ui.title.setReady(true);
+      ui.title.setStatus(null);
+      setMode(params.autostart ? 'auto' : 'play');
+      audioGainTarget = 1;
+      void ui.curtain(0, 600);
+      if (!params.autostart && !s.input.locked) ui.showPrompt('Click to look around', () => s.input.lock());
+    } catch (e) {
+      core.fail(e);
+      ui.error('Unable to load tape', errText(e), undefined, { label: 'Reload', run: () => reloadWith(search, true) });
+      throw e;
+    } finally {
+      changingTape = false;
+    }
+  };
+
   /** Reload at the player's current place (lost GPU context): same seed, storey, position and view. */
   const resumeHere = (): void => {
     const st = core.sys?.player.state;
@@ -522,12 +604,12 @@ export function createApp(root: HTMLElement): App {
           void enter({ x: cp.x, y: cp.y, z: cp.z, s: cp.s, yaw: cp.yaw, pitch: 0 }).catch((e: unknown) => core.fail(e));
         } else {
           settings.set({ lastSeed: cp.seedText });
-          reloadWith(locationSearch(cp.seedText, cp.s, cp.x, cp.z, cp.yaw, 0), true);
+          void changeTape(locationSearch(cp.seedText, cp.s, cp.x, cp.z, cp.yaw, 0)).catch(() => undefined);
         }
       },
       onSeed: (seed) => {
         settings.set({ lastSeed: seed });
-        reloadWith(`?seed=${encodeURIComponent(seed)}`, true);
+        void changeTape(`?seed=${encodeURIComponent(seed)}`).catch(() => undefined);
       },
       randomSeed: randomSeedText,
       onSettings: () => { ui.title.setInteractive(false); ui.settings.open('settings'); },
@@ -547,7 +629,7 @@ export function createApp(root: HTMLElement): App {
         saveContinue();
         const seed = randomSeedText();
         settings.set({ lastSeed: seed });
-        reloadWith(`?seed=${encodeURIComponent(seed)}`, true);
+        void changeTape(`?seed=${encodeURIComponent(seed)}`).catch(() => undefined);
       },
       locationLink: () => {
         const st = core.sys?.player.state;
@@ -751,7 +833,7 @@ export function createApp(root: HTMLElement): App {
     const qName = resolveQuality(params.quality ?? settings.get().quality, gl);
     const q = buildQuality(qName, settings.get(), params);
     lastQualityKey = qualityKey(settings.get());
-    r.setPixelRatio(Math.min(devicePixelRatio, q.maxDpr) * q.renderScale);
+    r.setPixelRatio(pixelRatioFor(q, devicePixelRatio));
     r.setSize(innerWidth, innerHeight);
     camera.fov = core.fov();
     camera.aspect = innerWidth / Math.max(1, innerHeight);
@@ -790,7 +872,7 @@ export function createApp(root: HTMLElement): App {
     // preset or overrides moved since boot read them).
     applySettings(settings.get());
     // event wiring
-    bus.on('glitch', (e) => sys.post.glitch(e.seconds, e.strength));
+    bus.on('glitch', (e) => core.sys?.post.glitch(e.seconds, e.strength));
     bus.on('pause', (e) => { sys.post.setPaused(e.paused); sys.audio.setPaused(e.paused); });
     if (mode === 'title') core.attract = createAutopilot((hashString(params.seedText) ^ 0x5eed) >>> 0, () => core.clock.t);
     refreshFullscreenUi();
@@ -844,4 +926,3 @@ export function createApp(root: HTMLElement): App {
     },
   };
 }
-

@@ -61,6 +61,13 @@ export class Footsteps {
 
   setPlayer(p: PlayerState): void { this.player = p; }
 
+  reset(): void {
+    this.player = null;
+    this.last.fill(-1);
+    this.steps = 0;
+    this.setEcho(0); // retain the existing delay chain connected to the foot bus
+  }
+
   /** Water depth overrides the floor surface. */
   static surfaceFor(surface: SurfaceSoundId, waterDepth: number): SurfaceSoundId {
     if (waterDepth > 0.3) return SurfaceSound.WATER_DEEP;

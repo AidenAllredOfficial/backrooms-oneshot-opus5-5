@@ -209,8 +209,8 @@ export function createDynamicResolution(post: PostStack, renderer: THREE.WebGLRe
     renderer.getSize(size);
     post.setSize(size.x, size.y);
   };
-  // the post stack / renderer applied maxDpr x renderScale uncapped: apply the capped start scale
-  if (q.dynamicResolution) apply(ctl.scale);
+  // Apply the live DPR and capped scale even when automatic adjustment is disabled.
+  apply(ctl.scale);
   let pending = NaN;
   return {
     update(frameMs, cpuMs, gpuMs) {
@@ -234,7 +234,7 @@ export function createDynamicResolution(post: PostStack, renderer: THREE.WebGLRe
         ctl.setMax(m);
         if (atCap) ctl.reset(m);
       }
-      apply(q.dynamicResolution ? ctl.scale : q.renderScale);
+      apply(ctl.scale);
     },
     get scale() {
       return q.dynamicResolution ? ctl.scale : post.renderScale;

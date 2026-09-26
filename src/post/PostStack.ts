@@ -7,12 +7,13 @@
 //  4. EffectPass[Bloom (threshold 1/exposure nits), Exposure (+ warm halation from the two coarsest bloom mips), AgX,
 //     Grade (+ highlight knee and black pedestal)]
 //  5. EffectPass[SMAA | FXAA] (a convolution effect, alone)
-//  6. EffectPass[Lens (CONVOLUTION, no mainUv; lens MTF softness + camcorder detail halo), FilmGrain] with dithering, rendered into an RGBA8 display target
-//     (sRGB-encoded bytes) which is blitted to the canvas; capture(w, h) downsamples the same target.
+//  6. EffectPass[Lens (CONVOLUTION, no mainUv; lens MTF softness + camcorder detail halo), FilmGrain] with dithering,
+//     rendered directly to the canvas. Capture frames use an RGBA8 display target, blitted to the canvas and downsampled.
 // The composer runs passes 1-5 (autoRenderToScreen off); pass 6 is rendered by hand from whichever ping-pong
-// buffer holds the result, so the display target (and the program set) is the same on every frame.
+// buffer holds the result. Grain encodes sRGB for both output paths.
 
 import * as THREE from 'three';
+import { effectiveDpr, maxScaleFor } from './DynamicResolution.ts';
 import {
   BloomEffect, BlendFunction, EffectComposer, EffectPass, FXAAEffect, RenderPass, SMAAEffect, SMAAPreset,
   ToneMappingEffect, ToneMappingMode,
@@ -163,7 +164,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   let aaPass = makeAA(q);
   let aaKey = q.aa === 'smaa' ? `smaa:${q.smaaPreset}` : 'fxaa';
 
-  // 6. lens + grain -> display target (rendered by hand)
+  // 6. lens + grain -> canvas, or the display target on capture frames (rendered by hand)
   const lens = new LensEffect();
   const grain = new FilmGrainEffect();
   const finalPass = new EffectPass(camera, lens, grain);
@@ -324,8 +325,13 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       updateUniforms(realDt, t);
       composer.render(realDt);
       const src = resultBuffer();
-      finalPass.render(renderer, src, cap.display, realDt, false);
-      cap.blit(renderer);
+      // Keep the display copy only on capture frames. Normal play can write the final
+      // encoded image straight to the canvas, avoiding a full-resolution copy and target.
+      const capturing = captures.length > 0;
+      finalPass.renderToScreen = !capturing;
+      (finalPass.fullscreenMaterial as EffectMaterial).encodeOutput = false;
+      finalPass.render(renderer, src, capturing ? cap.display : null, realDt, false);
+      if (capturing) cap.blit(renderer);
       if (!warmed) { warmed = true; cap.warm(renderer); }
       if (captures.length > 0) {
         for (const c of captures.splice(0)) cap.read(renderer, c.w, c.h).then(c.resolve, c.reject);
@@ -360,8 +366,8 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       }
       applyEnabled();
       const css = renderer.getSize(new THREE.Vector2());
-      baseDpr = Math.max(1e-3, Math.min(globalThis.devicePixelRatio || 1, nq.maxDpr));
-      renderer.setPixelRatio(baseDpr * nq.renderScale);
+      baseDpr = effectiveDpr(nq);
+      renderer.setPixelRatio(baseDpr * maxScaleFor(nq));
       setSizeAll(css.x, css.y);
     },
     setAtmosphere(a) {

@@ -166,3 +166,21 @@ describe('dynamic resolution: the resize happens before a frame is drawn (R3)', 
     expect(calls.length).toBe(2);
   });
 });
+
+describe('fixed render scale', () => {
+  it('corrects a stale boot DPR even when dynamic resolution is disabled', () => {
+    let ratio = 1.5, resizes = 0;
+    const renderer = {
+      getPixelRatio: () => ratio,
+      setPixelRatio: (r: number) => { ratio = r; },
+      getSize: (v: THREE.Vector2) => v.set(1280, 800),
+    } as unknown as THREE.WebGLRenderer;
+    const post = { setSize: () => resizes++, get renderScale() { return ratio; } } as unknown as PostStack;
+    const d = createDynamicResolution(post, renderer, { ...QUALITY.high, maxDpr: 1, renderScale: 1, dynamicResolution: false });
+    expect(ratio).toBe(1);
+    expect(resizes).toBe(1);
+    for (let i = 0; i < 240; i++) { d.update(40, 30, 30); d.beforeRender(); }
+    expect(ratio).toBe(1);
+    expect(resizes).toBe(1);
+  });
+});

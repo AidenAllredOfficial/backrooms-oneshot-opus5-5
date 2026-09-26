@@ -43,7 +43,7 @@ export function lightDiesRoll(bin: number, salt: number): boolean {
 
 const MAX_SITES = 32;
 
-export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, scene: THREE.Scene): { update(t: number, dt: number, player: PlayerState, world: WorldQuery): void } {
+export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, scene: THREE.Scene): { reset(): void; update(t: number, dt: number, player: PlayerState, world: WorldQuery): void } {
   const A = ANOMALY_TUNING;
   const sparks = createSparks(scene);
   const fx: FixtureRef[] = [];
@@ -135,6 +135,15 @@ export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, s
   }
 
   return {
+    reset() {
+      if (dipId >= 0) lighting.setOverride(dipId, null);
+      if (dieId >= 0) lighting.setOverride(dieId, null);
+      dipId = dieId = -1;
+      prevT = NaN;
+      fx.length = 0;
+      siteCount = 0;
+      sparks.update(Infinity);
+    },
     update(t, dt, player, world) {
       sparks.update(t);
       if (!(t > prevT) || t - prevT > 1) {

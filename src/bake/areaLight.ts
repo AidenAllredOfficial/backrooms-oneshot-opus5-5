@@ -35,6 +35,9 @@ export const lensW = (ce: number): number => LENS_NORM * Math.sqrt(ce);
 const poly = new Float64Array(3 * 8);
 const clipped = new Float64Array(3 * 8);
 
+// These vectors are tile-local and bounded. sqrt(dot(v, v)) avoids the general
+// overflow protection in Math.hypot inside the baker's hottest loops.
+
 /** Exact irradiance factor of a rectangle given by 4 corner vectors relative to the receiver (metres). */
 function polygonFactor(nx: number, ny: number, nz: number, nv: number): number {
   // clip against n.v >= 0
@@ -56,7 +59,7 @@ function polygonFactor(nx: number, ny: number, nz: number, nv: number): number {
   for (let k = 0; k < m; k++) {
     const a = k * 3;
     cx += clipped[a]; cy += clipped[a + 1]; cz += clipped[a + 2];
-    const l = Math.hypot(clipped[a], clipped[a + 1], clipped[a + 2]);
+    const l = Math.sqrt(clipped[a] * clipped[a] + clipped[a + 1] * clipped[a + 1] + clipped[a + 2] * clipped[a + 2]);
     const il = l > 1e-12 ? 1 / l : 0;
     clipped[a] *= il; clipped[a + 1] *= il; clipped[a + 2] *= il;
   }
@@ -67,12 +70,12 @@ function polygonFactor(nx: number, ny: number, nz: number, nv: number): number {
     let c = ax * bx + ay * by + az * bz;
     c = c > 1 ? 1 : c < -1 ? -1 : c;
     const crx = ay * bz - az * by, cry = az * bx - ax * bz, crz = ax * by - ay * bx;
-    const s = Math.hypot(crx, cry, crz);
+    const s = Math.sqrt(crx * crx + cry * cry + crz * crz);
     if (s < 1e-12) continue;
     const th = Math.acos(c);
     sum += (th / s) * (nx * crx + ny * cry + nz * crz);
   }
-  const cl = Math.hypot(cx, cy, cz);
+  const cl = Math.sqrt(cx * cx + cy * cy + cz * cz);
   if (cl > 1e-12) { ff.wx = cx / cl; ff.wy = cy / cl; ff.wz = cz / cl; }
   const e = 0.5 * sum;
   return e < 0 ? -e : e;
@@ -251,12 +254,12 @@ export function emitterSample(L: LightSet, l: number, i: number, px: number, py:
     return;
   }
   let dx = (px - L.pos[o]) * CELL, dy = py - L.pos[o + 1], dz = (pz - L.pos[o + 2]) * CELL;
-  const dl = Math.hypot(dx, dy, dz) || 1;
+  const dl = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
   dx /= dl; dy /= dl; dz /= dl;
   // basis perpendicular to d
   let ex: number, ey: number, ez: number;
   if (Math.abs(dy) < 0.9) { ex = dz; ey = 0; ez = -dx; } else { ex = 0; ey = -dz; ez = dy; }
-  const el = Math.hypot(ex, ey, ez); ex /= el; ey /= el; ez /= el;
+  const el = Math.sqrt(ex * ex + ey * ey + ez * ez); ex /= el; ey /= el; ez /= el;
   const fx = dy * ez - dz * ey, fy = dz * ex - dx * ez, fz = dx * ey - dy * ex;
   const wx = ex * ca + fx * sa, wy = ey * ca + fy * sa, wz = ez * ca + fz * sa;
   sp.x = L.pos[o] + quant(wx / CELL); sp.y = L.pos[o + 1] + wy; sp.z = L.pos[o + 2] + quant(wz / CELL);

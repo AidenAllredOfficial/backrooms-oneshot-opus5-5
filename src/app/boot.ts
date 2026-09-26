@@ -1,6 +1,11 @@
 // src/app/boot.ts (WP14) — the initialization sequence (§6.1 steps 3-5), launch toggles (§6.1 step 7) and the
 // runtime quality change (§6.4 "setQuality at runtime").
 
+import { TILE_SIZE } from '../core/constants.ts';
+import { chunkOriginX, chunkOriginZ, tileOriginX, tileOriginZ, worldToChunk } from '../core/grid.ts';
+import type { TileKey } from '../core/grid.ts';
+import { createStartupJobs } from '../stream/StartupJobs.ts';
+import { basePriority, jobPriority, rectDistance } from '../stream/priorities.ts';
 import { ZONE_NAMES } from '../core/ids.ts';
 import type { StoreyId } from '../core/ids.ts';
 import type { LaunchParams } from '../core/debug.ts';
@@ -9,7 +14,7 @@ import { QUALITY, bakeQualityOf } from '../core/quality.ts';
 import type { QualityConfig, QualityName } from '../core/quality.ts';
 import { hashString } from '../core/rng.ts';
 import type { Settings } from '../core/settings.ts';
-import type { WorkerInit } from '../core/worker.ts';
+import type { WorkerInit, WorkerRequest } from '../core/worker.ts';
 import type { SpawnPoint } from '../core/world.ts';
 import { generateTextures } from '../textures/TextureBaker.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
@@ -105,7 +110,7 @@ export function poolQueries(pool: WorkerPool): SpawnQueries {
 }
 
 /** §6.1 step 5.3: explicit x/z, else goto/zone via findNearest (fallback: spawn), else streamer.spawn(s). */
-async function resolveSpawn(core: AppCore, queries: SpawnQueries): Promise<{ sp: SpawnPoint; explicit: boolean }> {
+export async function resolveSpawn(core: AppCore, queries: SpawnQueries): Promise<{ sp: SpawnPoint; explicit: boolean }> {
   const p = core.params;
   const s: StoreyId = p.s ?? 0;
   const view = (sp: SpawnPoint): SpawnPoint => ({ ...sp, yaw: p.yaw ?? sp.yaw, pitch: p.pitch ?? sp.pitch });
@@ -210,7 +215,31 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
     mark('pool');
     poolP = createWorkerPool(bootPoolSize(q), init); // shrunk to poolSize(q) at the boot gate (loop.ts)
   }
-  const spawnP = poolP.then((pool) => { mark('poolReady'); return resolveSpawn(core, poolQueries(pool)); });
+  const startupP = poolP.then(createStartupJobs);
+  const spawnP = startupP.then(async (startup) => {
+    mark('poolReady');
+    const resolved = await resolveSpawn(core, poolQueries(startup.pool));
+    const sp = resolved.sp, cx = worldToChunk(sp.x), cz = worldToChunk(sp.z);
+    const jobs: { req: Extract<WorkerRequest, { t: 'layout' | 'build' }>; priority: number }[] = [];
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const key = { s: sp.s, cx: cx + dx, cz: cz + dz };
+      const own = dx === 0 && dz === 0, ring = Math.max(Math.abs(dx), Math.abs(dz));
+      const distance = rectDistance(sp.x, sp.z, chunkOriginX(key.cx), chunkOriginZ(key.cz), chunkOriginX(key.cx + 1), chunkOriginZ(key.cz + 1));
+      jobs.push({ req: { t: 'layout', job: 0, key }, priority: jobPriority(basePriority(ring, true, distance), 'layout', false, own) });
+      for (let i = 0; i < 4; i++) {
+        const tile: TileKey = { ...key, q: i as TileKey['q'] };
+        const x = tileOriginX(tile), z = tileOriginZ(tile);
+        const d = rectDistance(sp.x, sp.z, x, z, x + TILE_SIZE, z + TILE_SIZE);
+        // A bounded ring, ordered toward the starting view; the live streamer refines priorities.
+        const ahead = -(x + TILE_SIZE / 2 - sp.x) * Math.sin(sp.yaw) - (z + TILE_SIZE / 2 - sp.z) * Math.cos(sp.yaw) >= 0;
+        jobs.push({ req: { t: 'build', job: 0, key: tile }, priority: jobPriority(basePriority(ring, ahead, d), 'build', false, own) });
+      }
+    }
+    jobs.sort((a, b) => a.priority - b.priority);
+    for (const j of jobs) startup.preload(j.req, j.priority);
+    mark('spawnResolved');
+    return resolved;
+  });
   // awaited below; a rejection before that point must not surface as an unhandled rejection
   poolP.catch(() => undefined);
   spawnP.catch(() => undefined);
@@ -242,7 +271,8 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   core.debug.readyPhase = 'spawn';
   cb.phase('world');
   mark('spawn');
-  const pool = await poolP;
+  const startup = await startupP;
+  const pool = startup.pool;
   const startS: StoreyId = p.s ?? 0;
   const streamer = createChunkStreamer({ renderer: r, materials, quality: q, init, bus: core.bus, pool, startStorey: startS });
   core.scene.add(streamer.scene);
@@ -265,6 +295,9 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const dynRes = createDynamicResolution(post, r, q);
   watchDevicePixelRatio(core);
   player.applyToCamera(core.camera, core.fov());
+  // Claim every preloaded request before dropping unclaimed startup work. No GPU uploads here.
+  streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
+  startup.clear();
   return {
     q, textures, materials, lighting, post, reflection, anomaly, dynRes, pool, poolTarget: poolSize(q), streamer, player,
     audio, input, init, spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },

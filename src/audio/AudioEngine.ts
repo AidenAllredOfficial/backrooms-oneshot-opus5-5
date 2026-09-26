@@ -284,6 +284,28 @@ export function createAudioSystem(bus: GameBus, settings: Settings, q: QualityCo
       stats.state = s.ctx.state;
     },
 
+    reset(): void {
+      nextProp = nextAlloc = nextProbe = 0;
+      lastWorld = null; lastPlayer = null; lastZone = -1; lastMood = 0;
+      lp.fill(NaN);
+      const s = sys;
+      if (!s) return;
+      s.hum.stopAll(0.05); s.emitters.stopAll(0.05); s.shots.stopAll(); s.amb.stopAll();
+      // Prop interaction and propagation caches belong to a seed. The graph and
+      // BufferBank contain no world data and are expensive to synthesize again.
+      const env = s.env;
+      s.spatial.world = null;
+      s.spatial.field.dist.fill(Infinity);
+      s.emitters = new Emitters(env);
+      s.shots = new OneShots(env);
+      s.shots.emitters = s.emitters;
+      s.amb = new Ambience(env, s.shots);
+      s.foot.reset();
+      s.dread = new Dread(env, s.foot, s.shots);
+      s.foley.reset();
+      s.fixtures = new FixtureSfx(env, s.hum);
+    },
+
     setVolumes(v: Settings['volume']): void {
       volumes = { ...v };
       if (sys) sys.graph.setVolumes(volumes, userMaster);

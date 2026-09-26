@@ -34,7 +34,7 @@ import type {
 import type { WorkerInit, WorkerRequest, WorkerResponse } from '../core/worker.ts';
 import {
   QUERY_PRIORITY, basePriority, createMotion, desiredChunks, fogHidden, jobPriority, keepResident, lookahead,
-  rectDistance, updateMotion,
+  rectDistance, resetMotion, updateMotion,
 } from './priorities.ts';
 import { createTileUploader, type TileGpu, type TileUploader, type UploaderMemory } from './TileObject.ts';
 import type { JobHandle, WorkerPool } from './WorkerPool.ts';
@@ -1027,6 +1027,28 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         restartAllJobs(tpcChanged); // re-queued behind the init broadcast (per-worker FIFO)
         resubmitQueries(); // pending find/spawn/ascii would otherwise never settle
         dirty = true;
+        await ready;
+      };
+      qualityChain = qualityChain.then(run, run);
+      return qualityChain;
+    },
+
+    reset(nextInit) {
+      const run = async (): Promise<void> => {
+        while (chunkList.length > 0) evictChunk(chunkList[chunkList.length - 1]);
+        // The frame loop is stopped during a seed change. Release old geometry now;
+        // the bounded texture pool can reuse matching allocations for the new world.
+        for (const d of disposeQ) {
+          uploader.dispose(d.gpu);
+          if (d.rt) d.rt.state = 'disposed';
+        }
+        disposeQ.length = 0;
+        init = nextInit;
+        dirty = true;
+        resetMotion(motion);
+        bakeLastMs = bakeSumMs = bakeN = buildSumMs = buildN = 0;
+        const ready = pool.reinit(init);
+        resubmitQueries();
         await ready;
       };
       qualityChain = qualityChain.then(run, run);

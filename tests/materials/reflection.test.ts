@@ -121,3 +121,35 @@ describe('WP9 planar reflection maths', () => {
     on.dispose();
   });
 });
+
+
+describe('reflection draw culling', () => {
+  it('skips water and wholly distant props, and restores visibility and renderer state after an error', () => {
+    const scene = new THREE.Scene();
+    const geo = new THREE.BoxGeometry(2, 2, 2);
+    geo.computeBoundingSphere();
+    const mesh = (variant: string, z: number) => {
+      const mat = new THREE.MeshBasicMaterial(); mat.userData.brVariant = variant;
+      const m = new THREE.Mesh(geo, mat); m.position.z = z; scene.add(m); return m;
+    };
+    const water = mesh('water', -2), near = mesh('props', -4), far = mesh('props', -40);
+    const boundary = mesh('props', -20), shell = mesh('shell', -40), alreadyHidden = mesh('water', -2);
+    alreadyHidden.visible = false;
+    const renderer = {
+      shadowMap: { autoUpdate: true }, xr: { enabled: true }, autoClear: true,
+      getDrawingBufferSize: (v: THREE.Vector2) => v.set(100, 100),
+      getRenderTarget: () => null, setRenderTarget() {},
+      state: { buffers: { depth: { setMask() {} } } },
+      render() {
+        expect(water.visible).toBe(false); expect(far.visible).toBe(false);
+        expect(near.visible).toBe(true); expect(boundary.visible).toBe(true); expect(shell.visible).toBe(true);
+        throw new Error('draw failed');
+      },
+    } as unknown as THREE.WebGLRenderer;
+    const reflection = createPlanarReflection(createGlobals(), QUALITY.high);
+    expect(() => reflection.update(renderer, scene, mainCamera(0, 1.6, 0, 0, 0), 0)).toThrow('draw failed');
+    expect(water.visible).toBe(true); expect(far.visible).toBe(true); expect(alreadyHidden.visible).toBe(false);
+    expect(renderer.shadowMap.autoUpdate).toBe(true); expect(renderer.xr.enabled).toBe(true);
+    reflection.dispose(); geo.dispose();
+  });
+});

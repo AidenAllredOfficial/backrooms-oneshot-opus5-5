@@ -37,6 +37,14 @@ export class Foley {
   private yawSm = 0;
   private stepKick = 0;
 
+  reset(): void {
+    this.lastYaw = NaN;
+    this.lastRustle = -1;
+    this.lastCrouch = this.crouchKick = this.stepKick = this.yawSm = this.breathTarget = 0;
+    this.breathGain.gain.setTargetAtTime(0, this.env.ctx.currentTime, 0.05);
+    this.rustleGain.gain.setTargetAtTime(0, this.env.ctx.currentTime, 0.05);
+  }
+
   constructor(env: AudioEnv) {
     this.env = env;
     const ctx = env.ctx;

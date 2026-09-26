@@ -121,6 +121,8 @@ export interface BackroomsDebugAPI {
   version: string;
   seed: string;
   stats(): DebugStats;
+  /** Change seed in place, retaining the renderer, textures and compiled programs. */
+  newSeed(seed: string): Promise<void>;
   /** Resolves when the target is ready again (radius-1 tiles baked per `bake` param) + 10 frames. */
   teleport(t: TeleportTarget): Promise<void>;
   goto(target: string): Promise<boolean>;
