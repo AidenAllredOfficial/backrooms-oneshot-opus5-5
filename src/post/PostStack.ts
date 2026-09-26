@@ -1,8 +1,8 @@
 // src/post/PostStack.ts — the calibrated post stack (WP11), pmndrs postprocessing 6.39.5.
 // EffectComposer(HalfFloat, no MSAA); the renderer has NoToneMapping + SRGB output (WP14). Passes (POST_PASSES):
-//  1. RenderPass(scene, camera)
-//  2. N8AOPostPass: aoRadius 0.7, distanceFalloff 0.6, intensity/color from the atmosphere, halfRes, gammaCorrection
-//     false, autoDetectTransparency = false (never enters n8ao's transparency path: no extra scene renders)
+//  1. ScenePass(scene, camera): a depth prepass, then shading with LEQUAL and no depth writes (ScenePass.ts)
+//  2. AmbientOcclusionPass (N8AO's estimator and composite, restructured: AmbientOcclusionPass.ts): radius 0.7,
+//     distance falloff 0.6, intensity/color from the atmosphere; multiplies the scene colour in place
 //  3. AutoExposurePass (meter; needsSwap false)
 //  4. EffectPass[Bloom (threshold 1/exposure nits), Exposure (+ warm halation from the two coarsest bloom mips), AgX,
 //     Grade (+ highlight knee and black pedestal)]
@@ -15,17 +15,18 @@
 import * as THREE from 'three';
 import { effectiveDpr, maxScaleFor } from './DynamicResolution.ts';
 import {
-  BloomEffect, BlendFunction, EffectComposer, EffectPass, FXAAEffect, RenderPass, SMAAEffect, SMAAPreset,
+  BloomEffect, BlendFunction, EffectComposer, EffectPass, FXAAEffect, SMAAEffect, SMAAPreset,
   ToneMappingEffect, ToneMappingMode,
 } from 'postprocessing';
 import type { EffectMaterial, Pass } from 'postprocessing';
-import { N8AOPostPass } from 'n8ao';
 import { PHOTOMETRY } from '../core/constants.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import type { Settings } from '../core/settings.ts';
 import type { AtmosphereState, PostStack } from '../core/runtime.ts';
+import { AmbientOcclusionPass } from './AmbientOcclusionPass.ts';
 import { AutoExposurePass } from './AutoExposurePass.ts';
 import { createDisplayCapture } from './capture.ts';
+import { ScenePass } from './ScenePass.ts';
 import { ColorGradeEffect } from './effects/ColorGradeEffect.ts';
 import { ExposureEffect } from './effects/ExposureEffect.ts';
 import { FilmGrainEffect } from './effects/FilmGrainEffect.ts';
@@ -36,7 +37,7 @@ import type { ExposureState } from './exposureMath.ts';
 /** Static description of the pass layout (asserted by tests/post/effects.test.ts; built by createPostStack). */
 export const POST_PASSES: readonly { name: string; effects: readonly string[] }[] = [
   { name: 'RenderPass', effects: [] },
-  { name: 'N8AOPostPass', effects: [] },
+  { name: 'AmbientOcclusionPass', effects: [] },
   { name: 'AutoExposurePass', effects: [] },
   { name: 'EffectPass', effects: ['BloomEffect', 'ExposureEffect', 'ToneMappingEffect', 'ColorGradeEffect'] },
   { name: 'EffectPass', effects: ['SMAAEffect|FXAAEffect'] },
@@ -72,23 +73,15 @@ const smoothstep = (a: number, b: number, x: number): number => {
   return t * t * (3 - 2 * t);
 };
 
-/** N8AOPostPass leaves its FullScreenTriangle quads (and their ShaderMaterials) out of Pass.dispose(). The quads
- * share one module-level triangle geometry, so only their materials are disposed. */
-function disposeN8ao(p: N8AOPostPass): void {
-  // the composer's shared depth texture must survive Pass.dispose() (which disposes every Texture property)
-  p.setDepthTexture(null as unknown as THREE.Texture);
-  const q = p as unknown as Record<string, { material?: THREE.Material } | null | undefined>;
-  for (const k of ['effectShaderQuad', 'poissonBlurQuad', 'effectCompositerQuad', 'depthDownsampleQuad', 'accumulationQuad', 'copyQuad', 'depthCopyPass']) {
-    const m = q[k]?.material;
-    if (m && typeof m.dispose === 'function') m.dispose();
-  }
-  p.dispose();
-}
+/** AO samples per texel for each preset AO level (the 4x4 interleave multiplies the directions per block by 16). */
+export const AO_SAMPLES: Readonly<Record<Exclude<QualityConfig['ao'], 'off'>, number>> = {
+  Performance: 8, Low: 10, Medium: 12, High: 16,
+};
 
 /** Internals exposed to the post harness / QA only (not part of the PostStack contract). */
 export interface PostInternals {
   composer: EffectComposer;
-  n8ao: N8AOPostPass;
+  ao: AmbientOcclusionPass;
   autoExposure: AutoExposurePass;
   bloom: BloomEffect;
   passes: Pass[];
@@ -120,29 +113,18 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   composer.autoRenderToScreen = false;
 
   // 1. scene
-  const renderPass = new RenderPass(scene, camera);
+  const renderPass = new ScenePass(scene, camera);
 
-  // 2. N8AO. A quality change that alters the AO mode or halfRes builds a NEW pass (and disposes the old one with
-  // all its quads) instead of mutating defines, so the program set does not ratchet up across preset cycles.
-  let aoIntensitySet = -1;
-  const aoColorLin = new THREE.Color(-1, -1, -1);
-  const makeN8ao = (qq: QualityConfig, w: number, h: number): N8AOPostPass => {
-    const p = new N8AOPostPass(scene, camera, Math.max(1, w), Math.max(1, h));
-    p.autoDetectTransparency = false;
-    if (p.configuration.transparencyAware) p.configuration.transparencyAware = false;
-    p.configuration.aoRadius = P.AO_RADIUS;
-    p.configuration.distanceFalloff = P.AO_FALLOFF;
-    p.configuration.gammaCorrection = false; // also clears autosetGamma
-    p.configuration.halfRes = qq.aoHalfRes;
-    p.configuration.screenSpaceRadius = false;
-    p.configuration.color = new THREE.Color(0, 0, 0);
-    if (qq.ao !== 'off') p.setQualityMode(qq.ao);
+  // 2. AO. A quality change that alters the AO level or halfRes builds a NEW pass (and disposes the old one) instead
+  // of mutating defines, so the program set does not ratchet up across preset cycles.
+  const makeAo = (qq: QualityConfig): AmbientOcclusionPass => {
+    const p = new AmbientOcclusionPass(camera, { samples: qq.ao === 'off' ? AO_SAMPLES.Performance : AO_SAMPLES[qq.ao], halfRes: qq.aoHalfRes });
+    p.radius = P.AO_RADIUS;
+    p.distanceFalloff = P.AO_FALLOFF;
     p.enabled = qq.ao !== 'off';
-    aoIntensitySet = -1;
-    aoColorLin.setRGB(-1, -1, -1);
     return p;
   };
-  let n8ao = makeN8ao(q, dbs.x, dbs.y);
+  let ao = makeAo(q);
   let aoKey = `${q.ao}:${q.aoHalfRes}`;
 
   // 3. exposure meter
@@ -172,7 +154,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   finalPass.renderToScreen = false;
 
   composer.addPass(renderPass);
-  composer.addPass(n8ao);
+  composer.addPass(ao);
   composer.addPass(ae);
   composer.addPass(hdrPass);
   composer.addPass(aaPass);
@@ -207,7 +189,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const captures: { w: number; h: number; resolve: (px: Uint8Array) => void; reject: (e: unknown) => void }[] = [];
 
   const applyEnabled = (): void => {
-    n8ao.enabled = enabled.ao && quality.ao !== 'off';
+    ao.enabled = enabled.ao && quality.ao !== 'off';
     bloom.active = enabled.bloom;
     aaPass.enabled = enabled.smaa && quality.aa !== 'off';
     grade.enabled = enabled.grade;
@@ -272,13 +254,8 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       exposureFx.setHalation(t0, t1, T[0] * k, T[1] * k, T[2] * k);
     } else exposureFx.setHalation(null, null, 0, 0, 0);
     if (atm) {
-      if (Math.abs(atm.aoIntensity - aoIntensitySet) > 1e-3) { aoIntensitySet = atm.aoIntensity; n8ao.configuration.intensity = atm.aoIntensity; }
-      const c = atm.aoColor;
-      if (c[0] !== aoColorLin.r || c[1] !== aoColorLin.g || c[2] !== aoColorLin.b) {
-        aoColorLin.setRGB(c[0], c[1], c[2]);
-        // n8ao converts its colour sRGB -> linear; hand it the sRGB encoding of the linear table colour
-        n8ao.configuration.color.setRGB(c[0], c[1], c[2]).convertLinearToSRGB();
-      }
+      ao.intensity = atm.aoIntensity;
+      ao.color.setRGB(atm.aoColor[0], atm.aoColor[1], atm.aoColor[2]);
       grade.setGrade(atm.grade);
     }
     const frame = Math.floor(t * 24);
@@ -345,14 +322,13 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       const nAoKey = `${nq.ao}:${nq.aoHalfRes}`;
       if (nAoKey !== aoKey) {
         aoKey = nAoKey;
-        const old = n8ao;
+        const old = ao;
         const idx = composer.passes.indexOf(old);
-        renderer.getDrawingBufferSize(dbs);
-        n8ao = makeN8ao(nq, dbs.x, dbs.y);
+        ao = makeAo(nq);
         // add before removing: the composer keeps its shared depth texture (removing the only depth user frees it)
-        composer.addPass(n8ao, idx >= 0 ? idx : 1);
+        composer.addPass(ao, idx >= 0 ? idx : 1);
         composer.removePass(old);
-        disposeN8ao(old);
+        old.dispose();
       }
       if (bloom.mipmapBlurPass.levels !== nq.bloomLevels) bloom.mipmapBlurPass.levels = nq.bloomLevels;
       const key = nq.aa === 'smaa' ? `smaa:${nq.smaaPreset}` : 'fxaa';
@@ -421,7 +397,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   };
   applyEnabled();
   internals.set(post, {
-    composer, get n8ao() { return n8ao; }, autoExposure: ae, bloom, finalPass,
+    composer, get ao() { return ao; }, autoExposure: ae, bloom, finalPass,
     get passes() { return composer.passes; },
     targetEv: () => targetEv,
     measurements: () => ae.measurements,

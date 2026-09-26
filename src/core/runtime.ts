@@ -91,6 +91,10 @@ export interface TileMaterials {
   props: THREE.MeshStandardMaterial;
   decal: THREE.MeshStandardMaterial; // 'decal' variant: premultiplied soft alpha, depthWrite off, polygonOffset
   water: THREE.Material | null;
+  /** depth-prepass materials of the shell and props meshes (same fade binding, alpha test and reflection cull;
+   * materials/DepthMaterial.ts, one program) */
+  depth: THREE.Material;
+  depthProps: THREE.Material;
   bindings: TileBindings;
   dispose(): void; // materials only; textures belong to the TexturePool (WP10)
 }
@@ -174,8 +178,9 @@ export interface WorldStreamer {
    * calls; teleports reset it); priorities (ring, frustum); dispatch; eviction. No uploads here. */
   update(x: number, z: number, viewX: number, viewZ: number, camera: THREE.Camera, frame: number): void;
   /** at most UPLOAD.MAX_STEPS_PER_FRAME residency step(s) within budgetMs (texture step, then geometry step),
-   * plus UPLOAD.PREFETCH_STEPS_PER_FRAME step(s) for prefetch groups */
-  processUploads(renderer: THREE.WebGLRenderer, budgetMs: number): void;
+   * plus UPLOAD.PREFETCH_STEPS_PER_FRAME step(s) for prefetch groups. burst (automation, while the ready gate is
+   * closed and nobody watches): any number of steps within budgetMs, and arriving / fading tiles show at once */
+  processUploads(renderer: THREE.WebGLRenderer, budgetMs: number, burst?: boolean): void;
   tiles(): Iterable<TileRuntime>;
   /** For storey s around (x,z): `layout` jobs for the (2r+1)^2 chunks (registered in storey s's query data) +
    * build/bake/upload of their tiles into s's hidden group. Idempotent; repeated calls refresh a keep-alive. */

@@ -95,7 +95,7 @@ and `high` for everything else.
 | Streaming radius (chunks of 38.4 m) | 1 | 2 | 2 | 3 |
 | Lightmap texels per 1.2 m cell | 8 | 8 | 12 | 12 |
 | Texture size | 512 | 1024 | 1024 | 1024 |
-| Ambient occlusion (N8AO) | off | low | medium | high |
+| Ambient occlusion (half resolution, samples per texel) | off | 10 | 12 | 16 |
 | Anti-aliasing | off | SMAA | SMAA | SMAA |
 | Surface shader detail | lite | full | full | full |
 | Bake workers (max) | 3 | 4 | 4 | 6 |
@@ -145,6 +145,11 @@ audit, seed changes reached ready in about 2 s; opening a fresh page took about 
 memory-bandwidth bound, so more worker threads do not help:
 4 workers reached ready faster than 10. Screenshot and QA runs (`autostart=1`) still wait for full lighting on the
 whole 3 x 3 chunk ring so their images are deterministic; `bake=preview` / `bake=interactive` give the player gate.
+
+**GPU cost.** On the development laptop (RTX 5070 Ti) a frame at high and 1080p costs about 1.6-2 ms of GPU time,
+and ultra at 1440p (a 3840 × 2160 supersampled buffer) about 6-7 ms. The scene is drawn with a depth prepass (each
+visible pixel is shaded once; the image is identical), and ambient occlusion runs at half resolution.
+`__backrooms.gpuBench()` measures the current view, `__backrooms.gpuProfile(seconds)` splits it by pass.
 
 See [the performance audit](docs/PERFORMANCE_AUDIT.md) for measurements, changes and reproduction steps.
 
@@ -246,8 +251,8 @@ node tools/shoot.mjs --params "seed=1&quality=high&noaudio=1" --eval "__backroom
 ```
 
 Options: `--params` (repeatable), `--out` (default `shots/`), `--size` (default 1600x900), `--wait` (ms after ready,
-default 4000), `--eval` (JS evaluated in the page; the result goes into the report), `--page`, `--preset`, and
-`--url` (use a server that is already running).
+default 250; the frame at ready is already final), `--eval` (JS evaluated in the page; the result goes into the
+report), `--page`, `--preset`, and `--url` (use a server that is already running).
 
 Put several `--params` in one call. Each call starts a browser and a Vite server.
 
@@ -268,6 +273,28 @@ Presets: `zones`, `spawn`, `leak`, `cornell`, `views`, `dark`, `pools`, `tower`,
 `perf`, `soak` (1.5 km autowalk with memory checks), `stress` (50 teleports), `edge`, `decals`, `ui`.
 `--baseline dir` compares each image with an earlier run; the result is reported but never fails a run.
 
+### QA speed and the result cache
+
+Screenshot and QA runs (`autostart=1`, bake level `full`) wait until the 36 tiles around the player are fully baked.
+Those tiles are built with full lighting straight away and ahead of all other work, uploads skip the per-frame limit
+and the fade-in until the page is ready, and a shot is taken 250 ms after ready (the frame is final by then). A shot
+reaches ready in about 7 s on a cold cache.
+
+The dev server of a tool run keeps every worker result (layouts, tile builds, full bakes, spawn and `goto` searches)
+in `~/.cache/backrooms-tilecache`, so a later shot or run of the same place reuses it: the 36-shot `zones` preset takes
+about 4.5 minutes the first time and 1.7 minutes after that (about 1.8 s to ready per shot). Results are keyed by a hash
+of every source file the worker runs (world generator, mesher, props, baker), the world and bake settings and the
+request, so editing any of them makes the cache miss instead of serving stale data; shader, post and app changes keep
+hitting it. Warm runs are also more repeatable: without the cache, distant tiles that are still streaming in can
+differ by a few hundred pixels between runs of the same shot. The game itself (`npm run dev`, builds) never uses the
+cache.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BACKROOMS_TILE_CACHE` | on for tool runs | `0` disables the cache (every shot computes its own lighting). |
+| `BACKROOMS_TILE_CACHE_DIR` | `~/.cache/backrooms-tilecache` | Cache directory (delete it to clear the cache). |
+| `BACKROOMS_TILE_CACHE_MB` | 8192 | Size cap; the least recently used entries are removed beyond it (a shot stores about 50 MB). |
+
 ### Browser slot and memory gate
 
 Every `shoot.mjs` or `qa.mjs` process first takes a machine-wide slot (a lock directory under
@@ -280,6 +307,7 @@ Chromium. Concurrent runs therefore queue instead of exhausting RAM. The environ
 | `BACKROOMS_MIN_FREE_MB` | 3000 | Free memory (MemAvailable) required before a browser starts. |
 | `BACKROOMS_HC` | 8 | `navigator.hardwareConcurrency` reported to the page. This keeps the bake worker pool small (4 workers). |
 | `BACKROOMS_EVAL_TIMEOUT_MS` | 900000 | Timeout for one `--eval`. |
+| `BACKROOMS_UNCAPPED` | unset | `1`: no vsync or frame-rate cap, so the GPU stays clocked up (steadier in-page timings). |
 | `CHROMIUM` | `/usr/bin/chromium` | Browser executable. |
 
 ### Showcase video: `tools/showcase.mjs`
@@ -353,7 +381,7 @@ They are not part of `npm run build` unless you set `BACKROOMS_HARNESS=1`.
 ### Debug API
 
 The page exposes `window.__backrooms`. It has readiness flags, `stats()`, `teleport()`, `goto()`, `perf(seconds)`,
-`imageStats()`, `autowalk()`, `ascii()` and world queries. The tools use it, and you can call it from the browser
+`gpuBench()`, `gpuProfile(seconds)`, `imageStats()`, `autowalk()`, `ascii()` and world queries. The tools use it, and you can call it from the browser
 console. See `src/core/debug.ts` and `docs/DESIGN.md` section 7.2.
 
 ## Architecture
@@ -376,9 +404,9 @@ These three run in `workers/`.
 **Rendering and audio**
 - `stream/`: streaming, the worker pool, tile residency and the `WorldQuery` used for collision and gameplay.
 - `textures/`: procedural PBR textures generated on the GPU at startup.
-- `materials/`: the shader patches on `MeshStandardMaterial`.
+- `materials/`: the shader patches on `MeshStandardMaterial`, the depth prepass and the planar water reflection.
 - `lighting/`: flicker, atmosphere and haze.
-- `post/`: exposure, bloom, AgX, grade, lens and grain.
+- `post/`: ambient occlusion, exposure, bloom, AgX, grade, lens and grain.
 - `audio/`: synthesized sound and propagation.
 
 **Player and app**

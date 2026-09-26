@@ -135,20 +135,34 @@ describe('reflection draw culling', () => {
     const water = mesh('water', -2), near = mesh('props', -4), far = mesh('props', -40);
     const boundary = mesh('props', -20), shell = mesh('shell', -40), alreadyHidden = mesh('water', -2);
     alreadyHidden.visible = false;
+    // shell / props take part in the depth prepass (materials/prepass.ts) through their depth materials
+    const depthMat = new THREE.MeshBasicMaterial();
+    for (const m of [near, far, boundary, shell]) (m.material as THREE.Material).userData.brDepth = depthMat;
+    const depth = { mask: true, locked: false, setMask(v: boolean) { if (!this.locked) this.mask = v; }, setLocked(v: boolean) { this.locked = v; } };
+    let renders = 0;
     const renderer = {
       shadowMap: { autoUpdate: true }, xr: { enabled: true }, autoClear: true,
       getDrawingBufferSize: (v: THREE.Vector2) => v.set(100, 100),
-      getRenderTarget: () => null, setRenderTarget() {},
-      state: { buffers: { depth: { setMask() {} } } },
+      getRenderTarget: () => null, setRenderTarget() {}, clear() {},
+      state: { buffers: { depth } },
       render() {
         expect(water.visible).toBe(false); expect(far.visible).toBe(false);
         expect(near.visible).toBe(true); expect(boundary.visible).toBe(true); expect(shell.visible).toBe(true);
+        expect(renderer.autoClear).toBe(false);
+        // 1: the depth prepass (depth materials swapped in); 2: the shading pass (surface materials, depth locked)
+        if (++renders === 1) { expect(near.material).toBe(depthMat); return; }
+        expect(near.material).not.toBe(depthMat);
+        expect(depth.locked).toBe(true);
         throw new Error('draw failed');
       },
     } as unknown as THREE.WebGLRenderer;
     const reflection = createPlanarReflection(createGlobals(), QUALITY.high);
     expect(() => reflection.update(renderer, scene, mainCamera(0, 1.6, 0, 0, 0), 0)).toThrow('draw failed');
+    expect(renders).toBe(2);
     expect(water.visible).toBe(true); expect(far.visible).toBe(true); expect(alreadyHidden.visible).toBe(false);
+    expect(near.material).not.toBe(depthMat);
+    expect(depth.locked).toBe(false); expect(depth.mask).toBe(true);
+    expect(renderer.autoClear).toBe(true);
     expect(renderer.shadowMap.autoUpdate).toBe(true); expect(renderer.xr.enabled).toBe(true);
     reflection.dispose(); geo.dispose();
   });

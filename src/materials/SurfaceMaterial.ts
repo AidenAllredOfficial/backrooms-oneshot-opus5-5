@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { LENS_SHIMMER_GLSL } from '../core/flicker.ts';
 import type { MaterialGlobals, TileBindings } from '../core/runtime.ts';
 import { injectAt, SURFACE_INJECTIONS } from './anchors.ts';
+import { VERT_INVARIANT_GLSL } from './DepthMaterial.ts';
 import { fragmentCommon, HAZE_FUNCS_GLSL } from './chunks/common.ts';
 import { FRAG_FOG_GLSL } from './chunks/haze.ts';
 import { FRAG_AO_REFL_GLSL, FRAG_LIGHTS_GLSL } from './chunks/lighting.ts';
@@ -26,7 +27,7 @@ export const CACHE_KEY_PREFIX = 'br-surface-v1';
 /** Code per injection point (keyed `${stage}:${include}`), exactly the SURFACE_INJECTIONS plan. */
 function injectionCode(): Record<string, string> {
   return {
-    'vertex:common': VERT_PARS_GLSL,
+    'vertex:common': VERT_INVARIANT_GLSL + VERT_PARS_GLSL,
     'vertex:uv_vertex': VERT_UV_GLSL,
     'vertex:worldpos_vertex': VERT_WORLDPOS_GLSL,
     'fragment:common': fragmentCommon() + SURFACE_PARS_GLSL + FRAG_VARYINGS_GLSL,

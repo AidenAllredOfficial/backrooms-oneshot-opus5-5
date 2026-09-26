@@ -13,7 +13,7 @@ import { emptyMeshBuffers, type ChunkCollision, type LightmapData, type MeshBuff
 import { bakeQualityOf, QUALITY, type QualityConfig } from '../../src/core/quality.ts';
 import type { DynamicMeshHandle, TileMaterials, WorldStreamer } from '../../src/core/runtime.ts';
 import type { WorkerInit, WorkerRequest, WorkerResponse } from '../../src/core/worker.ts';
-import { createStreamerCore, LEFT_STOREY_KEEPALIVE_MS, MAX_DISPOSE_PER_FRAME, PREFETCH_KEEPALIVE_MS, RESIDENT_BUDGET_BYTES } from '../../src/stream/ChunkStreamer.ts';
+import { createStreamerCore, LEFT_STOREY_KEEPALIVE_MS, MAX_DISPOSE_PER_FRAME, PREFETCH_KEEPALIVE_MS, RESIDENT_BUDGET_BYTES, type StreamerCoreOptions } from '../../src/stream/ChunkStreamer.ts';
 import type { TileGpu, TileUploader } from '../../src/stream/TileObject.ts';
 import type { JobHandle, WorkerPool } from '../../src/stream/WorkerPool.ts';
 
@@ -153,7 +153,7 @@ interface Rig {
   answerBakes(pred?: (k: TileKey) => boolean): Promise<number>;
 }
 
-function rig(q: QualityConfig = { ...QUALITY.low, streamRadius: 1 }, start: StoreyId = 0): Rig {
+function rig(q: QualityConfig = { ...QUALITY.low, streamRadius: 1 }, start: StoreyId = 0, extra: Partial<StreamerCoreOptions> = {}): Rig {
   const pool = new FakePool();
   const up = new FakeUploader();
   const bus = new EventBus<GameEvents>();
@@ -163,7 +163,7 @@ function rig(q: QualityConfig = { ...QUALITY.low, streamRadius: 1 }, start: Stor
     bake: bakeQualityOf(q), bakeTerm: 'all', validate: false,
   };
   const st = createStreamerCore({
-    quality: q, init, bus, pool, startStorey: start, uploader: up, clock: () => clock.t, budgetClock: () => up.work.t,
+    quality: q, init, bus, pool, startStorey: start, uploader: up, clock: () => clock.t, budgetClock: () => up.work.t, ...extra,
   });
   const r: Rig = {
     st, pool, up, bus, clock, frame: 0,
@@ -186,8 +186,9 @@ function rig(q: QualityConfig = { ...QUALITY.low, streamRadius: 1 }, start: Stor
     async answerBuilds(pred = () => true) {
       const js = pool.take('build', (j) => pred((j.req as Extract<WorkerRequest, { t: 'build' }>).key));
       for (const j of js) {
-        const k = (j.req as Extract<WorkerRequest, { t: 'build' }>).key;
-        j.resolve({ t: 'build', job: j.id, mesh: fakeMesh(k, 7), lightmap: fakeLm(k, 'preview', 7), ms: { gen: 1, mesh: 1, bake: 1 } });
+        const req = j.req as Extract<WorkerRequest, { t: 'build' }>;
+        const k = req.key;
+        j.resolve({ t: 'build', job: j.id, mesh: fakeMesh(k, 7), lightmap: fakeLm(k, req.lighting ?? 'preview', 7), ms: { gen: 1, mesh: 1, bake: 1 } });
       }
       await flush();
       return js.length;
@@ -709,5 +710,51 @@ describe('seed reset', () => {
     expect(r.st.stats().tilesFull).toBe(0);
     expect(r.st.stats().tilesResident).toBe(36);
     r.st.dispose();
+  });
+});
+
+describe('automation gate ring (fullBakeRing) and burst uploads', () => {
+  const ringOf = (k: TileKey): number => Math.max(Math.abs(k.cx), Math.abs(k.cz));
+  const buildKey = (j: FakeJob): TileKey => (j.req as Extract<WorkerRequest, { t: 'build' }>).key;
+
+  it('builds the gate ring with full lighting ahead of every farther build, and never bakes it again', async () => {
+    const r = rig({ ...QUALITY.low, streamRadius: 2 }, 0, { fullBakeRing: 1 });
+    r.tick(C / 2, C / 2);
+    await r.answerLayouts();
+    r.tick(C / 2, C / 2);
+    const builds = r.pool.pending('build');
+    const inner = builds.filter((j) => ringOf(buildKey(j)) <= 1), outer = builds.filter((j) => ringOf(buildKey(j)) === 2);
+    expect(inner.length).toBe(36);
+    expect(outer.length).toBeGreaterThan(0);
+    for (const j of inner) expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting).toBe('full');
+    for (const j of outer) expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting).toBeUndefined();
+    expect(Math.max(...inner.map((j) => j.priority))).toBeLessThan(Math.min(...outer.map((j) => j.priority)));
+    await r.answerBuilds((k) => ringOf(k) <= 1);
+    for (let i = 0; i < 200 && !r.st.isReady(1, true); i++) r.tick(C / 2, C / 2);
+    expect(r.st.isReady(1, true)).toBe(true);
+    expect(r.pool.pending('bake').filter((j) => ringOf((j.req as Extract<WorkerRequest, { t: 'bake' }>).key) <= 1)).toHaveLength(0);
+  });
+
+  it('keeps the default order without a gate ring (full bakes queue behind nearby builds)', async () => {
+    const r = rig({ ...QUALITY.low, streamRadius: 2 });
+    r.tick(C / 2, C / 2);
+    await r.answerLayouts();
+    r.tick(C / 2, C / 2);
+    for (const j of r.pool.pending('build')) expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting).toBeUndefined();
+  });
+
+  it('burst uploads take any number of steps within the budget and skip the fade', async () => {
+    const r = rig();
+    r.tick(C / 2, C / 2);
+    await r.answerLayouts();
+    await r.answerBuilds();
+    r.frame++;
+    r.up.frame = r.frame;
+    r.st.update(C / 2, C / 2, 0, -1, null as unknown as THREE.Camera, r.frame);
+    r.st.processUploads(null as unknown as THREE.WebGLRenderer, 1e6, true);
+    expect(r.up.steps(r.frame).length).toBeGreaterThan(UPLOAD.MAX_STEPS_PER_FRAME);
+    const s = r.st.stats();
+    expect(s.tilesResident).toBe(36);
+    expect(s.fadingIn).toBe(0);
   });
 });

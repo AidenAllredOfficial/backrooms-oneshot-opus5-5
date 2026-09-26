@@ -36,6 +36,7 @@ import {
   QUERY_PRIORITY, basePriority, createMotion, desiredChunks, fogHidden, jobPriority, keepResident, lookahead,
   rectDistance, resetMotion, updateMotion,
 } from './priorities.ts';
+import type { JobType } from './priorities.ts';
 import { createTileUploader, type TileGpu, type TileUploader, type UploaderMemory } from './TileObject.ts';
 import type { JobHandle, WorkerPool } from './WorkerPool.ts';
 import { chunkNumKey, createChunkData, createWorldQuery, StoreyData, type ChunkData } from './WorldQueryImpl.ts';
@@ -44,12 +45,17 @@ export interface StreamerOptions {
   renderer: THREE.WebGLRenderer; materials: MaterialSystem; quality: QualityConfig; init: WorkerInit; bus: GameBus; pool: WorkerPool; startStorey: StoreyId;
   /** optional debug hook (chunk harness atlas stats): called when a build or bake payload arrives */
   onTileData?: (key: string, kind: 'build' | 'bake', mesh: TileMesh | null, lm: LightmapData, ms: number) => void;
+  /** Full bakes of the tiles in chunk rings <= this run at build priority (ahead of farther builds and previews).
+   * The automation ready gate (bake 'full') waits for ring 1 fully baked; players' gates need previews only, so
+   * they keep the default (-1: full bakes queue behind nearby builds, priorities.ts). */
+  fullBakeRing?: number;
 }
 
 export function createChunkStreamer(o: StreamerOptions): WorldStreamer {
   const uploader = createTileUploader(o.renderer, o.materials);
   return createStreamerCore({
     quality: o.quality, init: o.init, bus: o.bus, pool: o.pool, startStorey: o.startStorey, uploader, onTileData: o.onTileData,
+    fullBakeRing: o.fullBakeRing,
   });
 }
 
@@ -67,6 +73,7 @@ export interface StreamerCoreOptions {
   /** milliseconds; default performance.now: measures the upload budget (tests inject a fake one) */
   budgetClock?: () => number;
   onTileData?: StreamerOptions['onTileData'];
+  fullBakeRing?: number;
 }
 
 /** Prefetched data expires this long after the last prefetch() call covering it. */
@@ -115,6 +122,7 @@ interface ChunkRec {
   keepUntil: number; // prefetch keep-alive (clock ms); 0 = not prefetched
   pfx: number; pfz: number; // prefetch centre (world m) for prefetch priorities
   prio: number; // base priority (chunk)
+  ring: number; // chunk ring around the player (current storey, desired); Infinity for prefetch chunks
   evicted: boolean;
   listIdx: number;
   retries: number;
@@ -241,6 +249,16 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
 
   const isPrefetchChunk = (c: ChunkRec): boolean => c.s !== storey || !c.desired;
   const isOwnChunk = (c: ChunkRec): boolean => c.s === storey && c.key.cx === pcx && c.key.cz === pcz;
+  const fullBakeRing = o.fullBakeRing ?? -1;
+  const inGateRing = (c: ChunkRec): boolean => c.ring <= fullBakeRing && !isPrefetchChunk(c);
+  /** job type whose offset a tile's full bake takes: 'build' inside o.fullBakeRing (automation gate), else 'bake' */
+  const bakeType = (c: ChunkRec): JobType => (inGateRing(c) ? 'build' : 'bake');
+  /** the gate ring's builds and bakes run before any other tile work (farther previews wait) */
+  const GATE_FIRST = -500;
+  const tileJobPriority = (t: TileRec, type: JobType, viewBonus = true): number => {
+    const c = t.chunk;
+    return jobPriority(t.prio, type, isPrefetchChunk(c), isOwnChunk(c), viewBonus && t.inView) + (inGateRing(c) ? GATE_FIRST : 0);
+  };
 
   function inView(x0: number, z0: number, size: number): boolean {
     if (haveFrustum) {
@@ -256,6 +274,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     const x0 = c.key.cx * CHUNK_SIZE, z0 = c.key.cz * CHUNK_SIZE;
     if (!isPrefetchChunk(c) && !Number.isNaN(pcx)) {
       const ring = chebyshev(c.key.cx, c.key.cz, pcx, pcz);
+      c.ring = ring;
       c.prio = basePriority(ring, inView(x0, z0, CHUNK_SIZE), rectDistance(px, pz, x0, z0, x0 + CHUNK_SIZE, z0 + CHUNK_SIZE));
       for (const t of c.tiles) {
         t.inView = inView(t.ox, t.oz, TILE_SIZE);
@@ -263,6 +282,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       }
     } else {
       const ring = chebyshev(c.key.cx, c.key.cz, worldToChunk(c.pfx), worldToChunk(c.pfz));
+      c.ring = Infinity;
       c.prio = basePriority(ring, true, rectDistance(c.pfx, c.pfz, x0, z0, x0 + CHUNK_SIZE, z0 + CHUNK_SIZE));
       for (const t of c.tiles) {
         t.inView = false;
@@ -275,8 +295,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     const pf = isPrefetchChunk(c), own = isOwnChunk(c);
     if (c.layoutJob) c.layoutJob.priority = jobPriority(c.prio, 'layout', pf, own);
     for (const t of c.tiles) {
-      if (t.buildJob) t.buildJob.priority = jobPriority(t.prio, 'build', pf, own);
-      if (t.bakeJob) t.bakeJob.priority = jobPriority(t.prio, 'bake', pf, own, t.inView);
+      if (t.buildJob) t.buildJob.priority = tileJobPriority(t, 'build');
+      if (t.bakeJob) t.bakeJob.priority = tileJobPriority(t, bakeType(c));
     }
   }
 
@@ -311,7 +331,10 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
 
   function submitBuild(t: TileRec): void {
     const c = t.chunk;
-    const h = pool.submit({ t: 'build', job: 0, key: t.key }, jobPriority(t.prio, 'build', isPrefetchChunk(c), isOwnChunk(c)), c.ks);
+    // inside fullBakeRing the build bakes full lighting at once (the gate would replace a preview right away)
+    const req: Extract<WorkerRequest, { t: 'build' }> = { t: 'build', job: 0, key: t.key };
+    if (bakeType(c) === 'build') req.lighting = 'full';
+    const h = pool.submit(req, tileJobPriority(t, 'build'), c.ks);
     t.buildJob = h;
     t.needBuild = false;
     if (!t.gpu && !t.staging) t.state = 'building';
@@ -334,7 +357,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   function submitBake(t: TileRec): void {
     const c = t.chunk;
     t.needBake = false;
-    const h = pool.submit({ t: 'bake', job: 0, key: t.key }, jobPriority(t.prio, 'bake', isPrefetchChunk(c), isOwnChunk(c), t.inView), c.ks);
+    const h = pool.submit({ t: 'bake', job: 0, key: t.key }, tileJobPriority(t, bakeType(c)), c.ks);
     t.bakeJob = h;
     h.promise.then((r) => {
       if (t.evicted || t.bakeJob !== h) return;
@@ -412,7 +435,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     dropStaging(t); // a newer build supersedes one that was half uploaded
     t.mesh = mesh;
     t.lm = lm;
-    if (t.full && t.full.chartHash !== mesh.atlas.chartHash) t.full = null;
+    if (lm.variant === 'full') t.full = lm; // built with full lighting (fullBakeRing): no bake job follows
+    else if (t.full && t.full.chartHash !== mesh.atlas.chartHash) t.full = null;
     t.atlasHash = mesh.atlas.chartHash;
     if (!t.gpu) t.state = 'received';
     queueStep(t, STEP_TEX);
@@ -447,7 +471,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     const key: ChunkKey = { s, cx, cz };
     c = {
       key, ks: chunkKeyStr(key), s, nk, layoutJob: null, data: null, tiles: [], desired: false, keepUntil: 0,
-      pfx: (cx + 0.5) * CHUNK_SIZE, pfz: (cz + 0.5) * CHUNK_SIZE, prio: 0, evicted: false, listIdx: chunkList.length, retries: 0,
+      pfx: (cx + 0.5) * CHUNK_SIZE, pfz: (cz + 0.5) * CHUNK_SIZE, prio: 0, ring: Infinity, evicted: false, listIdx: chunkList.length, retries: 0,
       failed: false,
     };
     recs[s].set(nk, c);
@@ -603,10 +627,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
 
   /** A started step always goes first in its slot (it holds half-uploaded GPU resources). */
   const PARTIAL_FIRST = 1e7;
-  const effPrio = (t: TileRec): number => {
-    const c = t.chunk;
-    return (t.partial ? -PARTIAL_FIRST : 0) + jobPriority(t.prio, t.step === STEP_SWAP ? 'bake' : 'build', isPrefetchChunk(c), isOwnChunk(c)) - (t.step === STEP_GEO ? 5 : 0);
-  };
+  const effPrio = (t: TileRec): number =>
+    (t.partial ? -PARTIAL_FIRST : 0) + tileJobPriority(t, t.step === STEP_SWAP ? bakeType(t.chunk) : 'build', false) - (t.step === STEP_GEO ? 5 : 0);
 
   function pick(current: boolean, now: number): TileRec | null {
     let best: TileRec | null = null, bp = Infinity;
@@ -637,6 +659,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     timing.steps++;
     if (ms > timing.maxStepMs) { timing.maxStepMs = ms; timing.maxStepKind = STEP_NAMES[kind]; timing.maxStepKey = t.ks; }
   }
+
+  let burstUploads = false;
 
   function doStepInner(t: TileRec, now: number): void {
     switch (t.step) {
@@ -691,7 +715,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         if (fresh) {
           // a tile that arrives entirely beyond the fog end cannot be seen popping in: it skips the dither fade, so
           // tiles.fadingIn counts only visible arrivals (§7.4 edge: <= 8 while sprinting)
-          if (t.key.s === storey && UPLOAD.FADE_IN_S > 0 && !fogHidden(px, pz, t.ox, t.oz, TILE_SIZE, quality.streamRadius)) {
+          if (!burstUploads && t.key.s === storey && UPLOAD.FADE_IN_S > 0 && !fogHidden(px, pz, t.ox, t.oz, TILE_SIZE, quality.streamRadius)) {
             t.state = 'fadingIn';
             rt.state = 'fadingIn';
             t.fadeStart = now;
@@ -847,9 +871,10 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       if (timing.updateMs > timing.maxUpdateMs) timing.maxUpdateMs = timing.updateMs;
     },
 
-    processUploads(_renderer, budgetMs) {
+    processUploads(_renderer, budgetMs, burst = false) {
       const u0 = perf();
       const now = clock();
+      burstUploads = burst;
       // deferred disposal: evicted DISPOSE_DELAY_FRAMES ago or more (bounded, oldest first)
       let disposed = 0;
       while (disposeQ.length > 0 && disposed < MAX_DISPOSE_PER_FRAME && disposeQ[0].frame + UPLOAD.DISPOSE_DELAY_FRAMES <= frameNo) {
@@ -862,7 +887,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       // fades
       for (let i = fadeList.length - 1; i >= 0; i--) {
         const t = fadeList[i];
-        const f = (now - t.fadeStart) / (UPLOAD.FADE_IN_S * 1000);
+        const f = burst ? 1 : (now - t.fadeStart) / (UPLOAD.FADE_IN_S * 1000);
         if (f >= 1) {
           uploader.setFade(t.gpu as TileGpu, 1);
           t.state = 'resident';
@@ -875,7 +900,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       // resume next frame. No step work when deferred disposal already used the budget up.
       deadline = u0 + budgetMs;
       const canStep = perf() < deadline;
-      for (let k = 0; canStep && k < UPLOAD.MAX_STEPS_PER_FRAME; k++) {
+      for (let k = 0; canStep && (k < UPLOAD.MAX_STEPS_PER_FRAME || (burst && perf() < deadline)); k++) {
         const t = pick(true, now);
         if (!t) break;
         doStep(t, now);

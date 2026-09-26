@@ -232,7 +232,10 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
         const d = rectDistance(sp.x, sp.z, x, z, x + TILE_SIZE, z + TILE_SIZE);
         // A bounded ring, ordered toward the starting view; the live streamer refines priorities.
         const ahead = -(x + TILE_SIZE / 2 - sp.x) * Math.sin(sp.yaw) - (z + TILE_SIZE / 2 - sp.z) * Math.cos(sp.yaw) >= 0;
-        jobs.push({ req: { t: 'build', job: 0, key: tile }, priority: jobPriority(basePriority(ring, ahead, d), 'build', false, own) });
+        // bake 'full' (automation): these are the gate's ring, built with full lighting (ChunkStreamer fullBakeRing)
+        const req: Extract<WorkerRequest, { t: 'build' }> = { t: 'build', job: 0, key: tile };
+        if (p.bake === 'full') req.lighting = 'full';
+        jobs.push({ req, priority: jobPriority(basePriority(ring, ahead, d), 'build', false, own) });
       }
     }
     jobs.sort((a, b) => a.priority - b.priority);
@@ -274,7 +277,10 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const startup = await startupP;
   const pool = startup.pool;
   const startS: StoreyId = p.s ?? 0;
-  const streamer = createChunkStreamer({ renderer: r, materials, quality: q, init, bus: core.bus, pool, startStorey: startS });
+  // bake 'full' (automation): the ready gate waits for ring 1 fully baked, so those bakes go ahead of the far ring
+  const streamer = createChunkStreamer({
+    renderer: r, materials, quality: q, init, bus: core.bus, pool, startStorey: startS, fullBakeRing: p.bake === 'full' ? 1 : -1,
+  });
   core.scene.add(streamer.scene);
   const { sp: spawn, explicit } = await spawnP;
   mark('spawnReady');

@@ -58,6 +58,26 @@ describe('handleRequest', () => {
     expect(st.layouts.size).toBe(9); // the 3x3 neighbourhood went through the LRU
   });
 
+  it("a build with lighting 'full' returns exactly the bake job's full lightmap (the automation gate's ring)", () => {
+    const key = { s: 0 as const, cx: 0, cz: 0, q: 2 as const };
+    const st = createHandlerState();
+    handleRequest({ t: 'init', job: 1, init: init() }, st);
+    const b = handleRequest({ t: 'build', job: 2, key, lighting: 'full' }, st).res;
+    // a fresh worker state: the bake cache must not be what makes the two agree
+    const st2 = createHandlerState();
+    handleRequest({ t: 'init', job: 1, init: init() }, st2);
+    handleRequest({ t: 'build', job: 2, key }, st2);
+    const f = handleRequest({ t: 'bake', job: 3, key }, st2).res;
+    if (b.t !== 'build' || f.t !== 'bake') throw new Error(`unexpected ${b.t} / ${f.t}`);
+    expect(b.lightmap.variant).toBe('full');
+    expect(b.lightmap.chartHash).toBe(f.lightmap.chartHash);
+    for (const k of ['irr', 'dir', 'mask', 'flick', 'emission'] as const) {
+      const x = b.lightmap[k] as ArrayLike<number> | null, y = f.lightmap[k] as ArrayLike<number> | null;
+      expect(x === null ? null : Array.from(x), k).toEqual(y === null ? null : Array.from(y));
+    }
+    expect(Array.from(b.lightmap.volume.a)).toEqual(Array.from(f.lightmap.volume.a));
+  });
+
   it('the layout LRU is bounded (96) and refreshes recency on hits', () => {
     const st = createHandlerState();
     handleRequest({ t: 'init', job: 1, init: init() }, st);

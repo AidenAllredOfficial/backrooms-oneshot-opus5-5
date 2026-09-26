@@ -17,12 +17,15 @@ export interface QualityConfig {
   bakeWorkers: number; // upper bound; actual = max(1, min(bakeWorkers, hardwareConcurrency - 4, max(2, deviceMemory GB))) (stream/WorkerPool poolSizeFor)
   textureSize: 512 | 1024;
   anisotropy: number;
+  /** AO sample count level (post/PostStack.ts AO_SAMPLES: 8 / 10 / 12 / 16 per texel) */
   ao: 'off' | 'Performance' | 'Low' | 'Medium' | 'High';
+  /** AO at half the drawing-buffer resolution (depth-aware upsampling; visually identical to full resolution in the
+   * September 2026 comparison at a quarter of the cost) */
   aoHalfRes: boolean;
   aa: 'fxaa' | 'smaa' | 'off'; // off (low): no AA pass; the lens pass's MTF softness and the grain hide aliasing
   smaaPreset: 'LOW' | 'MEDIUM' | 'HIGH' | 'ULTRA';
   bloomLevels: number;
-  planarReflectionScale: number; // 0 = off (water uses floor-emission + env tint only)
+  planarReflectionScale: number; // x the drawing buffer; 0 = off (water uses floor-emission + env tint only)
   floorReflections: boolean; // emission-map glossy floor reflections
   flashlightShadow: 512 | 1024 | 2048; // shadow map size; castShadow is ALWAYS true (constant light/program set)
   renderScale: number; // > 1 = supersampling (ultra); dynamic resolution works in [0.6, renderScale]
@@ -53,13 +56,15 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
   },
   high: {
     name: 'high', streamRadius: 2, lmTpc: 12, bakeShadowSamples: 4, probeRays: 96, bakeWorkers: 4, textureSize: 1024,
-    anisotropy: 16, ao: 'Medium', aoHalfRes: false, aa: 'smaa', smaaPreset: 'HIGH', bloomLevels: 8, planarReflectionScale: 0.5,
+    anisotropy: 16, ao: 'Medium', aoHalfRes: true, aa: 'smaa', smaaPreset: 'HIGH', bloomLevels: 8, planarReflectionScale: 0.5,
     floorReflections: true, flashlightShadow: 1024, renderScale: 1, dynamicResolution: true, maxDpr: 1.5,
     propDistance: 45, humVoices: 10, hrtf: true, uploadBudgetMs: 3, fogAirlight: true, shaderDetail: 'full',
   },
   ultra: {
     name: 'ultra', streamRadius: 3, lmTpc: 12, bakeShadowSamples: 6, probeRays: 128, bakeWorkers: 6, textureSize: 1024,
-    anisotropy: 16, ao: 'High', aoHalfRes: false, aa: 'smaa', smaaPreset: 'ULTRA', bloomLevels: 9, planarReflectionScale: 1,
+    // reflection 0.67 of the 1.5x supersampled buffer = about the display resolution (1.0 cost 2.25x as much for a
+    // mirror image that roughness mips and ripples blur anyway)
+    anisotropy: 16, ao: 'High', aoHalfRes: true, aa: 'smaa', smaaPreset: 'ULTRA', bloomLevels: 9, planarReflectionScale: 0.67,
     // ultra spends the GPU headroom on pixels: 1.5x supersampling (2.25x samples: clean wallpaper stripes, carpet and
     // tile grout at distance) under the load-driven dynamic resolution (R2 B9)
     floorReflections: true, flashlightShadow: 2048, renderScale: 1.5, dynamicResolution: true, maxDpr: 2,

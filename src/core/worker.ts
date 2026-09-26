@@ -20,7 +20,9 @@ export interface WorkerInit {
 export type WorkerRequest =
   | { t: 'init'; job: number; init: WorkerInit }
   | { t: 'layout'; job: number; key: ChunkKey } // -> layout + collision
-  | { t: 'build'; job: number; key: TileKey } // -> tile meshes + PREVIEW lightmap (inline, so no tile is ever unlit)
+  // -> tile meshes + PREVIEW lightmap (inline, so no tile is ever unlit). lighting 'full': the FULL lightmap instead
+  // (the automation gate's ring, where a preview would be replaced at once; no separate 'bake' job follows)
+  | { t: 'build'; job: number; key: TileKey; lighting?: 'full' }
   | { t: 'bake'; job: number; key: TileKey } // -> FULL lightmap (same atlas as build; chartHash must match)
   | { t: 'find'; job: number; query: string; from: { s: StoreyId; x: number; z: number }; maxChunks: number }
   | { t: 'spawn'; job: number; s: StoreyId }

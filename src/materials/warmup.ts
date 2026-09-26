@@ -38,6 +38,7 @@ export async function runWarmup(renderer: THREE.WebGLRenderer, camera: THREE.Cam
   const ahead = new THREE.Vector3(-0.03, 0.03, -1).applyMatrix4(camera.matrixWorld);
   const mats: THREE.Material[] = [pinned.shell, pinned.props, pinned.decal];
   if (pinned.water) mats.push(pinned.water);
+  mats.push(pinned.depth); // the depth-prepass program (materials/prepass.ts); depthProps shares it
   for (const m of mats) {
     const mesh = new THREE.Mesh(geo, m);
     mesh.frustumCulled = false;
@@ -84,7 +85,7 @@ export async function runWarmup(renderer: THREE.WebGLRenderer, camera: THREE.Cam
 
 // ---------------------------------------------------------------- post-pass warmup (R2 B9)
 
-/** Shader materials reachable from post passes (pmndrs passes / effects / their internal passes, N8AO quads):
+/** Shader materials reachable from post passes (pmndrs passes / effects / their internal passes and materials):
  * a bounded walk of their own properties that never enters scenes, cameras, renderers, textures or targets. */
 export function collectPassMaterials(roots: readonly object[]): THREE.ShaderMaterial[] {
   const out = new Set<THREE.ShaderMaterial>();

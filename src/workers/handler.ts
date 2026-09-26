@@ -3,7 +3,8 @@
 //
 //  init    store options, gen = createWorldGen(opts); clears the layout LRU, the neighbourhood cache and the bake cache
 //  layout  LRU generateChunk + buildChunkCollision; responds with cloneLayout(l) (the LRU instance is never sent)
-//  build   9 layouts (LRU) -> makeNeighborhood -> buildTile -> bakeTile(preview); everything transferred
+//  build   9 layouts (LRU) -> makeNeighborhood -> buildTile -> bakeTile(preview, or full on request); everything
+//          transferred
 //  bake    buildTileSurfaces -> bakeTile(full, st.bakeCache)
 //  find / spawn / ascii   delegate to gen
 // Exceptions become { t: 'error', message, stack }. With init.validate, validate* violations become an error too.
@@ -168,11 +169,12 @@ export function handleRequest(req: WorkerRequest, st: HandlerState): HandlerResu
         const t1 = now();
         const built = buildTile(nb, req.key, init.bake.tpc);
         const t2 = now();
-        const preview = bakeTile(nb, req.key, built.surfaces, 'preview', init.bake, init.bakeTerm, st.bakeCache);
+        const variant = req.lighting === 'full' ? 'full' : 'preview';
+        const baked = bakeTile(nb, req.key, built.surfaces, variant, init.bake, init.bakeTerm, st.bakeCache);
         const t3 = now();
-        if (init.validate) failIfInvalid(`build ${tileKeyStr(req.key)}`, validateBuild(built.mesh, preview));
+        if (init.validate) failIfInvalid(`build ${tileKeyStr(req.key)}`, validateBuild(built.mesh, baked, variant));
         const mesh = ownTileMesh(built.mesh, tl);
-        const lightmap = ownLightmap(preview, tl);
+        const lightmap = ownLightmap(baked, tl);
         res = { t: 'build', job: req.job, mesh, lightmap, ms: { gen: t1 - t0, mesh: t2 - t1, bake: t3 - t2 } };
         break;
       }

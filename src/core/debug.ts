@@ -144,6 +144,12 @@ export interface BackroomsDebugAPI {
     districtAt(s: StoreyId, cx: number, cz: number): { id: number; zone: string; mood: string };
   };
   perf(seconds: number): Promise<PerfReport>;
+  /** GPU ms of one frame's rendering (planar reflection + post stack, scene included), measured by rendering it
+   * `repeats` times back to back inside one timer query (median of 7 rounds). Back to back keeps the GPU clocked
+   * up: single-frame timings at display rate are inflated by downclocking. */
+  gpuBench?(repeats?: number): Promise<{ ms: number | null; rounds: number; repeats: number; buffer: [number, number]; reflection: boolean }>;
+  /** Mean GPU ms per frame of every post pass, the shadow map and the planar reflection (timer queries). */
+  gpuProfile?(seconds: number): Promise<{ frames: number; passes: Record<string, number>; totalMs: number; drawCalls: number; triangles: number; buffer: [number, number] }>;
   imageStats(rect?: [number, number, number, number]): Promise<ImageStats>; // rect in 0..1 screen fractions
   /** heading (radians, yaw convention: forward = (-sin, -cos)): a directed walk that keeps re-targeting the
    * autopilot 60 m ahead along it every ~10 s (km-scale soaks); without it the autopilot wanders */

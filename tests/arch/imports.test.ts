@@ -18,13 +18,13 @@ function walk(dir: string, out: string[] = []): string[] {
 const files = [...PURE_DIRS.flatMap((d) => walk(d)), ...PURE_FILES.filter(existsSync)];
 
 describe('architecture rules', () => {
-  it('pure modules do not import three/postprocessing/n8ao or touch the DOM', () => {
+  it('pure modules do not import three/postprocessing or touch the DOM', () => {
     const bad: string[] = [];
     for (const f of files) {
       const src = readFileSync(f, 'utf8').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      const importsThree = /from\s+['"](three|postprocessing|n8ao)(\/[^'"]*)?['"]/.test(src);
+      const importsThree = /from\s+['"](three|postprocessing)(\/[^'"]*)?['"]/.test(src);
       const typeOnly = /import\s+type\s[^;]*from\s+['"]three['"]/.test(src) && !/import\s+(?!type)[^;]*from\s+['"]three['"]/.test(src);
-      if (importsThree && !(TYPE_ONLY_THREE_ALLOWED.has(f) && typeOnly)) bad.push(`${f}: imports three/post/n8ao`);
+      if (importsThree && !(TYPE_ONLY_THREE_ALLOWED.has(f) && typeOnly)) bad.push(`${f}: imports three/postprocessing`);
       if (/\b(window|document|localStorage|requestAnimationFrame)\s*[.(]/.test(src)) bad.push(`${f}: DOM access`);
       if (/Math\.random\s*\(|Date\.now\s*\(|new Date\s*\(|performance\.now\s*\(/.test(src) && !f.startsWith('src/workers') && !f.includes('bake/index')) bad.push(`${f}: nondeterminism`);
     }

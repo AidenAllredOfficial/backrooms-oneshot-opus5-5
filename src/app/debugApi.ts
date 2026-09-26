@@ -17,6 +17,8 @@ import { runAutowalk, runWalk } from './autowalk.ts';
 import { computeImageStats, cropRGBA } from './imageStats.ts';
 import { teleportPlayer } from './loop.ts';
 import { createPerfRecorder } from './perf.ts';
+import { createGpuProfiler, hookAll } from './gpuProfile.ts';
+import { postInternals } from '../post/PostStack.ts';
 import { asciiAround, cellInfoAt } from './worldDebug.ts';
 import { gotoStoreyOrder } from './urlParams.ts';
 
@@ -252,6 +254,95 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
           const ri = core.renderer?.info.render;
           if (!rec.frame(frameMs, ri?.calls ?? 0, ri?.triangles ?? 0, core.gpu?.lastMs ?? null)) return false;
           resolve(rec.report());
+          return true;
+        });
+      });
+    },
+    gpuBench(repeats = 20) {
+      const s = core.sys;
+      const r = core.renderer;
+      if (!s || !r) return Promise.reject(new Error('gpuBench: the app has not booted yet'));
+      const gl = r.getContext() as WebGL2RenderingContext;
+      const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number } | null;
+      if (!ext) return Promise.reject(new Error('gpuBench: EXT_disjoint_timer_query_webgl2 unavailable'));
+      const k = Math.max(1, Math.min(200, Math.floor(Number.isFinite(repeats) ? repeats : 20)));
+      const ROUNDS = 7;
+      const results: number[] = [];
+      const pending: WebGLQuery[] = [];
+      let rounds = 0;
+      let waited = 0;
+      return new Promise((resolve) => {
+        core.hooks.push(() => {
+          // between frames: one round = this frame's GPU work (mirror + post stack) k times inside one query
+          for (let i = pending.length - 1; i >= 0; i--) {
+            const q = pending[i];
+            if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) continue;
+            results.push((gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6 / k);
+            gl.deleteQuery(q);
+            pending.splice(i, 1);
+          }
+          if (rounds < ROUNDS) {
+            const g = s.materials.globals;
+            const waterY = g.reflOn.value > 0.5 ? g.reflY.value : null;
+            const q = gl.createQuery() as WebGLQuery;
+            gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
+            for (let i = 0; i < k; i++) {
+              s.reflection.update(r, core.scene, core.camera, waterY);
+              s.post.render(0, core.clock.t);
+            }
+            gl.endQuery(ext.TIME_ELAPSED_EXT);
+            pending.push(q);
+            rounds++;
+            return false;
+          }
+          if (pending.length > 0 && ++waited < 120) return false;
+          for (const q of pending) gl.deleteQuery(q);
+          results.sort((x, y) => x - y);
+          resolve({
+            ms: results.length ? round(results[results.length >> 1], 3) : null, rounds: results.length, repeats: k,
+            buffer: [r.domElement.width, r.domElement.height], reflection: s.materials.globals.reflOn.value > 0.5,
+          });
+          return true;
+        });
+      });
+    },
+    gpuProfile(seconds) {
+      const s = core.sys;
+      const r = core.renderer;
+      if (!s || !r) return Promise.reject(new Error('gpuProfile: the app has not booted yet'));
+      const prof = createGpuProfiler(r.getContext() as WebGL2RenderingContext);
+      const pi = postInternals(s.post);
+      if (!prof || !pi) return Promise.reject(new Error('gpuProfile: EXT_disjoint_timer_query_webgl2 unavailable'));
+      const dur = Math.max(0.2, Math.min(120, Number.isFinite(seconds) ? seconds : 3)) * 1000;
+      return new Promise((resolve) => {
+        let unhook: (() => void) | null = null;
+        let gpu = core.gpu;
+        let elapsed = 0;
+        let drain = 0;
+        core.hooks.push((frameMs) => {
+          if (!unhook && drain === 0) {
+            // between frames: suspend the frame timer (its query would enclose the segments), then hook
+            gpu = core.gpu;
+            core.gpu = null;
+            unhook = hookAll(prof, { renderer: r, passes: [...pi.passes], finalPass: pi.finalPass, reflection: s.reflection });
+            return false;
+          }
+          prof.poll();
+          if (unhook) {
+            prof.endFrame();
+            elapsed += frameMs;
+            if (elapsed < dur) return false;
+            unhook();
+            unhook = null;
+            prof.stop();
+            core.gpu = gpu;
+          }
+          // let the last queries resolve
+          if (++drain < 30) return false;
+          const rep = prof.report();
+          prof.dispose();
+          const ri = r.info.render;
+          resolve({ ...rep, drawCalls: ri.calls, triangles: ri.triangles, buffer: [r.domElement.width, r.domElement.height] });
           return true;
         });
       });

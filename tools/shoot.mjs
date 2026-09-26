@@ -94,7 +94,7 @@ export async function acquireSlot() {
 }
 
 export function parseArgs(argv) {
-  const opt = { params: [], out: 'shots', wait: 4000, size: '1600x900', url: null, evals: [], page: '', presets: [], extra: {} };
+  const opt = { params: [], out: 'shots', wait: 250, size: '1600x900', url: null, evals: [], page: '', presets: [], extra: {} };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
@@ -164,7 +164,9 @@ export async function launchBrowser() {
     executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium',
     headless: true,
     env: { ...process.env, ...GPU_ENV },
-    args: ['--use-angle=vulkan', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-features=Vulkan', '--autoplay-policy=no-user-gesture-required', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=2048'],
+    args: ['--use-angle=vulkan', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-features=Vulkan', '--autoplay-policy=no-user-gesture-required', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=2048',
+      // BACKROOMS_UNCAPPED=1: no vsync / frame-rate cap, so the GPU stays loaded and clocked up (stable GPU timings)
+      ...(process.env.BACKROOMS_UNCAPPED === '1' ? ['--disable-gpu-vsync', '--disable-frame-rate-limit'] : [])],
   });
 }
 

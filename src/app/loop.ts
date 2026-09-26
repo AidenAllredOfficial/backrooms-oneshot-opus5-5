@@ -20,6 +20,9 @@ const ATTRACT_MAX_SPEED = 1.0;
 const WALK_SPEED = DEFAULT_CONTROLLER.walk;
 const WATER_SCAN_INTERVAL = 6; // frames
 const WATER_MAX_DIST = 40; // m (PlanarReflection renders planes within 40 m)
+/** Upload budget while an automation ready gate (bake 'full') is closed: nobody watches, so uploads may take most
+ * of the frame and skip the fade-in (processUploads burst). */
+const BURST_UPLOAD_MS = 50;
 
 export function createInputState(): PlayerInput {
   return { moveX: 0, moveZ: 0, lookDX: 0, lookDY: 0, sprint: false, crouch: false, flashlightPressed: false, interactPressed: false };
@@ -271,7 +274,8 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       // 3. streaming
       s.streamer.update(st.x, st.z, -Math.sin(st.camYaw), -Math.cos(st.camYaw), core.camera, core.frame);
       // 4. uploads
-      s.streamer.processUploads(r, s.q.uploadBudgetMs);
+      const burst = core.gate.active && core.params.bake === 'full';
+      s.streamer.processUploads(r, burst ? BURST_UPLOAD_MS : s.q.uploadBudgetMs, burst);
       // 5. lighting
       s.lighting.update(t, dt, s.streamer.tiles(), st, core.camera, query);
       // 6. anomalies

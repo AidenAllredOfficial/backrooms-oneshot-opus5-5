@@ -8,7 +8,8 @@
 // 20 m and in view within 40 m, which often lie in ring-1 chunks while the far corner of the player's own chunk is
 // 50 m away. A full bake (+60 vs -70) runs before the builds of tiles ~65 m farther away: nearby previews first,
 // then lighting upgrades close by, then the far ring. The own-chunk head start is for its layout (the player's
-// collision) and builds only; its full bakes queue by distance like every other bake.
+// collision) and builds only; its full bakes queue by distance like every other bake. Automation runs (bake 'full')
+// reorder their gate ring on top of this: ChunkStreamer StreamerOptions.fullBakeRing.
 
 import { CHUNK_SIZE, EDGE_FOG } from '../core/constants.ts';
 import { chebyshev } from '../core/grid.ts';

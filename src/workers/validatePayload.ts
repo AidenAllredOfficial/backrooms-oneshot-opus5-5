@@ -145,7 +145,7 @@ function validateLightmap(e: Errs, lm: LightmapData, variant: 'preview' | 'full'
 
 // ---------------------------------------------------------------- public API
 
-export function validateBuild(mesh: TileMesh, lm: LightmapData): string[] {
+export function validateBuild(mesh: TileMesh, lm: LightmapData, variant: 'preview' | 'full' = 'preview'): string[] {
   const e = new Errs();
   if (mesh.tileKey !== lm.tileKey) e.push(`tileKey mismatch: mesh '${mesh.tileKey}' vs lightmap '${lm.tileKey}'`);
   if (!Number.isInteger(mesh.zone) || mesh.zone < 0 || mesh.zone >= ZONE_COUNT) e.push(`mesh.zone: ${mesh.zone} out of range`);
@@ -167,7 +167,7 @@ export function validateBuild(mesh: TileMesh, lm: LightmapData): string[] {
     }
   }
   if (!Number.isFinite(mesh.tris) || mesh.tris < 0) e.push(`mesh.tris: ${mesh.tris}`);
-  validateLightmap(e, lm, 'preview');
+  validateLightmap(e, lm, variant);
   return e.list;
 }
 

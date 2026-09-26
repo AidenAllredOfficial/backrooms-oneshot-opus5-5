@@ -10,6 +10,7 @@ import type { QualityConfig } from '../core/quality.ts';
 import { applySurfaceDefines, createSurfaceMaterial } from './SurfaceMaterial.ts';
 import type { SurfaceVariant } from './SurfaceMaterial.ts';
 import { applyWaterDefines, createWaterMaterial } from './WaterMaterial.ts';
+import { createDepthMaterial } from './DepthMaterial.ts';
 import { createSharedUniforms, qualityDefinesOf } from './shared.ts';
 import type { QualityDefines } from './shared.ts';
 import { createZeroTextures } from './zeroTextures.ts';
@@ -67,14 +68,21 @@ export function createMaterialSystem(renderer: THREE.WebGLRenderer, textures: Te
     const props = createSurfaceMaterial('props', globals, shared, bindings, defs);
     const decal = createSurfaceMaterial('decal', globals, shared, bindings, defs);
     const water: THREE.ShaderMaterial | null = withWater ? createWaterMaterial(globals, shared, bindings, defs) : null;
+    const depth = createDepthMaterial(shared, bindings, false);
+    const depthProps = createDepthMaterial(shared, bindings, true);
+    // materials/prepass.ts swaps meshes carrying brDepth to it for the depth prepass
+    shell.userData.brDepth = depth;
+    props.userData.brDepth = depthProps;
     live.add(shell); live.add(props); live.add(decal);
     if (water) live.add(water);
     let disposed = false;
     return {
-      shell, props, decal, water, bindings,
+      shell, props, decal, water, depth, depthProps, bindings,
       dispose() {
         if (disposed) return;
         disposed = true;
+        depth.dispose();
+        depthProps.dispose();
         for (const m of [shell, props, decal, water]) {
           if (!m) continue;
           live.delete(m);

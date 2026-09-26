@@ -6,13 +6,14 @@
 // composed in float64 on the CPU), so shaders never need a float32 world position.
 // While rendering: reflOn = 0 and reflTex = null (no feedback loop, not even a bound-but-unsampled texture), the
 // module-private reflection-pass flag is 1 (props beyond 20 m and water surfaces discard), shadow maps are
-// not re-rendered.
+// not re-rendered. The mirrored view is rendered with the depth prepass (materials/prepass.ts).
 
 import * as THREE from 'three';
 import type { MaterialGlobals } from '../core/runtime.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import { REFL_PASS } from './shared.ts';
 import { TUNE } from './chunks/params.ts';
+import { renderWithPrepass } from './prepass.ts';
 
 export interface PlanarReflection {
   readonly enabled: boolean;
@@ -162,8 +163,8 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
         scene.traverseVisible(cullReflection);
         renderer.setRenderTarget(rt);
         renderer.state.buffers.depth.setMask(true);
-        if (renderer.autoClear === false) renderer.clear();
-        renderer.render(scene, reflCam);
+        renderer.clear();
+        renderWithPrepass(renderer, scene, reflCam);
       } finally {
         for (const object of hidden) object.visible = true;
         hidden.length = 0;

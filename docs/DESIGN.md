@@ -48,7 +48,7 @@ Appendix A: API facts verified in `node_modules`.
 | D8 | **Verticality: periodic stair towers.**<br>• The tower is geometry that is identical under a 3 m shift, spanning y ∈ [−6, +6].<br>• It has an isolated bake group, so its lighting is exactly periodic.<br>• The storey switches at \|feetY\| > 1.6 m (hysteresis ±0.2).<br>• One storey is resident; the target storey (layouts, collision and tiles) is prefetched near a tower.<br>• Tower cells use a fixed palette zone (CONCRETE, mood NORMAL) in every storey, tower fixtures have storey-free ids, and tower layers, props and light-volume lookups are 3 m-periodic.<br>• Storeys cycle 0→1→2→0 going down: "the building never ends".<br>• Elevators are a closed-box teleport. | procgen |
 | D9 | **GPU procedural textures.**<br>• One full-screen draw per map per layer into three single-attachment `WebGLArrayRenderTarget`s (never array MRT).<br>• `generateMipmaps` is off until the last layer is written.<br>• 28 layers, 1024².<br>• `layerAlbedoCheck` reads back the result and compares it with the `LAYER_DEFS.albedoMean` the baker uses. | rendering + procgen |
 | D10 | **One surface material factory**: `MeshStandardMaterial` + `onBeforeCompile`, sampling `sampler2DArray`s.<br>• Custom attributes use the `br*` prefix.<br>• Materials come from a factory per tile; `clone()` is never called.<br>• A constant `customProgramCacheKey`.<br>• Debug views are an int uniform.<br>• Three program variants: shell (lightmapped), props (light volume) and decal (shell lighting, premultiplied soft alpha); water is its own ShaderMaterial. | rendering + engineering |
-| D11 | **Post stack (pmndrs).** In order:<br>1. `RenderPass`<br>2. `N8AOPostPass`, with `autoDetectTransparency = false` set explicitly and `gammaCorrection = false`<br>3. `AutoExposurePass` (async RGBA8 readback, CPU spring)<br>4. `EffectPass[Bloom, Exposure, AgX, Grade]`<br>5. `EffectPass[SMAA \| FXAA]`<br>6. `EffectPass[Lens(CONVOLUTION), FilmGrain]`, with dithering (lens distortion/CA/vignette apply to the finished image, bloom included)<br>All shaders clamp radiance to `HDR_CLAMP` before writing the HalfFloat buffer. | rendering (fixed n8ao handling) |
+| D11 | **Post stack (pmndrs).** In order:<br>1. `ScenePass` (R4: `RenderPass` with a depth prepass)<br>2. `AmbientOcclusionPass` (R4: replaces `N8AOPostPass`, same estimator and composite)<br>3. `AutoExposurePass` (async RGBA8 readback, CPU spring)<br>4. `EffectPass[Bloom, Exposure, AgX, Grade]`<br>5. `EffectPass[SMAA \| FXAA]`<br>6. `EffectPass[Lens(CONVOLUTION), FilmGrain]`, with dithering (lens distortion/CA/vignette apply to the finished image, bloom included)<br>All shaders clamp radiance to `HDR_CLAMP` before writing the HalfFloat buffer. | rendering (fixed n8ao handling) |
 | D12 | **Haze is per-fragment inscatter from local lightmap irradiance**, so dark sectors get dark haze. A separate **edge fog** (0.55R→0.8R of the streaming radius; the desired set is centred 2 s ahead along the player's velocity) hides the world edge without hazing near geometry. The clear colour equals the far colour. | rendering (+edge fog) |
 | D13 | **Content.**<br>• 12 zones: 7 Level 0 family (LOBBY, MANILA, DARK, MAZE, LOW_EXPANSE, PILLAR_HALL, OFFICE) and 5 deep (POOLROOMS, PARKING, PIPEWORKS, WAREHOUSE, CONCRETE).<br>• 13 landmarks (≥ 4 per storey), 13 vignettes with a zone weight table, 7 anomaly kinds, split-level features, arteries, onboarding districts.<br>• A spawn composition tuned to the famous photo: the LOBBY recursive-division generator.<br>• No lore overload. | procgen (scoped) |
 | D14 | **Audio**, all synthesized:<br>• 5 Hz Dijkstra propagation; the apparent source is placed at the visible portal.<br>• Flicker transients sample-aligned to the pure flicker function.<br>• Sabine room probe selects the impulse response.<br>• The hum bed follows lit-fixture density.<br>• Gated dread events; photosensitivity flicker modes. | atmosphere |
@@ -4482,10 +4482,10 @@ export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, s
 AO colour for all zones: warm dark (0.12, 0.09, 0.04). Every grade has gain (1, 1, 1): emitters clip to pure white. The L0 grade puts its green-yellow push in gamma (1.0, 1.05, 0.9) and shadowTint, lifts the blacks (lift 0.02) and adds a sensor black `pedestal` (0.04 L0, 0.035 dark/deep, 0.02 pools).
 
 **PostStack** (pmndrs 6.39.5). `EffectComposer(renderer, { frameBufferType: HalfFloatType, multisampling: 0 })`. The renderer is configured in WP14 with `toneMapping = NoToneMapping` and `outputColorSpace = SRGBColorSpace`. Passes in order:
-1. `RenderPass(scene, camera)`.
-2. **`N8AOPostPass(scene, camera, w, h)`.**
-   - Configuration: `aoRadius = 0.7`, `distanceFalloff = 0.6` (R2-post), `intensity = atmosphere.aoIntensity`, `color = aoColor`, `halfRes = q.aoHalfRes`, **`gammaCorrection = false`** (this also clears `autosetGamma`), `setQualityMode(q.ao)`.
-   - Immediately after construction: **`n8ao.autoDetectTransparency = false; if (n8ao.configuration.transparencyAware) n8ao.configuration.transparencyAware = false;`**. The water mesh is transparent, but the stack never enters n8ao's transparency path (no extra scene renders).
+1. `ScenePass(scene, camera)` (R4, `post/ScenePass.ts` + `materials/prepass.ts`): a depth prepass with the tiles' depth materials (position only, same fade dither / alpha test / reflection props cull, `invariant gl_Position` in both programs), then the shading render with depth writes locked off. Identical output; each visible pixel is shaded once. The water reflection renders the same way.
+2. **`AmbientOcclusionPass`** (R4, `post/AmbientOcclusionPass.ts`; replaces `N8AOPostPass`, see docs/contract-changes/R4-render-perf.md).
+   - N8AO's estimator and composite: `radius = 0.7`, `distanceFalloff = 0.6` (R2-post), `intensity = atmosphere.aoIntensity`, linear `color = aoColor`; `scene × mix(color, 1, ao^intensity)`.
+   - Half resolution (`q.aoHalfRes`), 8 / 10 / 12 / 16 samples for `q.ao` Performance / Low / Medium / High, 4 × 4 interleaved rotations, a separable 5-tap bilateral denoise, one depth-aware upsample blended into the scene buffer (no swap, no copies). Never renders the scene.
    - `enabled = q.ao !== 'off'`.
    - A quality change that alters `q.ao` or `q.aoHalfRes` builds a new pass and disposes the old one including its quad materials (R2-post), so the program count does not ratchet across preset cycles.
 3. **`AutoExposurePass`** (custom `Pass`, `needsSwap = false`):
@@ -4522,7 +4522,7 @@ AO colour for all zones: warm dark (0.12, 0.09, 0.04). Every grade has gain (1, 
 - `tests/post/effects.test.ts`: constructing the EffectPasses with the real pmndrs classes in Node is not possible (needs WebGL), so the harness verifies instead. Assert the effect list order and attributes statically: the lens is CONVOLUTION without `mainUv`; SMAA/FXAA sit alone.
 - The harness page renders with no console errors.
 - `imageStats` on `scene=panels`: clipped fraction < 3% outside the panels; panels bloom.
-- **n8ao:** harness `stats()` reports `n8ao.configuration.transparencyAware === false` and the draw calls with AO on minus off ≤ 12. No extra scene renders.
+- **AO:** harness `stats()` reports the draw calls with AO on minus off ≤ 3 (R4: the AO pass never renders the scene).
 - With `time=10`, two captures are identical (grain deterministic from `t`).
 - `harness/post.html?scene=shimmer`: a quad array rendering `brLensShimmer` for 16 seeds × 8 times matches `lensShimmer` within 1e-2 (readback).
 - The flashlight never lights a surface behind a wall (harness `scene=dark`: a lit wall 20 m away behind an occluder stays dark).
@@ -4992,7 +4992,7 @@ storey switch:  prefetch(target) = layout jobs (target storey's query data) + bu
 | LM texels per cell (texel) / shadow samples / probe rays | 8 (0.15 m) / 1 / 32 | 8 / 2 / 64 | 12 (0.10 m) / 4 / 96 | 12 / 6 / 128 |
 | Bake workers (max) | 4 | 8 | 12 | 12 |
 | Texture size / anisotropy | 512 / 4 | 1024 / 8 | 1024 / 16 | 1024 / 16 |
-| N8AO | off | Low, half-res | Medium | High |
+| AO (R4: half-res, samples per texel) | off | 10 | 12 | 16 |
 | AA | FXAA | SMAA medium | SMAA high | SMAA ultra |
 | Bloom levels | 5 | 6 | 8 | 8 |
 | Planar reflection (water) | off | 0.35 | 0.5 | 0.75 |
@@ -5186,10 +5186,10 @@ Scene-specific checks:
 
 | Resource | Budget | Estimate / notes |
 |---|---|---|
-| GPU frame | **≤ 8 ms** | Scene 2–3 (≈ 100–150 culled draws + shadow); N8AO Medium 1.2; bloom 0.4; SMAA 0.3; exposure/lens/grade/grain 0.3; flashlight shadow 0.3; planar reflection 0.8–2 (pools only) |
+| GPU frame | **≤ 8 ms** | Scene 2–3 (≈ 100–150 culled draws + shadow); N8AO Medium 1.2; bloom 0.4; SMAA 0.3; exposure/lens/grade/grain 0.3; flashlight shadow 0.3; planar reflection 0.8–2 (pools only). R4 measured (RTX 5070 Ti, saturated): 1.6–2.0 ms at high 1080p, 5.9–6.9 ms at ultra with a 3840 × 2160 buffer (docs/PERFORMANCE_AUDIT.md) |
 | Main-thread CPU | **≤ 6 ms** | Render submit 2–3; streamer 0.5 plus uploads ≤ 3 (budgeted); player/lighting/audio 0.7. No per-frame allocations |
 | Hitches | max frame < 50 ms after ready | Upload state machine, TexturePool, `initTexture`, deferred dispose, no n8ao traversal, warmup covers every program |
-| Draw calls | ≤ 250 typical, ≤ 400 hard | Per tile: shell + props + (decals) + (water); ≤ 144 resident tiles, frustum-culled, tiles beyond the fog end hidden |
+| Draw calls | ≤ 250 typical, ≤ 400 hard | Per tile: shell + props + (decals) + (water); ≤ 144 resident tiles, frustum-culled, tiles beyond the fog end hidden. R4: plus one depth-prepass draw per shell / props mesh (about 1 µs of GPU time each); 109 in the high lobby, 230 in an ultra pool with the reflection |
 | Triangles | ≤ 1.5M visible | Shell ≤ 60k per tile typical (hard 120k); props ≤ 40k per tile |
 | VRAM | ≈ 1.5 GB (high) | Texture arrays 28 × 3 × 4 MB × 1.33 ≈ 450 MB; lightmaps ≈ 144 tiles × ~4.5 MB ≈ 650 MB (+ 36 prefetch tiles near towers ≈ 160 MB); texture pool ≤ 8 per size class; RTs ≈ 150 MB; geometry ≈ 150 MB. Ultra ≈ 2.2 GB; medium ≈ 0.9 GB; low ≈ 0.35 GB |
 | JS heap | ≤ 800 MB | Worker LRUs of 96 layouts × ~50 KB; the main thread keeps layouts plus volume data only |

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { tileCachePlugin } from './tools/viteTileCache.ts';
 
 // Tool runs (tools/shoot.mjs, tools/qa.mjs set BACKROOMS_TOOL=1): no HMR and no file watching, so edits made while a
 // capture runs cannot reload the page mid-eval. Pre-bundle the dependencies up front so the first cold page load is
@@ -7,12 +8,15 @@ const TOOL = process.env.BACKROOMS_TOOL === '1';
 // Production builds contain the game only. The harness pages (materials / chunk / post / index) are dev-server
 // pages for QA (served by `vite` whatever this says); BACKROOMS_HARNESS=1 adds them to a build (R2 B9).
 const HARNESS = process.env.BACKROOMS_HARNESS === '1';
+// Tool runs reuse worker results (layouts, builds, bakes) across shots and runs: tools/viteTileCache.ts.
+const TILE_CACHE = TOOL && process.env.BACKROOMS_TILE_CACHE !== '0';
 
 export default defineConfig({
   // relative asset URLs: the build runs from any sub-path (itch.io, GitHub Pages project sites, file shares)
   base: './',
+  plugins: [tileCachePlugin(TILE_CACHE)],
   server: TOOL ? { port: 5173, strictPort: false, hmr: false, watch: null } : { port: 5173, strictPort: false },
-  optimizeDeps: { include: ['three', 'three/examples/jsm/lights/RectAreaLightUniformsLib.js', 'postprocessing', 'n8ao'] },
+  optimizeDeps: { include: ['three', 'three/examples/jsm/lights/RectAreaLightUniformsLib.js', 'postprocessing'] },
   worker: { format: 'es' },
   build: {
     target: 'es2022',

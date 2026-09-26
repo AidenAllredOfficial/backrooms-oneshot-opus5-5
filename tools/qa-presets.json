@@ -646,7 +646,7 @@
       "params": "seed=1&quality=high&noaudio=1",
       "size": "1600x900",
       "eval": [
-        "(async () => { const b = __backrooms; await b.waitForIdle(20000); return await b.perf(10); })()"
+        "(async () => { const b = __backrooms; await b.waitForIdle(20000); const perf = await b.perf(10); return { ...perf, gpuPasses: b.gpuProfile ? await b.gpuProfile(3) : null }; })()"
       ],
       "expect": {
         "class": "none"
