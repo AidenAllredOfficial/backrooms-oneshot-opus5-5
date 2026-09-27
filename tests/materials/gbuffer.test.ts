@@ -62,15 +62,18 @@ describe('G-buffer outputs', () => {
     expect(FRAG_FOG_GLSL).toContain('brOut2 = brO2;');
     // the write carries the haze transmittance on both the fallback and the weight
     expect(FRAG_FOG_GLSL).toContain('brO1 = vec4( min( brFbSpec * brT, vec3( BR_HDR_CLAMP ) ), brWs * brT );');
-    expect(FRAG_FOG_GLSL).toContain('brO2 = vec4( brOctEnc( normalize( normal ) ), brMrtRough, 1.0 );');
+    // att2: the routed lobe's normal (the shading normal, a clearcoat pixel's coat normal) and roughness
+    expect(FRAG_FOG_GLSL).toContain('brO2 = vec4( brOctEnc( normalize( brMrtN ) ), brMrtRough, 1.0 );');
   });
 });
 
 describe('lighting split (package D)', () => {
-  it('eligibility: MRT frame (or the specw view), no emitter, not submerged, glossy, no clearcoat, never on decals', () => {
+  it('eligibility: MRT frame (or the specw view), no emitter, not submerged, a glossy routed lobe, never on decals', () => {
     const decide = FRAG_LIGHTS_GLSL.slice(FRAG_LIGHTS_GLSL.indexOf('#if defined( BR_SSR ) && ! defined( BR_DECAL )'));
     expect(decide).toMatch(/brMrtSpec = \( uBrMrt > 0\.5 \|\| uDebugView == \d+ \) && vBrEmit <= 0\.0 && brSubInfo\.x <= 0\.0/);
-    expect(decide).toContain('material.roughness < BR_SSR_ELIG_ROUGH && ! brCoat;');
+    // the routed lobe: a clearcoat pixel's lacquer, else the base
+    expect(decide).toMatch(/float brLobeR = material\.roughness;\s*#ifdef USE_CLEARCOAT\s*if \( brCoat \) brLobeR = material\.clearcoatRoughness;\s*#endif/);
+    expect(decide).toContain('&& brLobeR < BR_SSR_ELIG_ROUGH;');
     expect(FRAG_LIGHTS_GLSL).toContain(`#define BR_SSR_ELIG_ROUGH ${SSR.ELIG_ROUGH}`);
     // a wet floor under a water surface keeps its specular inline (the water mesh reflects)
     expect(decide).toContain('brWaterCell( ivec2( floor( vBrLocal.xz / BR_CELL ) ), brWy, brWk ) && brWy > vBrLocal.y - 0.01');
@@ -80,11 +83,16 @@ describe('lighting split (package D)', () => {
     expect(FRAG_LIGHTS_GLSL.split('RE_Direct(').length).toBe(2);
     const i = FRAG_LIGHTS_GLSL.indexOf('RE_Direct(');
     expect(FRAG_LIGHTS_GLSL.slice(i - 200, i)).toContain('vec3 brDs0 = reflectedLight.directSpecular;');
-    expect(FRAG_LIGHTS_GLSL.slice(i)).toMatch(/if \( brMrtSpec \) \{\s*brFbDir = reflectedLight\.directSpecular - brDs0;\s*reflectedLight\.directSpecular = brDs0;/);
+    expect(FRAG_LIGHTS_GLSL.slice(i)).toMatch(/if \( brMrtSpec && ! brCoat \) \{\s*brFbDir = reflectedLight\.directSpecular - brDs0;\s*reflectedLight\.directSpecular = brDs0;/);
+    // clearcoat pixels route the coat's lobe instead (x clearcoat, as three's composition weights it)
+    expect(FRAG_LIGHTS_GLSL.slice(i - 400, i)).toContain('vec3 brCc0 = clearcoatSpecularDirect;');
+    expect(FRAG_LIGHTS_GLSL.slice(i)).toMatch(/if \( brMrtSpec && brCoat \) \{[^}]*brFbDir = brCcD \* material\.clearcoat;\s*clearcoatSpecularDirect = brCc0;/);
   });
 
   it('the uniform environment goes to the fallback on G-buffer pixels, else inline', () => {
-    expect(FRAG_LIGHTS_GLSL).toMatch(/if \( brMrtSpec \) brFbEnv = brEnvRad;\s*else radiance \+= brEnvRad;/);
+    expect(FRAG_LIGHTS_GLSL).toMatch(/if \( brMrtSpec && ! brCoat \) brFbEnv = brEnvRad;\s*else radiance \+= brEnvRad;/);
+    // the lacquer's environment: the G-buffer fallback when routed, else three's clearcoatRadiance (left at 0 by three)
+    expect(FRAG_LIGHTS_GLSL).toMatch(/if \( brMrtSpec && brCoat \) brFbEnv = brEnvCc;\s*else clearcoatRadiance \+= brEnvCc;/);
   });
 
   it('the fallback: DFG single scatter x specular occlusion x horizon on environment + emission map, plus the lobe', () => {

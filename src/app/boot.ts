@@ -20,6 +20,7 @@ import { generateTextures } from '../textures/TextureBaker.ts';
 import { generateDetailTextures } from '../textures/DetailBaker.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
 import { createPlanarReflection } from '../materials/PlanarReflection.ts';
+import { createReflectionProbe } from '../materials/ReflectionProbe.ts';
 import { createWaterRipples } from '../materials/water/WaterRipples.ts';
 import { createLightingRuntime } from '../lighting/LightingRuntime.ts';
 import { createAnomalyDirector } from '../lighting/anomalyDirector.ts';
@@ -290,6 +291,9 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const ssr = createScreenSpaceReflections(q, () => post.renderScale);
   if (frame) ssr.attach(frame);
   if (q.ssr !== 'off') await warmPassMaterials(r, ssr.materials);
+  // package D: the reflection probe (captures in the loop; re-anchors itself on teleports and storey switches)
+  const probe = createReflectionProbe(materials.globals, q, core.bus, () => lighting.flashlight.light);
+  if (q.reflectionProbe > 0) await warmPassMaterials(r, probe.materials);
   const ripples = createWaterRipples(materials.globals, q, core.bus); // resets itself on teleports / seed changes
   const anomaly = createAnomalyDirector(core.bus, lighting, core.scene);
   cb.progress('shaders', 0.3);
@@ -331,7 +335,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
   startup.clear();
   return {
-    q, features: featuresOf(p), textures, materials, lighting, post, reflection, ssr, ripples, anomaly, dynRes, pool,
+    q, features: featuresOf(p), textures, materials, lighting, post, reflection, ssr, probe, ripples, anomaly, dynRes, pool,
     poolTarget: poolSize(q), streamer, player, audio, input, init,
     spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
   };
@@ -375,6 +379,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   s.lighting.setQuality(nq);
   s.reflection.setQuality(nq);
   s.ssr.setQuality(nq);
+  s.probe.setQuality(nq);
   s.ripples.setQuality(nq);
   s.audio.setQuality(nq);
   if (nq.detailMaps && nq.shaderDetail !== 'lite' && !s.textures.detail) s.textures.detail = await generateDetailTextures(r, nq.anisotropy);
@@ -386,6 +391,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
     // programs cost nothing here
     if (internals && nq.colorPyramidScale > 0) mats.push(...internals.scenePass.materials);
     if (nq.ssr !== 'off') mats.push(...s.ssr.materials); // package D: a new trace program when ssrSteps changed
+    if (nq.reflectionProbe > 0) mats.push(...s.probe.materials);
     await warmPassMaterials(r, mats);
   } finally {
     fresh.forEach((p, i) => { p.enabled = wasEnabled[i]; });

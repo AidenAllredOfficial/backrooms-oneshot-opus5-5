@@ -288,6 +288,8 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
             const q = gl.createQuery() as WebGLQuery;
             gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
             for (let i = 0; i < k; i++) {
+              // package D: the probe's steady state (one face captured and re-filtered per frame)
+              s.probe.update(r, core.scene, core.camera, s.streamer.query, s.player.state, s.features.probe);
               s.reflection.update(r, core.scene, core.camera, waterY);
               s.post.render(0, core.clock.t);
             }
@@ -325,7 +327,9 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
             // between frames: suspend the frame timer (its query would enclose the segments), then hook
             gpu = core.gpu;
             core.gpu = null;
-            unhook = hookAll(prof, { renderer: r, passes: [...pi.passes], finalPass: pi.finalPass, reflection: s.reflection, ripples: s.ripples });
+            unhook = hookAll(prof, {
+              renderer: r, passes: [...pi.passes], finalPass: pi.finalPass, reflection: s.reflection, ripples: s.ripples, probe: s.probe,
+            });
             return false;
           }
           prof.poll();
@@ -422,7 +426,30 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
     stats: () => core.sys?.ripples.stats() ?? null,
   };
   (api as BackroomsDebugAPI & { water: WaterDebugApi }).water = water;
+  // package D: __backrooms.probe, the reflection probe's anchor, box and captured faces
+  const probe: ProbeDebugApi = {
+    stats() {
+      const p = core.sys?.probe;
+      if (!p) return null;
+      const r3 = (a: ArrayLike<number>): number[] => Array.from(a, (v) => Math.round(v * 1000) / 1000);
+      return {
+        valid: p.info.valid, faces: p.info.faces, anchor: r3(p.info.anchor), box: r3(p.info.box),
+        cpuMs: r3([p.info.cpuMs])[0], cpuMeanMs: r3([p.info.cpuMeanMs])[0], calls: p.info.calls,
+      };
+    },
+    faces: () => (core.sys && core.renderer ? core.sys.probe.faceMeans(core.renderer) : null),
+  };
+  (api as BackroomsDebugAPI & { probe: ProbeDebugApi }).probe = probe;
   return { api, log: push };
+}
+
+/** __backrooms.probe: stats() = the published anchor and room box (world metres; box = xmin, ymin, zmin, xmax, ymax,
+ * zmax), the faces captured by the last update, the main-thread cost (last capture, running mean per frame) and the
+ * draw calls of the last captured face; faces() = the mean capture radiance per face (+X, -X, +Y, -Y, +Z, -Z), then
+ * the filtered cube along the 6 axes at every mip. */
+export interface ProbeDebugApi {
+  stats(): { valid: boolean; faces: number; anchor: number[]; box: number[]; cpuMs: number; cpuMeanMs: number; calls: number } | null;
+  faces(): number[][] | null;
 }
 
 /** __backrooms.water: poke(dx, dz, amp) queues a footstep-sized impulse x amp at dx m right / dz m ahead of the eye;

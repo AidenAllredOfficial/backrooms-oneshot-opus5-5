@@ -337,6 +337,11 @@ bool brWallBetween( vec2 a, vec2 b ) {
 	return false;
 }
 
+// the emission-map reflection: low / medium surfaces and the water shader. High / ultra surface programs (SSR, the
+// reflection probe) compile it out with the EMISSION debug view's fetch, freeing uEmission from the 16-unit sampler
+// budget (package D, plan-common lead decisions)
+#if defined( BR_WATER ) || ( ! defined( BR_SSR ) && ! defined( BR_PROBE ) )
+#define BR_EM_REFL
 vec3 brEmissionRefl( vec3 pLocal, vec3 rW, float planeY, float rk, float rough, out float fade ) {
 	fade = 0.0;
 	float h = planeY - pLocal.y;
@@ -397,6 +402,7 @@ vec3 brEmissionRefl( vec3 pLocal, vec3 rW, float planeY, float rk, float rough, 
 	}
 	return ec;
 }
+#endif
 `;
 
 /** Constants + helpers, injected right after three's `#include <common>` in every fragment shader we own. */

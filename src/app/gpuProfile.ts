@@ -126,6 +126,8 @@ export interface ProfileTargets {
   reflection: { update(...a: never[]): void };
   /** package E: the ripple simulation ('waterSim' segment) */
   ripples?: { update(...a: never[]): void };
+  /** package D: the reflection probe's capture and prefilter ('probe' segment) */
+  probe?: { update(...a: never[]): void };
 }
 
 /** Hook every target; returns the restore function. */
@@ -144,5 +146,6 @@ export function hookAll(prof: GpuProfiler, t: ProfileTargets): () => void {
   undo.push(hookSegment(prof, t.renderer.shadowMap as unknown as { render(): void }, 'render', 'shadowMap'));
   undo.push(hookSegment(prof, t.reflection, 'update', 'reflection'));
   if (t.ripples) undo.push(hookSegment(prof, t.ripples, 'update', 'waterSim'));
+  if (t.probe) undo.push(hookSegment(prof, t.probe, 'update', 'probe'));
   return () => { for (const u of undo.reverse()) u(); };
 }

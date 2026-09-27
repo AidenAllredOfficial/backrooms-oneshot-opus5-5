@@ -253,6 +253,23 @@ describe('surface sampler budget (16 texture units)', () => {
     for (const b of high) expect(b.samplers.has('uReflTex'), b.variant).toBe(b.variant === 'water');
   });
 
+  it('high / ultra swap the emission map for the reflection probe (lead decision); medium keeps it, water keeps it', () => {
+    // under BR_SSR || BR_PROBE the surface programs compile out brEmissionRefl and the EMISSION view's fetch, and
+    // the probe cube takes the unit (package D)
+    for (const n of ['high', 'ultra', 'high (final flags)', 'ultra (final flags)', 'every define on']) {
+      for (const b of CASES.find(([c]) => c === n)![1]) {
+        expect(b.samplers.has('uEmission'), `${n} ${b.variant}`).toBe(b.variant === 'water');
+        expect(b.samplers.has('uBrProbe'), `${n} ${b.variant}`).toBe(b.variant !== 'water');
+      }
+    }
+    for (const n of ['low', 'medium']) {
+      for (const b of CASES.find(([c]) => c === n)![1]) {
+        expect(b.samplers.has('uEmission'), `${n} ${b.variant}`).toBe(true);
+        expect(b.samplers.has('uBrProbe'), `${n} ${b.variant}`).toBe(false);
+      }
+    }
+  });
+
   it('the preprocessor twin evaluates #if expressions like GLSL', () => {
     const d = new Map([['A', ''], ['N', '3'], ['M', 'N']]);
     expect(evalExpr('defined( A ) && N > 2', d)).toBe(1);

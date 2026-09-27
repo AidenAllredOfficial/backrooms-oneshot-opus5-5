@@ -45,8 +45,13 @@ vec3 brDbg = vec3( 0.0 );
 	}
 	else if ( dv == ${DebugView.UV} ) brDbg = vec3( fract( vBrUv ), 0.0 );
 	else if ( dv == ${DebugView.EMISSION} ) {
+#ifdef BR_EM_REFL
 		vec2 uvF = ( vBrLocal.xz + BR_EM_MARGIN ) / ( BR_EM_RES * BR_EM_TEXEL );
 		brDbg = textureLod( uEmission, uvF, 0.0 ).rgb / 6600.0 + brRefl / 60.0 + totalEmissiveRadiance / 6600.0;
+#else
+		// high / ultra: no emission map in the surface programs (sampler budget, chunks/common.ts BR_EM_REFL)
+		brDbg = totalEmissiveRadiance / 6600.0;
+#endif
 	}
 	else if ( dv == ${DebugView.LIGHT_VOLUME} ) {
 #ifdef BR_LV
@@ -63,11 +68,19 @@ vec3 brDbg = vec3( 0.0 );
 	else if ( dv == ${DebugView.VOLUMETRIC} ) brDbg = vec3( 0.0 ); // package F
 	else if ( dv == ${DebugView.BOUNCE} ) brDbg = brFbE / BR_FB_DEBUG_LUX; // package F: flashlight bounce irradiance
 	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E
-	else if ( dv == ${DebugView.PROBE} ) brDbg = vec3( 0.0 ); // package D
+	else if ( dv == ${DebugView.PROBE} ) {
+		// package D: the box-projected, normalised reflection probe as a mirror (roughness 0) times its influence, in
+		// nits (reads as the scene at the reference exposure: exposure=9.4); black outside the box and without a probe
+#ifdef BR_PROBE
+		vec3 brDr = ( vec4( reflect( - geometryViewDir, geometryNormal ), 0.0 ) * viewMatrix ).xyz;
+		vec3 brDn = ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz;
+		if ( uBrProbeOn > 0.5 ) brDbg = brProbeRad( brPc, brDr, 0.0, brDn, brE + brEf ) * brProbeWeight( brPc ) / BR_DEBUG_NITS;
+#endif
+	}
 	else if ( dv == ${DebugView.SPECW} ) {
 		// package D: r = the G-buffer specular weight Ws x 4 (0 on pixels that keep their specular inline), g = the
-		// lobe roughness, b = reserved for the probe weight
-		brDbg = vec3( brWs * 4.0, material.roughness, 0.0 );
+		// routed lobe's roughness (a clearcoat pixel's coat), b = the reflection probe's share of the environment
+		brDbg = vec3( brWs * 4.0, brMrtSpec ? brMrtRough : material.roughness, max( brPrW, brPrWc ) );
 	}
 	else if ( dv == ${DebugView.SSAO} ) {
 		// package A: the screen-space AO (after its exponent) in grey, the contact shadow of the baked directional

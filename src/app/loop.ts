@@ -263,10 +263,11 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       s.player.applyToCamera(core.camera, core.fov());
       // 9. audio
       s.audio.update(t, dt, st, query, s.lighting);
-      // 10. planar reflection
+      // 10. reflection probe, planar reflection
       if (core.frame % WATER_SCAN_INTERVAL === 0) scanWater();
       core.gpu?.begin();
       s.ripples.update(r, dt, t, st, query); // package E: ripple window and fixed steps (inside the GPU timer)
+      s.probe.update(r, core.scene, core.camera, query, st, s.features.probe); // package D: one cube face per frame
       s.reflection.update(r, core.scene, core.camera, waterY);
       // 11. post
       s.post.setAtmosphere(s.lighting.atmosphere());
