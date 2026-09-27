@@ -42,8 +42,11 @@ export const BOUNCE = {
   /** room fill: steps from the lit cell (an OPEN edge costs 1, a doorway / arch / window OPENING_COST) */
   FILL_CELLS: 5,
   OPENING_COST: 3,
-  /** m above the lit cell's floor where the fill tests the edges (below door headers, above half walls) */
+  /** m above the higher floor of two cells where the fill tests their edge (below door headers, above parapets) */
   FILL_Y: 1.2,
+  /** m below the lower ceiling of two cells where the fill tests their edge a second time (over partitions and half
+   * walls: the lit patch lights the ceilings and upper walls on both sides) */
+  FILL_TOP: 0.25,
   /** m: a SOLID neighbour's face lies ON the cell line: the room box reaches this far into it */
   SOLID_MARGIN: 0.05,
   /** frames a cached room fill stays valid (streaming can change the world under it) */
@@ -139,14 +142,15 @@ const cellKey = (gi: number, gj: number): number => (gi + 32768) * 65536 + (gj +
 const DI = [1, -1, 0, 0], DJ = [0, 0, 1, -1];
 
 /** Axis-aligned room around the cell containing (x, z): a flood fill of at most FILL_CELLS steps through edges that
- * are clear FILL_Y above the start cell's floor. Writes world (x0, z0, x1, z1): the reached cells' bounds, reaching
+ * are clear FILL_Y above the higher of their two floors or FILL_TOP below the lower ceiling (stair heads and pit
+ * edges join floors at different heights; partitions and half walls let light over them). Writes world (x0, z0, x1,
+ * z1): the reached cells' bounds, reaching
  * SOLID_MARGIN into SOLID neighbours (whose faces lie on the cell line). Returns false (and the cell's own bounds)
  * when the cell is not loaded. */
 export function roomBox(world: WorldQuery, x: number, z: number, out: Float64Array): boolean {
   const gi0 = worldToCell(x), gj0 = worldToCell(z);
   out[0] = gi0 * CELL; out[1] = gj0 * CELL; out[2] = (gi0 + 1) * CELL; out[3] = (gj0 + 1) * CELL;
   if (!cellAt(world, gi0, gj0, fillA)) return false;
-  const y = Math.max(fillA.floor + 0.1, Math.min(fillA.floor + BOUNCE.FILL_Y, fillA.ceil - 0.1));
   fillCost.clear();
   for (const b of fillQueue) b.length = 0;
   fillCost.set(cellKey(gi0, gj0), 0);
@@ -157,6 +161,7 @@ export function roomBox(world: WorldQuery, x: number, z: number, out: Float64Arr
       const gi = bucket[q], gj = bucket[q + 1];
       if ((fillCost.get(cellKey(gi, gj)) ?? Infinity) < cost) continue; // reached cheaper since
       const ax = (gi + 0.5) * CELL, az = (gj + 0.5) * CELL;
+      if (!cellAt(world, gi, gj, fillA)) continue;
       for (let dd = 0; dd < 4; dd++) {
         const ni = gi + DI[dd], nj = gj + DJ[dd];
         if (!cellAt(world, ni, nj, fillB)) continue;
@@ -176,7 +181,14 @@ export function roomBox(world: WorldQuery, x: number, z: number, out: Float64Arr
         if (nc > BOUNCE.FILL_CELLS) continue;
         const k = cellKey(ni, nj);
         if ((fillCost.get(k) ?? Infinity) <= nc) continue;
-        if (!world.losClear(ax, y, az, (ni + 0.5) * CELL, y, (nj + 0.5) * CELL)) continue;
+        // the edge passes the fill if the line between the cell centres is clear FILL_Y above the higher floor (a
+        // height taken from one side runs into the other side's slab at a stair head or a pit edge) or FILL_TOP below
+        // the lower ceiling (over a partition, whose ceilings would otherwise end the fill in a hard line)
+        const fl = Math.max(fillA.floor, fillB.floor), cl = Math.min(fillA.ceil, fillB.ceil);
+        const y = Math.max(fl + 0.1, Math.min(fl + BOUNCE.FILL_Y, cl - 0.1));
+        const yTop = cl - BOUNCE.FILL_TOP;
+        const bx = (ni + 0.5) * CELL, bz = (nj + 0.5) * CELL;
+        if (!world.losClear(ax, y, az, bx, y, bz) && !(yTop > y && world.losClear(ax, yTop, az, bx, yTop, bz))) continue;
         fillCost.set(k, nc);
         fillQueue[nc].push(ni, nj);
         if (ni * CELL < out[0]) out[0] = ni * CELL;

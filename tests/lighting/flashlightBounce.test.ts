@@ -254,6 +254,38 @@ describe('flashlight bounce', () => {
     expect(fb.slot(0)[12]).toBeGreaterThan(38.4 + 3 * CELL);
   });
 
+  it('the room box crosses stair heads and pit edges (floors at different heights) and passes over partitions', () => {
+    // one chunk: floor 0, ceiling 2.7; a 3 m pit over cells x 10..12 (open edges); a 1.5 m PARTITION on the x line 20
+    const k: ChunkKey = { s: 0, cx: 0, cz: 0 };
+    const l: ChunkLayout = createEmptyLayout(k, Zone.LOBBY, 1, Mood.NORMAL);
+    l.floorCm.fill(0); l.ceilCm.fill(270);
+    l.floorMat.fill(Mat.CARPET_L0); l.ceilMat.fill(Mat.CEILING_TILE); l.wallMat.fill(Mat.WALLPAPER_L0);
+    for (let lj = 0; lj < 32; lj++) for (let li = 10; li <= 12; li++) l.floorCm[cellIdx(li, lj)] = -300;
+    for (let lj = 0; lj < 32; lj++) {
+      const e = exIdx(20, lj);
+      l.ex.kind[e] = EdgeKind.PARTITION; l.ex.hA[e] = 150; l.ex.matNeg[e] = Mat.DRYWALL; l.ex.matPos[e] = Mat.DRYWALL;
+    }
+    const s0 = new StoreyData();
+    s0.set(createChunkData(l, buildChunkCollision(l)));
+    const data = [s0, new StoreyData(), new StoreyData()];
+    const w = createWorldQuery({ storey: () => 0 as StoreyId, data: (s) => data[s] });
+    const b = new Float64Array(4);
+    // from the pit's edge cell (x 12): the fill climbs out onto the floor beyond (x cells 13..)
+    expect(roomBox(w, 12 * CELL + 0.6, 20, b)).toBe(true);
+    expect(b[2]).toBeGreaterThan(15 * CELL);
+    // from the floor next to the pit (x 13): it reaches down into the pit
+    expect(roomBox(w, 13 * CELL + 0.6, 20, b)).toBe(true);
+    expect(b[0]).toBeLessThan(11 * CELL);
+    // next to the partition (x 19): the fill passes over it (an opening: OPENING_COST), so the ceilings and upper
+    // walls beyond it are not cut in a hard line on the partition's cell line
+    expect(roomBox(w, 19 * CELL + 0.6, 20, b)).toBe(true);
+    expect(b[2]).toBeGreaterThan(21 * CELL);
+    expect(b[2]).toBeLessThan(20 * CELL + (BOUNCE.FILL_CELLS - BOUNCE.OPENING_COST + 1) * CELL + 1e-9);
+    // a full wall still ends it (world(): the WALL on x = 6)
+    expect(roomBox(world(), 5, 20, b)).toBe(true);
+    expect(b[2]).toBeCloseTo(6, 9);
+  });
+
   it('smooths small moves, snaps on jumps, frozen frames and first activation', () => {
     const w = world();
     const fb = createFlashlightBounce();
