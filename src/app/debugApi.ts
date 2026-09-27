@@ -288,7 +288,7 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
             const q = gl.createQuery() as WebGLQuery;
             gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
             for (let i = 0; i < k; i++) {
-              // package D: the probe's steady state (one face captured and re-filtered per frame)
+              // package D: the probe's steady state (one face captured and re-filtered every PROBE.STEADY_EVERY frames)
               s.probe.update(r, core.scene, core.camera, s.streamer.query, s.player.state, s.features.probe);
               s.reflection.update(r, core.scene, core.camera, waterY);
               s.post.render(0, core.clock.t);
@@ -438,6 +438,9 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
       };
     },
     faces: () => (core.sys && core.renderer ? core.sys.probe.faceMeans(core.renderer) : null),
+    enable(on) {
+      if (core.sys) core.sys.features.probe = !!on;
+    },
   };
   (api as BackroomsDebugAPI & { probe: ProbeDebugApi }).probe = probe;
   return { api, log: push };
@@ -446,10 +449,12 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
 /** __backrooms.probe: stats() = the published anchor and room box (world metres; box = xmin, ymin, zmin, xmax, ymax,
  * zmax), the faces captured by the last update, the main-thread cost (last capture, running mean per frame) and the
  * draw calls of the last captured face; faces() = the mean capture radiance per face (+X, -X, +Y, -Y, +Z, -Z), then
- * the filtered cube along the 6 axes at every mip. */
+ * the filtered cube along the 6 axes at every mip; enable(on) = the URL probe= toggle at runtime (interleaved A/B
+ * timing; the live probe is kept while off and republished when on). */
 export interface ProbeDebugApi {
   stats(): { valid: boolean; faces: number; anchor: number[]; box: number[]; cpuMs: number; cpuMeanMs: number; calls: number } | null;
   faces(): number[][] | null;
+  enable(on: boolean): void;
 }
 
 /** __backrooms.water: poke(dx, dz, amp) queues a footstep-sized impulse x amp at dx m right / dz m ahead of the eye;

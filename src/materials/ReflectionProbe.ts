@@ -21,7 +21,8 @@
 //   MRT_PASS 0 (every specular inline), the flashlight at intensity 0 (its beam follows the camera, not the anchor:
 //   SSR and the inline spot cover it), no debug view, shadow-map updates off, xr off, and the scene's world matrices
 //   updated once per update instead of once per render. The face cameras render layer 0 only, so LAYER_LATE (water,
-//   sparks, motes) is never captured.
+//   sparks, motes) is never captured, and props meshes beyond TUNE.REFL_PROP_DIST of the anchor are hidden (every
+//   fragment of theirs would discard).
 // - Prefilter: level 0 copies the capture; level k takes PROBE.SAMPLES GGX samples (N = V = R, alpha = (k/(K-1))^2)
 //   with filtered importance sampling into the capture's mips (chunks/probe.ts probeSamples, generated on the CPU).
 // - Everything the shaders see is relative to the camera, computed in float64 here.
@@ -33,6 +34,7 @@ import type { PlayerState } from '../core/player.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import type { MaterialGlobals, WorldQuery } from '../core/runtime.ts';
 import { probeBox } from '../lighting/probeBox.ts';
+import { TUNE } from './chunks/params.ts';
 import { PROBE, PROBE_FILTER_FRAG, probeLevels, probeSamples } from './chunks/probe.ts';
 import { MRT_PASS, REFL_PASS, WIRE_PX } from './shared.ts';
 
@@ -99,6 +101,23 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
     return c;
   });
   const target = new THREE.Vector3();
+  // whole meshes the reflection pass would discard entirely (props farther than TUNE.REFL_PROP_DIST from the capture
+  // point, water) are hidden for the capture, as in the planar reflection's cull: their draws only cost CPU and
+  // vertex work (about a third of a face's draws)
+  const hidden: THREE.Object3D[] = [];
+  const propBounds = new THREE.Sphere();
+  const capPos = new THREE.Vector3();
+  const cull = (o: THREE.Object3D): void => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || Array.isArray(mesh.material)) return;
+    const variant = mesh.material.userData.brVariant;
+    let hide = variant === 'water';
+    if (variant === 'props' && mesh.geometry.boundingSphere) {
+      propBounds.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+      hide = propBounds.center.distanceTo(capPos) - propBounds.radius > TUNE.REFL_PROP_DIST;
+    }
+    if (hide) { hidden.push(o); o.visible = false; }
+  };
 
   // the prefilter: a screen triangle drawn into one face / mip of the filtered cube
   const samples = new Float32Array(4 * PROBE.SAMPLES);
@@ -319,6 +338,9 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
         try {
           scene.updateMatrixWorld();
           scene.matrixWorldAutoUpdate = false;
+          const a = pending ? next : live; // the cameras stand at the anchor being captured
+          capPos.set(a[0], a[1], a[2]);
+          scene.traverseVisible(cull);
           for (let f = 0; f < 6; f++) if (faces & (1 << f)) captureFace(renderer, scene, f);
           captureMips(renderer);
           const wasDirty = dirty !== 0;
@@ -336,6 +358,8 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
             prefilter(renderer, wasDirty && dirty === 0 ? ALL_FACES : faces);
           }
         } finally {
+          for (const o of hidden) o.visible = true;
+          hidden.length = 0;
           scene.matrixWorldAutoUpdate = prevMW;
           if (light) light.intensity = prevIntensity;
           renderer.xr.enabled = prevXr;
