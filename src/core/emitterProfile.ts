@@ -61,9 +61,18 @@ const NORM_FP = 0.0144;
 export const LOUVER = {
   CELL: 0.2, H: 0.075, D: 0.11, BLADE_T: 0.003,
   REFL: 0.3, LAMP: 1.6, // reflector and lamp images seen straight through a cell
-  BLADE: 0.5, BLADE_MIN: 0.015, BLADE_V0: 0.35, BLADE_V1: 0.8, // parabolic blades: lamp images inside the cutoff
-  GLINT: 0.5, GLINT_W: 0.006, // top-edge glints past the cutoff (m of blade height; widened by the footprint)
-  EDGE: 0.85, // blade bottom edges
+  BLADE: 0.5, BLADE_V0: 0.35, BLADE_V1: 0.8, // parabolic blades: lamp images inside the cutoff
+  // past the cutoff: the semi-specular (low-iridescence) finish scatters the lamps it faces into a sheen that grows
+  // toward the blade top (SHEEN_B at the bottom edge, x (1 - B) u^2 up to the top), lamp-coloured
+  SHEEN: 0.06, SHEEN_B: 0.25,
+  GLINT: 0.5, GLINT_W: 0.006, // top-edge glints near the cutoff (m of blade height; widened by the footprint)
+  // footprint / cell over which the per-row sheen gradient fades into its cell mean (no moire on far rows)
+  FAR0: 0.2, FAR1: 0.5,
+  EDGE: 0.85, // blade bottom edges (emission)
+  // diffuse-equivalent albedo (neutral, multiplies the baked irradiance): the aluminium blades past the cutoff mirror
+  // the room below (the mean radiance a mirror at the ceiling sees is E / pi), the painted bottom edges, and the dark
+  // interior of a dead fixture (reflector and dead lamps lit only by the room light entering through the cells)
+  ALU: 0.75, EDGE_ALB: 0.6, CAV_OFF: 0.18, TUBE_OFF: 0.35,
   SIGMA: 0.012,
 } as const;
 /** Opal (sky panel) diffuser: slightly hot centre, faint LED grid, rim shade, mild angular falloff. */
@@ -294,43 +303,88 @@ function prismShape(inp: ShapeInput, out: number[]): void {
   finishRecessed(inp, F, endMask * cav * ang, EP.PRISM, out);
 }
 
+/** erf(x) for x >= 0 (Winitzki, |error| < 1.3e-4): the GLSL has no erf. */
+export function erfApprox(x: number): number {
+  const x2 = x * x;
+  return Math.sqrt(1 - Math.exp(-x2 * (1.27324 + 0.147 * x2) / (1 + 0.147 * x2)));
+}
+
+/** Cell geometry of a parabolic louver at a fragment of its bottom plane (the lit and the dead look share it):
+ * vis = share of the cell's top opening the view ray reaches (reflector + lamps), hh = height (m) at which it hits a
+ * blade otherwise, spec = inside the cutoff (the blades mirror the lamps), edge = coverage of the blade bottom
+ * edges, umax = highest blade point (in H) any ray of the cell reaches, far = how far the per-row pattern has
+ * faded into its cell mean (footprint vs cell size). da / dx: lateral shift per metre of height (the ray climbs
+ * along -d). */
+interface LouverCell { vis: number; hh: number; spec: number; edge: number; umax: number; far: number; da: number; dx: number }
+function louverCell(F: LensFrame, fp: number): LouverCell {
+  const ca = Math.max(1, Math.round(F.La / LOUVER.CELL)), cx = Math.max(1, Math.round(F.Wx / LOUVER.CELL));
+  const csa = F.La / ca, csx = F.Wx / cx;
+  const pca = fract((F.a + 0.5 * F.La) / csa) * csa, pcx = fract((F.x + 0.5 * F.Wx) / csx) * csx;
+  const da = F.va / F.vz, dx = F.vx / F.vz;
+  const ta = pca - LOUVER.H * da, tx = pcx - LOUVER.H * dx;
+  const vis = smoothstep(-fp, fp, ta) * smoothstep(-fp, fp, csa - ta) * smoothstep(-fp, fp, tx) * smoothstep(-fp, fp, csx - tx);
+  // blade hit height: the first wall the climbing ray reaches
+  const wa = -da > 0 ? csa - pca : pca, wx = -dx > 0 ? csx - pcx : pcx;
+  const hh = Math.min(wa / Math.max(Math.abs(da), 1e-4), wx / Math.max(Math.abs(dx), 1e-4));
+  const ea = Math.min(pca, csa - pca), ex = Math.min(pcx, csx - pcx);
+  const hw = 0.5 * LOUVER.BLADE_T, cov = sat(LOUVER.BLADE_T / fp);
+  const edge = cov * (1 - smoothstep(hw, hw + fp, Math.min(ea, ex)));
+  // along the steeper axis a cell's rays hit the far blade uniformly between its bottom and cs / |d|
+  const steepA = Math.abs(da) >= Math.abs(dx);
+  const ad = Math.max(Math.abs(steepA ? da : dx), 1e-4), cs = steepA ? csa : csx;
+  const far = smoothstep(LOUVER.FAR0, LOUVER.FAR1, fp / cs);
+  // far rows see the open share of the cell's top opening
+  const visMean = Math.max(0, 1 - LOUVER.H * Math.abs(da) / csa) * Math.max(0, 1 - LOUVER.H * Math.abs(dx) / csx);
+  return {
+    vis: mix(vis, visMean, far), hh, spec: smoothstep(LOUVER.BLADE_V0, LOUVER.BLADE_V1, F.vz), edge,
+    umax: Math.min(1, cs / (LOUVER.H * ad)), far, da, dx,
+  };
+}
+
+/** brLouverAlb: diffuse albedo (absolute, neutral) of a louver lit by the room whether its lamps burn or not: through
+ * the cells the fixture interior (darker along the lamps: lamp = their area-normalised row coverage), the blades
+ * mirroring it inside the cutoff and the room past it, the bottom edges. A lit louver whose lamps flicker or are
+ * dimmed out (FLICKER, ANOMALY) thus looks like a dead one. */
+function louverAlbedo(C: LouverCell, lamp: number): number {
+  const cav = LOUVER.CAV_OFF * (1 - LOUVER.TUBE_OFF * Math.min(lamp, 1));
+  return mix(mix(mix(LOUVER.ALU, cav, C.spec), cav, C.vis), LOUVER.EDGE_ALB, C.edge);
+}
+
 function louverShape(inp: ShapeInput, out: number[]): void {
   const F = lensFrame(inp);
   const L = lampSet(inp.seed8, F.n, false, inp);
   const fp = inp.fp * LENS_TILE + 1e-4;
-  const ca = Math.max(1, Math.round(F.La / LOUVER.CELL)), cx = Math.max(1, Math.round(F.Wx / LOUVER.CELL));
-  const csa = F.La / ca, csx = F.Wx / cx;
-  const pca = fract((F.a + 0.5 * F.La) / csa) * csa, pcx = fract((F.x + 0.5 * F.Wx) / csx) * csx;
-  const da = F.va / F.vz, dx = F.vx / F.vz; // lateral shift per metre of height (the ray climbs along -d)
-  const ta = pca - LOUVER.H * da, tx = pcx - LOUVER.H * dx;
-  const vis = smoothstep(-fp, fp, ta) * smoothstep(-fp, fp, csa - ta) * smoothstep(-fp, fp, tx) * smoothstep(-fp, fp, csx - tx);
+  const C = louverCell(F, fp);
   // through the cell: reflector + lamps H + D up, one lamp over each cell column
-  const la = F.a - (LOUVER.H + LOUVER.D) * da, lx = F.x - (LOUVER.H + LOUVER.D) * dx;
+  const la = F.a - (LOUVER.H + LOUVER.D) * C.da, lx = F.x - (LOUVER.H + LOUVER.D) * C.dx;
   const sig = Math.sqrt(LOUVER.SIGMA * LOUVER.SIGMA + fp * fp);
   const amp = LOUVER.SIGMA / sig;
   const endMask = amp * lampRows(L, la, lx, 0, sig, F.La, F.Wx / F.n, PRISM.END_IN, 0, rowBuf);
   for (let i = 0; i < 9; i++) rowBuf[i] *= amp;
-  // blade hit height: the first wall the climbing ray reaches
-  const wa = -da > 0 ? csa - pca : pca, wx = -dx > 0 ? csx - pcx : pcx;
-  const hh = Math.min(wa / Math.max(Math.abs(da), 1e-4), wx / Math.max(Math.abs(dx), 1e-4));
-  const spec = smoothstep(LOUVER.BLADE_V0, LOUVER.BLADE_V1, F.vz);
+  // past the cutoff: the lamps' sheen on the blade, brightest toward its top (u = hh / H); far rows show its cell
+  // mean (u uniform on [0, umax]: mean u^2 = umax^2 / 3)
+  const u = Math.min(C.hh / LOUVER.H, 1);
+  const sheen = LOUVER.SHEEN * (LOUVER.SHEEN_B + (1 - LOUVER.SHEEN_B) * mix(u * u, C.umax * C.umax / 3, C.far));
   // the glint band is a sub-pixel line at distance: widen it by the footprint in blade-height units (one pixel spans
   // fp / tan(theta) of height), keeping its energy, so far rows keep a faint striped glow instead of aliasing
-  const glw = Math.hypot(LOUVER.GLINT_W, fp / Math.max(Math.hypot(da, dx), 1e-3));
-  const gl = (LOUVER.H - hh) / glw;
-  const glint = LOUVER.GLINT * (LOUVER.GLINT_W / glw) * Math.exp(-gl * gl) * smoothstep(0.1, 0.3, F.vz) * (1 - spec);
-  const blade = LOUVER.BLADE * spec + LOUVER.BLADE_MIN + glint;
-  const ea = Math.min(pca, csa - pca), ex = Math.min(pcx, csx - pcx);
-  const hw = 0.5 * LOUVER.BLADE_T, cov = sat(LOUVER.BLADE_T / fp);
-  const edge = Math.max(cov * (1 - smoothstep(hw, hw + fp, ea)), cov * (1 - smoothstep(hw, hw + fp, ex)));
+  const glw = Math.hypot(LOUVER.GLINT_W, fp / Math.max(Math.hypot(C.da, C.dx), 1e-3));
+  const gl = (LOUVER.H - C.hh) / glw;
+  // far rows: the band's mean over the blade heights the cell's rays reach (hh uniform on [0, umax H]; none when the
+  // top edge is out of their reach)
+  const W = LOUVER.GLINT_W, uH = C.umax * LOUVER.H;
+  const glMean = (0.886227 * W / uH) * (erfApprox(LOUVER.H / W) - erfApprox((LOUVER.H - uH) / W));
+  const glint = LOUVER.GLINT * mix((W / glw) * Math.exp(-gl * gl), glMean, C.far) * smoothstep(0.1, 0.3, F.vz);
+  const blade = LOUVER.BLADE * C.spec + (1 - C.spec) * (sheen + glint);
   let gm = 0;
   for (let k = 0; k < F.n; k++) gm += L.g[k];
   const refl = LOUVER.REFL * (gm / F.n);
   for (let c = 0; c < 3; c++) {
     const lamp = refl + LOUVER.LAMP * rowBuf[6 + c];
-    out[c] = mix(blade * (gm / F.n), lamp, vis) * (1 - LOUVER.EDGE * edge);
+    out[c] = mix(blade * (gm / F.n), lamp, C.vis) * (1 - LOUVER.EDGE * C.edge);
   }
-  finishRecessed(inp, F, endMask * vis, EP.LOUVER, out);
+  // neutral diffuse albedo lit by the room (replaces the lens diffuse): the blades past the cutoff mirror the room
+  out[3] = louverAlbedo(C, rowBuf[7]);
+  finishRecessed(inp, F, endMask * C.vis, EP.LOUVER, out);
 }
 
 function opalShape(inp: ShapeInput, out: number[]): void {
@@ -445,8 +499,10 @@ function sodiumShape(inp: ShapeInput, out: number[]): void {
   applyDynamics(inp, 0, out);
 }
 
-/** Relative luminance (rgb multiplier of vBrEmit * tint) of profile `inp.ep` at one fragment. */
-export function emitterShape(inp: ShapeInput, out: number[] = [0, 0, 0]): number[] {
+/** Relative luminance (rgb multiplier of vBrEmit * tint) of profile `inp.ep` at one fragment. out[3]: the neutral
+ * diffuse albedo that replaces the material's (LOUVER: its aluminium mirroring the room), -1 = keep the material. */
+export function emitterShape(inp: ShapeInput, out: number[] = [0, 0, 0, -1]): number[] {
+  out[3] = -1;
   switch (inp.ep) {
     case EP.PRISM: prismShape(inp, out); break;
     case EP.LOUVER: louverShape(inp, out); break;
@@ -470,6 +526,21 @@ export function offLensShade(inp: ShapeInput): number {
   lampRows(L, ba, bx, 0, 0.018 + inp.fp * LENS_TILE, F.La, pitch, PRISM.END_IN, PRISM.END_S, rowBuf);
   const sh = inp.ep === EP.OPAL ? 0 : Math.min(rowBuf[7], 1);
   return (0.5 + 0.3 * (1 - 0.6 * sh)) * mix(0.75, 1, smoothstep(0, PRISM.CAV_W, F.dEdge));
+}
+
+/** Diffuse albedo (absolute, neutral) of a dead parabolic louver: the blade grid, lit by the room. Through the cells
+ * the dark fixture interior with the dead lamps' silhouettes; the blades mirror that interior inside the cutoff and
+ * the room past it; the bottom edges draw the grid. */
+export function offLouverAlbedo(inp: ShapeInput): number {
+  const F = lensFrame(inp);
+  const fp = inp.fp * LENS_TILE + 1e-4;
+  const C = louverCell(F, fp);
+  const L: Lamps = { n: F.n, uTube: false, g: [1, 1, 1, 1], c: [0, 0, 0, 0], eb: [0, 0, 0, 0], glow: [0, 0, 0, 0] };
+  const hd = LOUVER.H + LOUVER.D;
+  // the dead lamps' silhouettes blurred area-normalised like the lit images (far cells keep their near mean)
+  const sig = Math.sqrt(LOUVER.SIGMA * LOUVER.SIGMA + fp * fp);
+  lampRows(L, F.a - hd * C.da, F.x - hd * C.dx, 0, sig, F.La, F.Wx / F.n, PRISM.END_IN, 0, rowBuf);
+  return louverAlbedo(C, rowBuf[7] * LOUVER.SIGMA / sig);
 }
 
 // ------------------------------------------------------------------------------------------ nadir normalisation
@@ -535,9 +606,9 @@ export const EP_NORM: readonly number[] = [
   2.1044, 2.4812, 2.6398, 2.7243, 2.0041, 2.3942, 2.5614, 2.6517, 1.9726, 2.3663, 2.5361, 2.6281, 1.9570, 2.3523, 2.5235, 2.6165,
   1.8175, 2.3344, 2.5259, 2.6328, 1.7988, 2.1839, 2.4399, 2.5534, 1.7663, 2.2092, 2.3714, 2.5276, 1.7505, 2.1943, 2.3986, 2.4828,
   // LOUVER n = 2, 3, 4
-  2.3585, 2.7668, 2.9326, 3.0533, 2.2808, 2.7143, 2.8937, 3.0276, 2.2536, 2.6923, 2.8771, 3.0128, 2.2279, 2.6765, 2.8718, 3.0123,
-  2.0521, 2.5656, 2.7653, 2.9308, 1.9650, 2.5004, 2.7136, 2.8941, 1.9347, 2.4736, 2.6917, 2.8751, 1.9054, 2.4496, 2.6795, 2.8689,
-  1.8508, 2.3642, 2.6606, 2.8194, 1.7590, 2.2875, 2.6002, 2.7730, 1.7282, 2.2582, 2.5769, 2.7515, 1.6964, 2.2320, 2.5620, 2.7414,
+  2.3621, 2.7697, 2.9382, 3.0565, 2.2841, 2.7170, 2.8990, 3.0305, 2.2569, 2.6951, 2.8824, 3.0158, 2.2297, 2.6772, 2.8749, 3.0128,
+  2.0549, 2.5682, 2.7703, 2.9337, 1.9674, 2.5027, 2.7183, 2.8968, 1.9372, 2.4759, 2.6964, 2.8778, 1.9067, 2.4502, 2.6821, 2.8693,
+  1.8531, 2.3664, 2.6652, 2.8221, 1.7610, 2.2895, 2.6045, 2.7755, 1.7301, 2.2601, 2.5812, 2.7540, 1.6975, 2.2325, 2.5644, 2.7418,
   // OPAL
   0.9945, 0.9865, 0.9834, 0.9806, 0.9863, 0.9781, 0.9750, 0.9721, 0.9836, 0.9753, 0.9722, 0.9693, 0.9823, 0.9741, 0.9710, 0.9680,
 ];

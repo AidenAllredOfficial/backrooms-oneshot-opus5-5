@@ -365,8 +365,15 @@ describe('LightingRuntime', () => {
     expect(fl.light.shadow.autoUpdate).toBe(false);
     expect(fl.light.castShadow).toBe(true);
     expect(evs).toEqual([true, false]);
+    // a quality switch resizes the map in place (three's next shadow render): freeing it would leave the lit draws
+    // before that render with three's compare-less fallback depth texture (GL_INVALID_OPERATION on the shadow sampler)
+    const map = new THREE.WebGLRenderTarget(512, 512);
+    fl.light.shadow.map = map;
+    fl.light.shadow.needsUpdate = false;
     rt.setQuality(QUALITY.ultra);
     expect(fl.light.shadow.mapSize.x).toBe(2048);
+    expect(fl.light.shadow.map).toBe(map);
+    expect(fl.light.shadow.needsUpdate).toBe(true);
     // rig: eye + (0.15, -0.2, 0) in camera space; yaw 0 looks along -Z
     const p = player(10, 20);
     p.eyeX = 10; p.eyeY = 1.62; p.eyeZ = 20; p.camYaw = 0; p.camPitch = 0; p.camRoll = 0;

@@ -50,8 +50,17 @@ export const FLARE = {
   STAR_T: 12,
   /** the two streak axes (deg from horizontal): a diamond iris gives an 'X' */
   STAR_ANGLES: [45, -45] as readonly number[],
-  /** texel steps (in D1 texels) of the three cascaded 7-tap streak passes */
+  /** texel steps (in D1 texels of a 1080 px buffer: starStepScale keeps the on-screen length at any height) of the
+   * three cascaded 7-tap streak passes */
   STAR_STEPS: [1, 4, 16] as readonly number[],
+  /** buffer height the star steps are defined at */
+  STAR_REF_H: 1080,
+  /** compact-source weighting: a star-level texel's hot part streaks fully while the hot part of the chain level
+   * COMPACT_LEVELS steps coarser at the same place (a Gaussian of ~32 px sigma on a 1080 buffer) stays below COMPACT[0]
+   * of it, and not at all above COMPACT[1]: a bulb, a highbay across the hall or a thin tube keeps its X, a near tube
+   * strip or highbay (whose hot area fills much of the coarse footprint) does not throw a broad X over the ceiling */
+  COMPACT: [0.15, 0.5] as readonly [number, number],
+  COMPACT_LEVELS: 3,
   /** per-texel decay of the streak kernel: w_j = OMEGA^(|j| * step) */
   OMEGA: 0.93,
   /** the last pass samples R and B at scaled offsets: diffraction length grows with wavelength (rainbow tips) */
@@ -153,4 +162,25 @@ export function ghostUv(uv: readonly [number, number], scale: number): [number, 
 /** Hot (overexposed) fraction the star / ghosts extract from a texel of exposed luma y*e. */
 export function flareHotFraction(exposedLuma: number): number {
   return Math.max(0, exposedLuma - FLARE.STAR_T) / Math.max(exposedLuma, 1e-4);
+}
+
+/** Chain level the star reads: D1, or D2 on a buffer taller than FLARE.HI_RES_H (clamped to the chain). */
+export function starLevel(heightPx: number, levels: number): number {
+  return Math.min(levels - 1, heightPx > FLARE.HI_RES_H ? 2 : 1);
+}
+
+/** Star step scale (x FLARE.STAR_STEPS, in texels of star level `level`) that keeps the arms' on-screen length that
+ * of STAR_REF_H with D1 at any buffer height and dynamic-resolution scale: a level-l texel spans 2^(l+1) buffer px. */
+export function starStepScale(heightPx: number, level: number): number {
+  return (Math.max(1, heightPx) / FLARE.STAR_REF_H) / 2 ** (level - 1);
+}
+
+/** Compact-source weight of a star-level texel: exposedLuma = its exposed luma, coarseLuma = the exposed luma of the
+ * chain level COMPACT_LEVELS steps coarser at the same place. 1 = point-like (streaks fully), 0 = extended. */
+export function starCompactWeight(exposedLuma: number, coarseLuma: number): number {
+  const hot = Math.max(0, exposedLuma - FLARE.STAR_T);
+  const f = Math.max(0, coarseLuma - FLARE.STAR_T) / Math.max(hot, 1e-4);
+  const [a, b] = FLARE.COMPACT;
+  const t = Math.min(1, Math.max(0, (f - a) / (b - a)));
+  return 1 - t * t * (3 - 2 * t);
 }

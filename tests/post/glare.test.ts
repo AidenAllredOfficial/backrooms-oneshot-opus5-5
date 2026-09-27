@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { EffectPass } from 'postprocessing';
 import {
-  FLARE, flareHotFraction, ghostUv, GLARE, glareEE, glareLevelTheta, glareRadialDensity, glareWeights, lumaNorm, streakWeights,
+  FLARE, flareHotFraction, ghostUv, GLARE, glareEE, glareLevelTheta, glareRadialDensity, glareWeights, lumaNorm,
+  starCompactWeight, starLevel, starStepScale, streakWeights,
 } from '../../src/post/glareMath.ts';
 import { GLARE_FRAG, GlareEffect } from '../../src/post/effects/GlareEffect.ts';
 import { QUALITY } from '../../src/core/quality.ts';
@@ -106,6 +107,7 @@ describe('glare PSF (C.1)', () => {
     expect(g.chain.starTexture).toBeNull();
     g.setFlare(true, true);
     expect(g.chain.star?.s.width).toBe(480);
+    expect(g.chain.star?.e.width).toBe(480);
     expect(g.chain.ghost?.width).toBe(240);
     // ultra's 1.5x supersampled buffer runs the star one level coarser: same on-screen width, same cost
     expect(g.chain.starLevel).toBe(1);
@@ -155,6 +157,41 @@ describe('aperture flare (C.5)', () => {
     expect(flareHotFraction(35)).toBeCloseTo((35 - FLARE.STAR_T) / 35, 12);
     expect(FLARE.STAR_GAIN).toBeGreaterThan(FLARE.GHOST_GAIN);
     expect(FLARE.STAR_GAIN).toBeLessThan(0.01); // subtle in lit rooms, obvious only on bulbs in the dark
+  });
+
+  it('the star arms keep their on-screen length at any buffer height (dynamic resolution, high on a 1440p screen)', () => {
+    // arm length as a share of the frame height: steps x scale x the level's texel (2^(level+1) buffer px) / height
+    const armShare = (h: number): number => {
+      const l = starLevel(h, 9);
+      return (FLARE.STAR_STEPS[2] * starStepScale(h, l) * 2 ** (l + 1)) / h;
+    };
+    const ref = armShare(FLARE.STAR_REF_H);
+    expect(starStepScale(1080, 1)).toBe(1);
+    expect(starStepScale(2160, 2)).toBe(1);
+    for (const h of [720, 864, 972, 1080, 1296, 1440, 1500, 1501, 1620, 2160, 2880]) expect(armShare(h), `h ${h}`).toBeCloseTo(ref, 12);
+    // continuous across the D1 -> D2 switch
+    expect(starStepScale(1501, 2) * 4).toBeCloseTo(starStepScale(1500, 1) * 2, 2);
+  });
+
+  it('the star favours compact hot sources over extended ones', () => {
+    const T = FLARE.STAR_T;
+    // a point source: its hot energy spreads over the coarse level (~1/16 and less of the texel's)
+    expect(starCompactWeight(400, 400 / 16)).toBe(1);
+    expect(starCompactWeight(2000, 2000 / 30)).toBe(1);
+    // a thin line fills a quarter of a coarse texel: mostly kept
+    expect(starCompactWeight(200, T + (200 - T) * 0.2)).toBeGreaterThan(0.7);
+    // a big tube strip / panel fills it: no broad X
+    expect(starCompactWeight(180, 175)).toBe(0);
+    expect(starCompactWeight(180, 0.6 * 180)).toBe(0);
+    // monotone in the fill
+    let prev = 2;
+    for (let f = 0; f <= 1; f += 0.05) {
+      const w = starCompactWeight(300, T + (300 - T) * f);
+      expect(w).toBeLessThanOrEqual(prev + 1e-12);
+      prev = w;
+    }
+    // below the threshold nothing streaks anyway (the weight is irrelevant there)
+    expect(flareHotFraction(T * 0.5)).toBe(0);
   });
 
   it('quality flags: streaks on high / ultra, ghosts on ultra only', () => {

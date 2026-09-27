@@ -5,8 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGED_P, computeEpNorm, defaultShapeInput, emitterShape, EP, EP_NORM, epNormIndex, LENS_TILE, lensAux, lensParam,
-  lensVariant, LOUVER_P, nadirMean, PRISM, prismAngular, profileBits, recessedProfile, unpackLensParam, unpackProfile,
-  type ShapeInput,
+  lensVariant, LOUVER, LOUVER_P, nadirMean, offLouverAlbedo, PRISM, prismAngular, profileBits, recessedProfile,
+  unpackLensParam, unpackProfile, type ShapeInput,
 } from '../../src/core/emitterProfile.ts';
 import { FixtureKind, LightState, Zone } from '../../src/core/ids.ts';
 
@@ -165,6 +165,84 @@ describe('emitter profiles: angular behaviour', () => {
     };
     expect(mean(0)).toBeGreaterThan(0.8);
     expect(mean(75)).toBeLessThan(0.15 * mean(0));
+  });
+
+  it('louver past the cutoff: neutral room-mirroring blades under a top-weighted lamp sheen, cell means far away', () => {
+    const inp = defaultShapeInput();
+    inp.ep = EP.LOUVER; inp.variant = lensVariant(3, false); inp.param = lensParam(1, 2, 1); inp.fp = 0.002;
+    const out = [0, 0, 0, 0];
+    const view = (thetaDeg: number): void => {
+      inp.vx = 0; inp.vy = Math.sin((thetaDeg * Math.PI) / 180); inp.vz = Math.cos((thetaDeg * Math.PI) / 180);
+    };
+    // one cell row along the lamps (v), away from the cell sides: [emission luma, room albedo] per sample
+    const row = (): number[][] => {
+      const r: number[][] = [];
+      for (let i = 0; i < 40; i++) {
+        inp.u = 0.3 / LENS_TILE; inp.v = (2 * 0.2 + (i + 0.5) / 40 * 0.2) / LENS_TILE; // middle cell column, row 2
+        emitterShape(inp, out);
+        r.push([luma(out), out[3]]);
+      }
+      return r;
+    };
+    // from below: the cells show the lamps (over the fixture interior's dark albedo), the blades are not seen (only
+    // the bottom edges reflect the room)
+    view(0);
+    const below = row();
+    expect(Math.max(...below.map((x) => x[1]))).toBeLessThanOrEqual(LOUVER.EDGE_ALB + 1e-9);
+    expect(Math.min(...below.map((x) => x[1]))).toBeGreaterThan(0.5 * LOUVER.CAV_OFF);
+    expect(below.filter((x) => x[1] > LOUVER.CAV_OFF + 0.01).length).toBeLessThan(6);
+    // past the cutoff: the blades mirror the room (neutral albedo ALU) under a sheen that grows toward the blade top
+    view(75);
+    const past = row();
+    const bladeRoom = past.filter((x) => x[1] > 0.5 * LOUVER.ALU);
+    expect(bladeRoom.length).toBeGreaterThan(30);
+    const lum = past.map((x) => x[0]);
+    expect(Math.max(...lum)).toBeGreaterThan(2 * Math.min(...lum)); // the per-row gradient
+    // far away the row pattern fades into its cell mean (no moire), keeping about the same mean
+    inp.fp = 0.5 * 0.2 / LENS_TILE;
+    const far = row().map((x) => x[0]);
+    const mean = (a: number[]): number => a.reduce((p, q) => p + q, 0) / a.length;
+    expect((Math.max(...far) - Math.min(...far)) / mean(far)).toBeLessThan(0.1);
+    expect(mean(far) / mean(lum)).toBeGreaterThan(0.6);
+    expect(mean(far) / mean(lum)).toBeLessThan(1.4);
+    // other profiles keep the material diffuse
+    inp.ep = EP.PRISM; inp.fp = 0.002;
+    expect(emitterShape(inp, out)[3]).toBe(-1);
+  });
+
+  it('dead louver: its blade grid (bright bottom edges over dark cells from below, aluminium blades obliquely)', () => {
+    const inp = defaultShapeInput();
+    inp.ep = EP.LOUVER; inp.variant = lensVariant(3, false); inp.param = lensParam(1, 2, 1); inp.fp = 0.001;
+    inp.vx = 0; inp.vy = 0; inp.vz = 1;
+    inp.u = 0.3 / LENS_TILE; inp.v = 0.1 / LENS_TILE; // a cell centre
+    const cell = offLouverAlbedo(inp);
+    inp.v = 0.2 / LENS_TILE; // on a blade's bottom edge
+    const edge = offLouverAlbedo(inp);
+    expect(cell).toBeLessThanOrEqual(LOUVER.CAV_OFF + 1e-9);
+    expect(edge).toBeGreaterThan(2 * cell);
+    inp.v = 0.1 / LENS_TILE; inp.vy = Math.sin((75 * Math.PI) / 180); inp.vz = Math.cos((75 * Math.PI) / 180);
+    let s = 0;
+    for (let i = 0; i < 40; i++) { inp.v = (2 * 0.2 + (i + 0.5) / 40 * 0.2) / LENS_TILE; s += offLouverAlbedo(inp); }
+    expect(s / 40).toBeGreaterThan(0.5); // obliquely the blades (mirroring the room) fill the view
+  });
+
+  it('a lit louver whose lamps are out (flicker burst, anomaly dip) shows the dead louver\'s albedo, not black cells', () => {
+    const inp = defaultShapeInput();
+    inp.ep = EP.LOUVER; inp.variant = lensVariant(3, false); inp.param = lensParam(1, 2, 1);
+    inp.state = LightState.FLICKER; inp.dynEmit = true; inp.dyn = 0;
+    const out = [0, 0, 0, 0];
+    for (const [theta, fp] of [[0, 0.001], [50, 0.002], [75, 0.002], [80, 0.5 * 0.2 / LENS_TILE]] as const) {
+      inp.fp = fp;
+      inp.vx = 0; inp.vy = Math.sin((theta * Math.PI) / 180); inp.vz = Math.cos((theta * Math.PI) / 180);
+      for (let i = 0; i < 40; i++) {
+        inp.u = 0.3 / LENS_TILE; inp.v = (2 * 0.2 + (i + 0.5) / 40 * 0.2) / LENS_TILE;
+        emitterShape(inp, out);
+        const dead = offLouverAlbedo(inp);
+        expect(out[3], `theta ${theta} i ${i}`).toBeGreaterThan(0.5 * LOUVER.CAV_OFF);
+        // the same geometry; only the lamp silhouettes differ a little (the lit set's per-lamp gains)
+        expect(Math.abs(out[3] - dead), `theta ${theta} i ${i}`).toBeLessThan(0.02);
+      }
+    }
   });
 
   it('dynamics: a FLICKER lens that is out keeps glowing cathode ends; BUZZ scales, DYING dims one lamp', () => {

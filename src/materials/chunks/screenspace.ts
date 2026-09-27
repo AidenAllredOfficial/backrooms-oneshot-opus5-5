@@ -122,23 +122,39 @@ float brContactShadow( vec3 P, vec3 Ng, vec3 L, float w ) {
 	vec3 hO = vec3( ( uSsaoProj.xy * O.xy + uSsaoProj.zw * O.z - O.z ) * k, - O.z );
 	vec3 hD = vec3( ( uSsaoProj.xy * E.xy + uSsaoProj.zw * E.z - E.z ) * k, - E.z ) - hO;
 	vec2 sz = vec2( textureSize( uSsaoTex, 0 ) );
+	// each AO texel holds the depth of its representative pixel (the first of its st x st block, at texel coordinate
+	// q + 0.5 / st): test a sample against the texel whose representative lies nearest to it (a centred +-0.5 texel
+	// error instead of 0 .. 1, and no half-pixel shift of the shadow)
+	vec2 rep = vec2( 0.5 - 0.5 / float( brSsStep() ) );
 	float j = brIGN( gl_FragCoord.xy );
-	float occ = 0.0;
+	float hs = 0.5 / float( BR_CS_STEPS );
+	float tHit = - 1.0;
 	for ( int i = 0; i < BR_CS_STEPS; i ++ ) {
 		float t = ( float( i ) + j ) / float( BR_CS_STEPS );
 		vec3 h = hO + hD * t;
 		if ( h.z < 0.01 ) break; // behind the camera
 		vec2 tc = h.xy / h.z;
 		if ( any( lessThan( tc, vec2( 0.0 ) ) ) || any( greaterThanEqual( tc, sz ) ) ) break;
-		float dz = h.z - texelFetch( uSsaoTex, ivec2( tc ), 0 ).g;
-		if ( dz > BR_CS_BIAS * h.z && dz < BR_CS_THICK ) {
-			// the penumbra widens with the occluder's distance from P (the crossing lies within half a step before t)
-			float th = 1.0 - max( t - 0.5 / float( BR_CS_STEPS ), 0.0 );
-			occ = th * th;
-			break;
-		}
+		float dz = h.z - texelFetch( uSsaoTex, min( ivec2( tc + rep ), ivec2( sz ) - 1 ), 0 ).g;
+		if ( dz > BR_CS_BIAS * h.z && dz < BR_CS_THICK ) { tHit = t; break; }
 	}
-	return 1.0 - occ * fade * BR_CS_STRENGTH;
+	if ( tHit < 0.0 ) return 1.0;
+	// the penumbra widens with the occluder's distance from P (the crossing lies within half a step before the hit);
+	// and an area light's penumbra swallows an occluder thinner than it (a lounger axle, a cable): the ray is tested
+	// again half a step and a step past the hit, and the share of the three samples still behind it scales the
+	// shadow (a solid occluder keeps it whole; a thin one, which the dithered steps hit on only some pixels, casts a
+	// lighter one, so its hit / miss hatching is far fainter)
+	float cov = 1.0;
+	for ( int r = 1; r <= 2; r ++ ) {
+		vec3 h = hO + hD * min( tHit + float( r ) * hs, 1.0 );
+		if ( h.z < 0.01 ) break;
+		vec2 tc = h.xy / h.z;
+		if ( any( lessThan( tc, vec2( 0.0 ) ) ) || any( greaterThanEqual( tc, sz ) ) ) break;
+		float dz = h.z - texelFetch( uSsaoTex, min( ivec2( tc + rep ), ivec2( sz ) - 1 ), 0 ).g;
+		cov += dz > BR_CS_BIAS * h.z && dz < BR_CS_THICK ? 1.0 : 0.0;
+	}
+	float th = 1.0 - max( tHit - hs, 0.0 );
+	return 1.0 - th * th * ( cov / 3.0 ) * fade * BR_CS_STRENGTH;
 #else
 	return 1.0;
 #endif
@@ -178,20 +194,31 @@ export function contactShadow(P: Vec3, Ng: Vec3, L: Vec3, w: number, steps: numb
   const len = C.LEN * (1 + C.LEN_GROW * vz);
   const off = C.OFFSET + C.OFFSET_GROW * vz;
   const O = [P[0] + Ng[0] * off, P[1] + Ng[1] * off, P[2] + Ng[2] * off];
-  let occ = 0;
-  for (let i = 0; i < steps; i++) {
-    const t = (i + jitter) / steps;
+  // 1 = the ray point at t is behind the depth buffer (within the thickness), 0 = not, -1 = off screen / behind the eye
+  const behind = (t: number): number => {
     const S = [O[0] + L[0] * len * t, O[1] + L[1] * len * t, O[2] + L[2] * len * t];
-    if (S[2] > -0.01) break;
+    if (S[2] > -0.01) return -1;
     const u = ((proj[0] * S[0] + proj[2] * S[2]) / -S[2]) * 0.5 + 0.5;
     const v = ((proj[1] * S[1] + proj[3] * S[2]) / -S[2]) * 0.5 + 0.5;
-    if (u < 0 || v < 0 || u >= 1 || v >= 1) break;
+    if (u < 0 || v < 0 || u >= 1 || v >= 1) return -1;
     const dz = -S[2] - viewZAt(u, v);
-    if (dz > C.BIAS * -S[2] && dz < C.THICK) {
-      const th = 1 - Math.max(t - 0.5 / steps, 0);
-      occ = th * th;
-      break;
-    }
+    return dz > C.BIAS * -S[2] && dz < C.THICK ? 1 : 0;
+  };
+  const hs = 0.5 / steps;
+  let tHit = -1;
+  for (let i = 0; i < steps; i++) {
+    const t = (i + jitter) / steps;
+    const b = behind(t);
+    if (b < 0) break;
+    if (b > 0) { tHit = t; break; }
   }
-  return 1 - occ * fade * C.STRENGTH;
+  if (tHit < 0) return 1;
+  let cov = 1;
+  for (let k = 1; k <= 2; k++) {
+    const b = behind(Math.min(tHit + k * hs, 1));
+    if (b < 0) break;
+    cov += b;
+  }
+  const th = 1 - Math.max(tHit - hs, 0);
+  return 1 - th * th * (cov / 3) * fade * C.STRENGTH;
 }

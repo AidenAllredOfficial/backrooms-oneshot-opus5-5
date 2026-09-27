@@ -178,10 +178,12 @@ export function createFlashlight(scene: THREE.Scene, cookie: THREE.Texture | nul
     },
     setQuality(nq) {
       if (light.shadow.mapSize.x !== nq.flashlightShadow) {
-        // three (r186) resizes the existing map at its next shadow render (WebGLShadowMap: map.setSize when mapSize
-        // differs) and fills it in the same call. Disposing it here left the lit draws before that render (the planar
-        // reflection, the next frame's first passes) with no depth texture behind the shadow sampler: a burst of
-        // GL_INVALID_OPERATION on every quality switch that changes the map size (e.g. high <-> ultra).
+        // Resize only: three resizes the map inside its next shadow render (WebGLShadowMap: map.setSize when mapSize
+        // differs), right before drawing into it. Freeing it here (map = null) left every lit draw until that render
+        // (the planar reflection runs before the prepass that updates the map) with three's fallback for a missing
+        // spot shadow map: a sampler2DShadow ARRAY binds a DepthTexture without a compare mode (WebGLUniforms
+        // setValueT1Array), i.e. GL_INVALID_OPERATION "Mismatch between texture format and sampler type" on every
+        // such draw during a quality switch, which also dropped those draws.
         light.shadow.mapSize.set(nq.flashlightShadow, nq.flashlightShadow);
         light.shadow.needsUpdate = true;
       }
