@@ -302,5 +302,58 @@ export function glslConstants(): string {
 #define BR_DEBUG_LUX ${f(TUNE.DEBUG_LUX)}
 const int BR_SLOT_LUT[9] = int[9](${lut.join(', ')});
 const float BR_LV_Y[${LV.NY}] = float[${LV.NY}](${LV.Y.map(f).join(', ')});
+${waterMediaGlsl()}`;
+}
+
+// ---------------------------------------------------------------- package E: water media and caustics
+
+/** Per-kind water media, indexed by WaterRect kind (0 pool, 1 flooded room, 2 film); SI units (1/m).
+ * SA absorption, SS scattering, G the Henyey-Greenstein asymmetry, TINT the in-scatter colour, BLUR the
+ * forward-scatter blur factor (the refraction pass). The legacy submerged-surface path (chunks/haze.ts) attenuates
+ * along the refracted view path with the transport coefficient SA + (1 - G) SS: without the blur of the refraction
+ * pass the forward-scattered light arrives along the view ray, so it is kept. */
+export const WATER_MEDIA = {
+  SA: [[0.35, 0.065, 0.03], [0.6, 0.9, 1.8], [0.6, 0.9, 1.8]],
+  SS: [0.04, 1.6, 1.2],
+  G: [0.9, 0.85, 0.85],
+  TINT: [[0.55, 0.85, 0.95], [1.0, 0.85, 0.58], [1.0, 0.9, 0.7]],
+  BLUR: [0, 0.06, 0.02],
+  /** downwelling attenuation of the baked light reaching a submerged surface: exp(-DOWN * kappa * depth),
+   * kappa = SA + (1 - G) SS; DOWN < 1.25 because part of the floor light comes from the pool's own wall lights */
+  DOWN: 0.8,
+} as const;
+
+/** Caustic strengths (package E; the pattern is chunks/common.ts brCausticsW): submerged walls (x the floors'
+ * CAUSTIC_STRENGTH), and the zero-mean modulation of ceilings / walls above pool water (flooded water x 0.25). */
+export const WATER_CAUSTICS = {
+  WALL: 0.6,
+  CEIL: 0.45,
+  ABOVE_WALL: 0.2,
+  ABOVE_FLOOD: 0.25,
+  /** the above-water net magnifies with the height h above the water (cells x (1 + MAGNIFY h)) and fades as
+   * 1 / (1 + FADE h) */
+  MAGNIFY: 0.33,
+  FADE: 0.15,
+  /** flashlight caustic through the surface: 1 + GAIN * (pattern - mean) */
+  SPOT_GAIN: 1.2,
+} as const;
+
+/** GLSL constants of WATER_MEDIA / WATER_CAUSTICS (const arrays indexed by kind). */
+export function waterMediaGlsl(): string {
+  const v3 = (c: readonly number[]): string => `vec3(${c.map(f).join(', ')})`;
+  const M = WATER_MEDIA, C = WATER_CAUSTICS;
+  return `const vec3 BR_WM_SA[3] = vec3[3](${M.SA.map(v3).join(', ')});
+const float BR_WM_SS[3] = float[3](${M.SS.map(f).join(', ')});
+const float BR_WM_G[3] = float[3](${M.G.map(f).join(', ')});
+const vec3 BR_WM_TINT[3] = vec3[3](${M.TINT.map(v3).join(', ')});
+const float BR_WM_BLUR[3] = float[3](${M.BLUR.map(f).join(', ')});
+#define BR_WM_DOWN ${f(M.DOWN)}
+#define BR_CAUSTIC_WALL ${f(C.WALL)}
+#define BR_CAUSTIC_CEIL ${f(C.CEIL)}
+#define BR_CAUSTIC_ABOVE_WALL ${f(C.ABOVE_WALL)}
+#define BR_CAUSTIC_ABOVE_FLOOD ${f(C.ABOVE_FLOOD)}
+#define BR_CAUSTIC_MAGNIFY ${f(C.MAGNIFY)}
+#define BR_CAUSTIC_FADE ${f(C.FADE)}
+#define BR_CAUSTIC_SPOT_GAIN ${f(C.SPOT_GAIN)}
 `;
 }

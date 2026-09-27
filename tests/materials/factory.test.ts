@@ -15,7 +15,7 @@ import type { MaterialGlobals, MaterialSystem, TextureSet, TileMaterials } from 
 import { createGlobals, createMaterialSystem } from '../../src/materials/MaterialSystem.ts';
 import { applySurfaceDefines, buildSurfaceFragment, buildSurfaceVertex, CACHE_KEY_PREFIX, SURFACE_VARIANTS } from '../../src/materials/SurfaceMaterial.ts';
 import type { SurfaceVariant } from '../../src/materials/SurfaceMaterial.ts';
-import { waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
+import { RIPPLE_LERP, waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
 import { definesKey, MRT_PASS, qualityDefinesOf, REFL_PASS } from '../../src/materials/shared.ts';
 import type { QualityDefines } from '../../src/materials/shared.ts';
 
@@ -192,7 +192,7 @@ describe('WP9 material factory', () => {
     expect([...keys.get('shell')!][0]).toBe(`${CACHE_KEY_PREFIX}|shell|${keyFor('high')}`);
     expect([...keys.get('props')!][0]).toBe(`${CACHE_KEY_PREFIX}|props|${keyFor('high')}`);
     expect([...keys.get('decal')!][0]).toBe(`${CACHE_KEY_PREFIX}|decal|${keyFor('high')}`);
-    expect([...keys.get('water')!][0]).toBe(`br-water-v1|${keyFor('high')}`);
+    expect([...keys.get('water')!][0]).toBe(`br-water-v2|${keyFor('high')}`);
   });
 
   it('compiled shader text is identical for every tile of a variant', () => {
@@ -315,7 +315,15 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
         expect(t[v].defines, `${name}/${v}`).toEqual(expectedDefines(v, d));
         expect(keyOf(t[v]), `${name}/${v}`).toBe(`${CACHE_KEY_PREFIX}|${v}|${expectedKey(d)}`);
       }
-      expect(keyOf(t.water!)).toBe(`br-water-v1|${expectedKey(d)}`);
+      expect(keyOf(t.water!)).toBe(`br-water-v2|${expectedKey(d)}`);
+      // package E: the water material's own defines follow the preset
+      const wd: Record<string, string> = { BR_WATER: '' };
+      if (d.airlight) wd.BR_AIRLIGHT = '';
+      if (d.waterWaves > 0) wd.BR_WATER_WAVES = String(d.waterWaves);
+      if (d.waterRipple) wd.BR_WATER_RIPPLE = '';
+      if (d.waterDebris) wd.BR_WATER_DEBRIS = '';
+      expect((t.water as THREE.ShaderMaterial).defines, name).toEqual(wd);
+      expect((t.water as THREE.ShaderMaterial).uniforms.uBrRippleLerp, name).toBe(RIPPLE_LERP);
       expect(definesKey(d)).toBe(expectedKey(d));
     }
   });
@@ -373,7 +381,7 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
     expect(t.shell.version).toBeGreaterThan(v0);
     expect(t.shell.defines).toMatchObject({ BR_DETAIL_MAPS: '', BR_BOUNCE_N: '4' });
     expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|${expectedKey(qualityDefinesOf(q))}`);
-    expect(keyOf(t.water!)).toBe(`br-water-v1|${expectedKey(qualityDefinesOf(q))}`);
+    expect(keyOf(t.water!)).toBe(`br-water-v2|${expectedKey(qualityDefinesOf(q))}`);
   });
 
   it('new globals start inert and every MaterialGlobals / TileBindings field is bound by reference', () => {

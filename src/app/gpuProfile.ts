@@ -116,6 +116,8 @@ export interface ProfileTargets {
   passes: Pass[];
   finalPass: Pass;
   reflection: { update(...a: never[]): void };
+  /** package E: the ripple simulation ('waterSim' segment) */
+  ripples?: { update(...a: never[]): void };
 }
 
 /** Hook every target; returns the restore function. */
@@ -125,5 +127,6 @@ export function hookAll(prof: GpuProfiler, t: ProfileTargets): () => void {
   undo.push(hookSegment(prof, t.finalPass, 'render', `final:${passLabel(t.finalPass, 0)}`));
   undo.push(hookSegment(prof, t.renderer.shadowMap as unknown as { render(): void }, 'render', 'shadowMap'));
   undo.push(hookSegment(prof, t.reflection, 'update', 'reflection'));
+  if (t.ripples) undo.push(hookSegment(prof, t.ripples, 'update', 'waterSim'));
   return () => { for (const u of undo.reverse()) u(); };
 }

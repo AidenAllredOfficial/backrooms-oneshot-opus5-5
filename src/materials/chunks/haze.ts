@@ -31,15 +31,25 @@ ${FRAG_DEBUG_GLSL}
 		gl_FragColor.rgb *= BR_PILE_TRAP * pow( brPa / max( max( brPa.r, brPa.g ), brPa.b ), vec3( BR_PILE_SAT ) );
 	}
 #endif
-	if ( ( brF & BR_F_UNDERWATER ) != 0 ) {
-		float brWy = brAuxB.w * 0.05 - 3.2;
-		float brPy = vBrLocal.y; // storey-relative, like brWy
-		if ( brWy > brPy ) {
-			vec3 brVw = normalize( ( vec4( - vViewPosition, 0.0 ) * viewMatrix ).xyz ); // camera -> fragment, world axes
-			float brPath = cameraPosition.y - uTileOrigin.y >= brWy ? ( brWy - brPy ) / max( abs( brVw.y ), 0.05 ) : length( vViewPosition );
-			vec3 brT = exp( - BR_WATER_SIGMA * min( brPath, 60.0 ) );
-			gl_FragColor.rgb = gl_FragColor.rgb * brT + ( 1.0 - brT ) * brIrrLocal * BR_WATER_INSCATTER * BR_WATER_INSCATTER_TINT;
-		}
+	if ( brSubInfo.x > 0.0 ) {
+		// submerged (package E, chunks/water.ts brSubInfo: shells, and props through the wall mask): the water body's
+		// medium (WATER_MEDIA of the kind) along the REFRACTED view path, with the transport coefficient kappa (the
+		// forward-scattered light arrives along the view ray here: no blur without the refraction pass). The baked
+		// light reached the surface through the water above it (downwelling, x BR_WM_DOWN; not the surface's own
+		// emission), and the ambient light field single-scatters into the path: closed form of the integral over the
+		// path, where the depth grows with s cos(theta_t).
+		int brWk = int( brSubInfo.y + 0.5 );
+		vec3 brKap = BR_WM_SA[ brWk ] + ( 1.0 - BR_WM_G[ brWk ] ) * BR_WM_SS[ brWk ];
+		float brSs = ( 1.0 - BR_WM_G[ brWk ] ) * BR_WM_SS[ brWk ];
+		vec3 brVw = normalize( ( vec4( - vViewPosition, 0.0 ) * viewMatrix ).xyz ); // camera -> fragment, world axes
+		float brCt = sqrt( max( 1.0 - ( 1.0 - brVw.y * brVw.y ) * 0.5625, 0.0 ) ); // cos of the refracted view ray
+		bool brAbove = cameraPosition.y - uTileOrigin.y >= brSubInfo.z;
+		float brPath = min( brAbove ? brSubInfo.x / max( brCt, 0.05 ) : length( vViewPosition ), 60.0 );
+		vec3 brT = exp( - brKap * brPath );
+		vec3 brK = brKap * ( 1.0 + BR_WM_DOWN * ( brAbove ? brCt : 0.0 ) );
+		vec3 brLin = brSs * brIrrLocal / BR_PI * BR_WM_TINT[ brWk ] * ( 1.0 - exp( - brK * brPath ) ) / brK;
+		vec3 brLit = max( gl_FragColor.rgb - totalEmissiveRadiance, vec3( 0.0 ) );
+		gl_FragColor.rgb = ( brLit * exp( - BR_WM_DOWN * brKap * brSubInfo.x ) + totalEmissiveRadiance ) * brT + brLin;
 	}
 	gl_FragColor.rgb = brHaze( gl_FragColor.rgb, brIrrLocal, - vViewPosition );
 }

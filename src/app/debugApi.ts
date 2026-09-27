@@ -20,6 +20,7 @@ import { createPerfRecorder } from './perf.ts';
 import { createGpuProfiler, hookAll } from './gpuProfile.ts';
 import { postInternals } from '../post/PostStack.ts';
 import { asciiAround, cellInfoAt } from './worldDebug.ts';
+import type { WaterRippleStats } from '../materials/water/WaterRipples.ts';
 import { gotoStoreyOrder } from './urlParams.ts';
 
 export const APP_VERSION = '1.0.0';
@@ -324,7 +325,7 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
             // between frames: suspend the frame timer (its query would enclose the segments), then hook
             gpu = core.gpu;
             core.gpu = null;
-            unhook = hookAll(prof, { renderer: r, passes: [...pi.passes], finalPass: pi.finalPass, reflection: s.reflection });
+            unhook = hookAll(prof, { renderer: r, passes: [...pi.passes], finalPass: pi.finalPass, reflection: s.reflection, ripples: s.ripples });
             return false;
           }
           prof.poll();
@@ -414,5 +415,20 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
       return null;
     },
   };
+  // package E: __backrooms.water, the ripple simulation (time= freezes it: poke, then step to see rings)
+  const water: WaterDebugApi = {
+    poke(dx, dz, amp = 1) { core.sys?.ripples.poke(Number(dx) || 0, Number(dz) || 0, Number.isFinite(amp) ? amp : 1); },
+    step(n) { core.sys?.ripples.step(Number(n) || 0); },
+    stats: () => core.sys?.ripples.stats() ?? null,
+  };
+  (api as BackroomsDebugAPI & { water: WaterDebugApi }).water = water;
   return { api, log: push };
+}
+
+/** __backrooms.water: poke(dx, dz, amp) queues a footstep-sized impulse x amp at dx m right / dz m ahead of the eye;
+ * step(n) runs n 1/60 s steps now; stats() describes the window (plane, kind, origin, steps, drips). */
+export interface WaterDebugApi {
+  poke(dx: number, dz: number, amp?: number): void;
+  step(n: number): void;
+  stats(): WaterRippleStats | null;
 }

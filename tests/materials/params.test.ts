@@ -167,11 +167,12 @@ describe('WP9 parameters', () => {
     // variant + quality defines: SurfaceMaterial.applySurfaceDefines / WaterMaterial.applyWaterDefines (every A.0 flag)
     const switches = new Set(['BR_SHELL', 'BR_PROPS', 'BR_DECAL', 'BR_LV', 'BR_FLOOR_REFL', 'BR_AIRLIGHT', 'BR_WATER', 'BR_LITE',
       'BR_SSR', 'BR_PROBE', 'BR_SSAO', 'BR_CS_STEPS', 'BR_PUDDLES', 'BR_DETAIL_MAPS', 'BR_POM', 'BR_SPEC_AA', 'BR_WATER_VOL',
-      'BR_WATER_WETBAND', 'BR_CAUSTICS_FULL', 'BR_VOLUMETRIC', 'BR_BOUNCE_N']);
+      'BR_WATER_WETBAND', 'BR_CAUSTICS_FULL', 'BR_VOLUMETRIC', 'BR_BOUNCE_N', 'BR_WATER_WAVES', 'BR_WATER_RIPPLE',
+      'BR_WATER_DEBRIS']);
     for (const src of [buildSurfaceFragment(ShaderLib.physical.fragmentShader), waterFragmentGlsl()]) {
       const used = new Set(src.match(/\bBR_[A-Z0-9_]+\b/g) ?? []);
       const defined = new Set([...(src.match(/#define (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.slice(8)),
-        ...(src.match(/const (?:int|float) (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.replace(/const (?:int|float) /, ''))]);
+        ...(src.match(/const (?:int|float|vec[234]|mat2) (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.replace(/const (?:int|float|vec[234]|mat2) /, ''))]);
       const missing = [...used].filter((u) => !defined.has(u) && !switches.has(u));
       expect(missing).toEqual([]);
       expect(src).toContain('const float BR_LV_Y[6]');

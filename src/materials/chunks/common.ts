@@ -195,9 +195,12 @@ float brCausticLayer( vec2 p, int P, float t, uint salt ) {
 	}
 	return sqrt( f2 ) - sqrt( f1 );
 }
-// depth (m) widens the filaments (the focus spreads below the focal plane); sc scales the cells (1 or 2: both keep
-// the lattice periods integral over NOISE_WRAP). Mean over the plane ~ brCausticMean( depth ).
-float brCaustics( vec2 xz, float t, float depth, float sc ) {
+// Filament width (lattice units) w0 + wd for the coarse layer, w0 + 0.04 + wd for the fine one: wd widens them
+// with depth (the focus spreads below the focal plane), w0 is the source sharpness (0.26 for the large ceiling
+// panels over pool floors, 0.08 for the point-like flashlight, 0.18 above the water). sc scales the cells (1 or 2
+// keep the lattice periods integral over NOISE_WRAP; other scales repeat only at the wrap). Mean over the plane:
+// brCausticMeanW( w0 + wd ).
+float brCausticsW( vec2 xz, float t, float wd, float sc, float w0 ) {
 	// domain warp (period 4 lattice units: divides both lattice periods) bends the straight Voronoi edges into the
 	// curved filaments of real refraction caustics
 	vec2 p1 = xz / ( 0.6 * sc );
@@ -206,13 +209,32 @@ float brCaustics( vec2 xz, float t, float depth, float sc ) {
 	p2 += 0.18 * sin( 1.5707963 * p2.yx + vec2( - t * 0.61, t * 0.83 ) );
 	float e1 = brCausticLayer( p1, int( 2048.0 / sc + 0.5 ), t * 0.9, 11u );
 	float e2 = brCausticLayer( p2, int( 4096.0 / sc + 0.5 ), t * 1.3, 23u );
-	float wd = 0.5 * depth;
-	float c1 = pow( 1.0 - smoothstep( 0.0, 0.26 + wd, e1 ), 1.6 );
-	float c2 = pow( 1.0 - smoothstep( 0.0, 0.3 + wd, e2 ), 1.6 );
+	float c1 = pow( 1.0 - smoothstep( 0.0, w0 + wd, e1 ), 1.6 );
+	float c2 = pow( 1.0 - smoothstep( 0.0, w0 + 0.04 + wd, e2 ), 1.6 );
 	// filaments where both layers focus are much brighter (sum plus a product term)
 	return c1 * 0.6 + c2 * 0.35 + c1 * c2 * 0.9;
 }
+// the pool-floor pattern: depth (m) widens the filaments by 0.5 per metre. Mean ~ brCausticMean( depth ).
+float brCaustics( vec2 xz, float t, float depth, float sc ) { return brCausticsW( xz, t, 0.5 * depth, sc, 0.26 ); }
 float brCausticMean( float depth ) { return 0.3 + depth * ( 0.63 - 0.07 * depth ); }
+// mean of brCausticsW over the plane for a coarse-layer width w (cubic fit of the TS twin within 0.006 on
+// w in [0.04, 1.3]: tests/materials/waterOptics.test.ts)
+float brCausticMeanW( float w ) { w = clamp( w, 0.04, 1.3 ); return 0.0102 + w * ( 1.0431 + w * ( 0.3895 - 0.3278 * w ) ); }
+
+// ---- package E: the water of a wall-mask cell (bake/volume.ts bakeWallMask: g/a = waterCm + 32768, b = kind + 1).
+// c = tile cell (the mask covers the tile and a 1-cell ring); wy = the water surface (storey-relative m, = vBrLocal.y
+// units), kind = WaterRect kind (0 pool, 1 flooded, 2 film). False for dry / SOLID cells and outside the mask.
+bool brWaterCell( ivec2 c, out float wy, out int kind ) {
+	wy = 0.0;
+	kind = 0;
+	if ( c.x < - 1 || c.y < - 1 || c.x > 16 || c.y > 16 ) return false;
+	vec4 m = texelFetch( uVolMask, c + 1, 0 );
+	int k = int( m.b * 255.0 + 0.5 );
+	if ( k == 0 ) return false;
+	wy = ( floor( m.g * 255.0 + 0.5 ) * 256.0 + floor( m.a * 255.0 + 0.5 ) - 32768.0 ) * 0.01;
+	kind = k - 1;
+	return true;
+}
 
 // ---- ordered dither for the fade-in
 float brBayer4( vec2 fc ) {

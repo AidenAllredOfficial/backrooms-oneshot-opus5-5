@@ -444,4 +444,6 @@ if ( vBrEmit > 0.0 ) {
 } else {
 	totalEmissiveRadiance = vec3( 0.0 );
 }
+vec4 brSubInfo = brWaterSubInfo( brF, brSubDepth, vBrTint.a, brNWg ); // package E: water info (chunks/water.ts)
+#define getSpotLightInfo( l, p, d ) brSpotInfoW( l, p, d, brSubInfo )
 `;

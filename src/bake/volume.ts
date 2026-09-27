@@ -20,6 +20,7 @@ import { CELL, LV } from '../core/constants.ts';
 import { EDGE_OCCLUDES, edgeOccludesAt } from '../core/edges.ts';
 import { HALF_MAX, toHalf } from '../core/half.ts';
 import { CellFlag } from '../core/ids.ts';
+import { NO_WATER } from '../core/layout.ts';
 import type { BakeTerm } from '../core/worker.ts';
 import { formFactor } from './areaLight.ts';
 import { aoAt, aoOut } from './ao.ts';
@@ -218,10 +219,34 @@ function dilate3D(valid: Uint8Array, arrs: (Float64Array | null)[], comps: numbe
   }
 }
 
-/** Wall mask texture: 18 x 18 RGBA8, r = N1 E2 S4 W8. */
+/** WaterRect kind (0 pool, 1 flooded, 2 film) of the water over neighbourhood cell (li, lj), or 0 when no rect
+ * covers its centre (rects cover every water cell: world/zones/deepcommon.ts emitWaterRects). */
+function waterKindAt(job: BakeJob, li: number, lj: number): number {
+  const dcx = li < 0 ? -1 : li >= 32 ? 1 : 0, dcz = lj < 0 ? -1 : lj >= 32 ? 1 : 0;
+  const l = job.nb.get(dcx, dcz);
+  const x = (li - dcx * 32 + 0.5) * CELL, z = (lj - dcz * 32 + 0.5) * CELL;
+  for (const w of l.water) {
+    if (x >= Math.min(w.x0, w.x1) && x < Math.max(w.x0, w.x1) && z >= Math.min(w.z0, w.z1) && z < Math.max(w.z0, w.z1)) return w.kind;
+  }
+  return 0;
+}
+
+/** Wall mask texture: 18 x 18 RGBA8, r = N1 E2 S4 W8; package E's water channels: g/a = the cell's water surface
+ * (waterCm + 32768: high byte, low byte), b = WaterRect kind + 1 (0 = dry or SOLID). Shaders: brWaterCell. */
 export function bakeWallMask(job: BakeJob): Uint8Array {
   const g = job.g, n = g.n;
   const out = new Uint8Array(18 * 18 * 4);
+  for (let lj = -1; lj <= 16; lj++) {
+    for (let li = -1; li <= 16; li++) {
+      const ni = job.li0 + li, nj = job.lj0 + lj;
+      const w = job.nb.waterCm(ni, nj);
+      if (w === NO_WATER || (job.nb.flags(ni, nj) & CellFlag.SOLID) !== 0) continue;
+      const v = w + 32768, o = ((lj + 1) * 18 + (li + 1)) * 4;
+      out[o + 1] = v >> 8;
+      out[o + 2] = waterKindAt(job, ni, nj) + 1;
+      out[o + 3] = v & 255;
+    }
+  }
   const occX = (X: number, row: number, y: number): boolean => {
     const e = row * (n + 1) + X, k = g.exKind[e];
     return k !== 0 && EDGE_OCCLUDES[k] && edgeOccludesAt(k, g.exA[e], g.exB[e], CELL / 2, y, g.exSill[e]);
