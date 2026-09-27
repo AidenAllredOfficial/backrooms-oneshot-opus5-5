@@ -4170,12 +4170,15 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - **Parallax occlusion mapping** (package B, `BR_POM` 1 high / 2 ultra, shell only, layers with
     `SURFACE_PHYS.pomTop` > 0: CMU 0.8, cast concrete wall 0.92, pool tile 0.9, mosaic 0.7, metal deck 1). The flat face
     is the relief top; the view ray is marched down through `normal.a` from the geometric surface in steps of at most
-    1.5 px of visible parallax (4-12 steps on high, 4-16 on ultra), then refined by one secant step. It runs only where
-    the parallax exceeds 0.5 px (fading in to 1.5 px) and never in the planar mirror pass. Only the texture lookup
-    moves (`brUv`): depth, discards and silhouettes stay those of the flat face, so the depth prepass is unchanged, and
-    the lightmap / mask lookups stay at the unshifted point. The unshifted footprint (`brDx/brDy`) keeps the gradients
-    continuous. Rotated physical tiles go through the shared `brRotUv` (the march and the shading re-derive the cell of
-    the shifted uv identically). The march state (`brPomT/B/N`, depth, hit height, fade) feeds the self-shadow below.
+    1.5 display pixels of visible parallax (4-12 steps on high; 4-16 on ultra, 2.25 render pixels each at its 1.5x
+    scale), then refined by one secant step. It runs only where the parallax exceeds 0.5 px (fading in to 1.5 px) and
+    never in the planar mirror pass. Only the texture lookup moves (`brUv`): depth, discards and silhouettes stay those
+    of the flat face, so the depth prepass is unchanged, and the lightmap / mask lookups stay at the unshifted point.
+    The unshifted footprint (`brDx/brDy`) keeps the shading gradients continuous; the march's own height lookups use an
+    isotropic LOD of the footprint's area (trilinear, not anisotropic: 5-20 lookups per pixel). Rotated physical tiles
+    go through the shared `brRotUv`, cached per cell and re-derived when a ray enters another cell, so the march and
+    the shading read the same tiles. `pomTop` must cover the per-texel relief maximum (a texel above the top casts false
+    self-shadows). The march state (`brPomT/B/N`, depth, hit height, fade) feeds the self-shadow below.
   - **Detail maps** (package B, `BR_DETAIL_MAPS` high / ultra, not the decal variant; `textures/detail.ts`). One
     512² RGBA8 array of 11 + 1 layers over a 0.3 m repeat (0.59 mm texels): world-anchored on the shell (`brS2 / 0.3`,
     periodic over NOISE_WRAP and STOREY_PITCH), part-local metres on props (`vBrUv · round(repeat / 0.3)`). The layer and
