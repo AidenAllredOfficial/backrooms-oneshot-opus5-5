@@ -4168,28 +4168,31 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - **Hex (stochastic) tiling** for layers with `hexTile > 0` (CARPET_L0, CONCRETE_FLOOR): offset-only (no rotation) hashed per hex cell of `hexTile` metres, 3-way blend with a 0.15 m feathered edge, variance-preserving blend; same derivatives for all samples.
   - **Macro variation:** value (±6%) and hue (±2%) only, from low-frequency world noise and the coarse-mip (level ≥ 6) luminance of the layer. No second full-detail sample (it ghosts patterned layers at the wrong scale).
   - **Parallax occlusion mapping** (package B, `BR_POM` 1 high / 2 ultra, shell only, layers with
-    `SURFACE_PHYS.pomTop` > 0: CMU 0.8, cast concrete wall 0.92, pool tile 0.9, mosaic 0.7, metal deck 1). The flat face
+    `SURFACE_PHYS.pomTop > 0`: CMU 0.8, cast concrete wall 0.92, pool tile 0.9, mosaic 0.7, metal deck 1). The flat face
     is the relief top; the view ray is marched down through `normal.a` from the geometric surface in steps of at most
-    1.5 display pixels of visible parallax (4-12 steps on high; 4-16 on ultra, 2.25 render pixels each at its 1.5x
-    scale), then refined by one secant step. It runs only where the parallax exceeds 0.5 px (fading in to 1.5 px) and
-    never in the planar mirror pass. Only the texture lookup moves (`brUv`): depth, discards and silhouettes stay those
-    of the flat face, so the depth prepass is unchanged, and the lightmap / mask lookups stay at the unshifted point.
-    The unshifted footprint (`brDx/brDy`) keeps the shading gradients continuous; the march's own height lookups use an
-    isotropic LOD of the footprint's area (trilinear, not anisotropic: 5-20 lookups per pixel). Rotated physical tiles
-    go through the shared `brRotUv`, cached per cell and re-derived when a ray enters another cell, so the march and
-    the shading read the same tiles. `pomTop` must cover the per-texel relief maximum (a texel above the top casts false
-    self-shadows). The march state (`brPomT/B/N`, depth, hit height, fade) feeds the self-shadow below.
-  - **Detail maps** (package B, `BR_DETAIL_MAPS` high / ultra, not the decal variant; `textures/detail.ts`). One
-    512² RGBA8 array of 11 + 1 layers over a 0.3 m repeat (0.59 mm texels): world-anchored on the shell (`brS2 / 0.3`,
-    periodic over NOISE_WRAP and STOREY_PITCH), part-local metres on props (`vBrUv · round(repeat / 0.3)`). The layer and
-    strength come from `SURFACE_PHYS.det/detS` (`uBrLayerD.xy`). The pack is LEAN: rg = mean slope / S, b = albedo
-    multiplier / 2, a = E[|slope|²] / 2S², so the box-filtered mips keep exact first and second moments. The shader
-    multiplies the albedo by `t.b / mean.b` (mean-preserving: the 1x1 mip is the layer mean), adds `roughK·(1 − am)`
-    roughness in pits and gaps, hands the mean slope to the normal pass and the variance E[s²] − |E[s]|² to the
-    roughness. Between 8 and 16 detail texels per pixel the texel fades to the layer mean and the fetch is skipped
-    beyond: far away the detail survives as micro-roughness only, never as a fade band or sparkle. Standing water drops
-    the detail slope and variance (a film keeps 30 % of the variance) and carries micro-ripples from layer D11 (0.6 m
-    repeat, drifting a few mm/s, slope × 0.012 × puddle).
+    1.5 display pixels of visible parallax (2-12 steps on high; 2-16 on ultra, 2.25 render pixels each at its 1.5x
+    scale; the last step is exactly the bottom, so every ray hits), then refined by one secant step. It runs only where
+    the parallax exceeds 0.5 px (fading in to 1.5 px), never in the planar mirror pass and never on submerged faces.
+    Only the texture lookup moves (`brUv`): depth, discards and silhouettes stay those of the flat face, so the depth
+    prepass is unchanged, and the lightmap / mask lookups stay at the unshifted point. The unshifted footprint
+    (`brDx/brDy`) keeps the shading gradients continuous; the march's own height lookups use an isotropic LOD of the
+    footprint's area (trilinear, not anisotropic: 5-20 lookups per pixel). Rotated physical tiles go through the shared
+    `brRotUv`, cached per cell and re-derived when a ray enters another cell, so the march and the shading read the same
+    tiles. `pomTop` must cover the per-texel relief maximum (a texel above the top casts false self-shadows). The march
+    state (`brPomT/B/N`, depth, hit height, fade) feeds the self-shadow below.
+  - **Detail maps** (package B, `BR_DETAIL_MAPS` high / ultra, not the decal variant; `textures/detail.ts`). One 512²
+    RGBA8 array of 11 + 1 layers over a 0.3 m repeat (0.59 mm texels): world-anchored on the shell (the tile-local
+    `brSurf2D(vBrLocal) / 0.3`: 0.3 m divides TILE_SIZE and STOREY_PITCH, so this is the world pattern at full float
+    precision, where `brS2` would reach 4096 uv units), part-local metres on props (`vBrUv · round(repeat / 0.3)`). The
+    layer and strength come from `SURFACE_PHYS.det/detS` (`uBrLayerD.xy`). The pack is LEAN: rg = mean slope / S, b =
+    albedo multiplier / 2, a = E[|slope|²] / 2S², so the box-filtered mips keep exact first and second moments. The
+    shader multiplies the albedo by `t.b / mean.b` (mean-preserving: the 1x1 mip is the layer mean), adds
+    `roughK·(1 − am)` roughness in pits and gaps, hands the mean slope to the normal pass and the variance E[s²] −
+    |E[s]|² to the roughness. Between 8 and 16 detail texels per pixel the texel fades to the layer mean and the fetch
+    is skipped beyond: far away the detail survives as micro-roughness only, never as a fade band or sparkle. Standing
+    water drops the detail slope and variance (a film keeps 30 % of the variance) and carries micro-ripples from layer
+    D11 on the shell (0.6 m repeat, drifting a few mm/s, normalised slope × `TUNE.RIPPLE` 0.004 on deeper water only,
+    faded out between 1.5 and 4 ripple texels per pixel).
   - `diffuseColor.rgb = albedo·vBrTint.rgb`.
   - DECAL flag in the shell/props variants: `if (albedo.a < 0.5) discard;` (grates, sign faces). The decal variant uses soft alpha.
   - **Grime** by `LAYER_DEFS.grime` profile (compiled into a small switch on a per-layer uniform table `uLayerParams[28]`). High-frequency `grime` texture thresholded against `lmMask`:
@@ -4258,7 +4261,8 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
     `chunks/pom.ts FRAG_DIRVIS_GLSL`): micro-shadowing (Chan 2018, not lite) `clamp(|N·L| + 2·ao² − 1, 0, 1)` with the
     texture cavity AO, so grout, joints, pile gaps and fissures shadow the baked light as it grazes the mapped normal;
-    on ultra (`BR_POM` 2) the parallax hit also marches 4 steps toward the light up to the relief top (occlusion × 8 per
+    on ultra (`BR_POM` 2) the parallax hit also marches up to 4 steps toward the light up to the relief top (step
+    midpoints, one per march step length; skipped when the shadow would be under half a pixel long; occlusion × 8 per
     unit of height above the ray, × the parallax fade, × w: a less directional bake is shadowed less).
   - `RE_IndirectSpecular` (three) then uses `radiance`/`iblIrradiance` with its multiscatter term; `computeSpecularOcclusion` with the baked AO (`aomap_fragment`, below) keeps corners from glowing.
   - The **props** variant samples the light volume instead: `p = vBrLocal`, uvw from `p`.
