@@ -7,7 +7,9 @@
 //     player tile's light volume (CPU half data, trilinear, wall-clamped, tower y-wrap); farColor (slow local mean
 //     irradiance x haze x FAR_FRACTION x FAR_WARM); edge fog; flashlight/flicker hints for the post stack;
 //     writes the MaterialGlobals and scene.background;
-//  4. flashlight rig.
+//  4. flashlight rig;
+//  5. flashlight bounce (package F, lighting/FlashlightBounce.ts): QualityConfig.flashlightBounce VPLs at the
+//     beam's hit points, uploaded to the fb* globals relative to this frame's eye (URL bounce=0 disables them).
 // Allocation-free per frame (payload objects for bus events are reused: handlers must copy what they keep).
 
 import * as THREE from 'three';
@@ -29,8 +31,13 @@ import { copyParams, createAtmosphereBlender, newAtmosphereState } from './atmos
 import { LANDMARK_EV_MIN } from './atmospheres.ts';
 import { createFlashlight } from './Flashlight.ts';
 import type { FlashlightRig } from './Flashlight.ts';
+import { createFlashlightBounce } from './FlashlightBounce.ts';
+import type { BounceInput } from './FlashlightBounce.ts';
 
 export const FLICKER_MODE_INDEX: Readonly<Record<FlickerMode, number>> = { standard: 0, reduced: 1, off: 2 };
+/** Camcorder metering while the torch is on (AtmosphereState.flashlight -> AutoExposurePass centre focus). Full spot
+ * metering (1) would expose for the small hot core and crush the spill that shows the room. */
+export const FLASH_METER_FOCUS = 0.6;
 /** Fraction of the camera-local inscatter used as the far / clear colour (edge fog target). R2-post: 0.3 -> 0.14 and
  * warmer (FAR_WARM), from a slowly averaged local irradiance, so the streaming edge falls into a warm grey-brown
  * gloom instead of a flat grey-green wall (quality=low puts the edge fog at ~31 m). */
@@ -104,6 +111,31 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
   let quality = q;
   let mode: FlickerMode = s.flicker;
 
+  // ---- flashlight bounce (package F)
+  const bounce = createFlashlightBounce();
+  let bounceOn = true; // URL bounce=0 (Systems.features.bounce) turns it off
+  const bin: BounceInput = {
+    n: 0, ox: 0, oy: 0, oz: 0, dx: 0, dy: 0, dz: -1, rx: 1, ry: 0, rz: 0, cr: 1, cg: 1, cb: 1, eyeX: 0, eyeY: 0, eyeZ: 0, dt: 0,
+  };
+  const updateBounce = (player: PlayerState, camera: THREE.Camera, dt: number, world: WorldQuery): void => {
+    const L = flashlight.light;
+    bin.n = flashlight.on && bounceOn ? quality.flashlightBounce : 0;
+    if (bin.n > 0) {
+      const p = L.position, tg = L.target.position, b = flashlight.basis;
+      bin.ox = p.x; bin.oy = p.y; bin.oz = p.z;
+      bin.dx = tg.x - p.x; bin.dy = tg.y - p.y; bin.dz = tg.z - p.z;
+      bin.rx = b.rx; bin.ry = b.ry; bin.rz = b.rz;
+      bin.cr = L.color.r; bin.cg = L.color.g; bin.cb = L.color.b;
+      // the camera is placed at the eye after this update (applyToCamera): upload relative to this frame's eye
+      const eye = Number.isFinite(player.eyeX);
+      bin.eyeX = eye ? player.eyeX : camera.position.x;
+      bin.eyeY = eye ? player.eyeY : camera.position.y;
+      bin.eyeZ = eye ? player.eyeZ : camera.position.z;
+    }
+    bin.dt = dt;
+    bounce.update(bin, world, globals);
+  };
+
   // ---- dynamic light state (per id)
   const stamp = new Map<number, number>(); // id -> frame of last evaluation
   const cur = new Map<number, number>(); // id -> intensity this frame
@@ -168,6 +200,7 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
       overrides.clear(); stamp.clear(); cur.clear(); onState.clear(); pendingToggle.clear();
       lastEyeX = lastEyeZ = NaN;
       flashlight.set(false);
+      bounce.reset();
     },
     flashlight,
     update(t: number, dt: number, tiles: Iterable<TileRuntime>, player: PlayerState, camera: THREE.Camera, world: WorldQuery) {
@@ -269,13 +302,15 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
         }
       }
       atm.camIrradiance[0] = camIrr[0]; atm.camIrradiance[1] = camIrr[1]; atm.camIrradiance[2] = camIrr[2];
-      atm.flashlight = flashlight.on ? 1 : 0;
+      atm.flashlight = flashlight.on ? FLASH_METER_FOCUS : 0;
       atm.flickerMode = FLICKER_MODE_INDEX[mode];
       setEdgeFog();
       writeGlobals();
 
       // 4. flashlight
       flashlight.update(player, camera, dt);
+      // 5. its bounce off what the beam hits (after the rig: this frame's pose)
+      updateBounce(player, camera, dt, world);
     },
     intensityOf(lightId) {
       const ov = overrides.get(lightId);
@@ -301,14 +336,29 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
       writeGlobals();
     },
   };
-  // QA counters (DebugStats.lights.dynamicResident) without widening the contract
-  lightingInfo.set(rt, { get dynamicResident() { return dynamicResident; }, get mode() { return mode; } });
+  // QA counters (DebugStats.lights.dynamicResident) and the bounce switch, without widening the contract
+  lightingInfo.set(rt, {
+    get dynamicResident() { return dynamicResident; },
+    get mode() { return mode; },
+    get bounceVpls() { return bounce.active; },
+    setBounce(on: boolean) { bounceOn = on; },
+  });
   return rt;
 }
 
-const lightingInfo = new WeakMap<LightingRuntime, { readonly dynamicResident: number; readonly mode: FlickerMode }>();
+interface LightingInfo {
+  readonly dynamicResident: number;
+  readonly mode: FlickerMode;
+  readonly bounceVpls: number;
+  setBounce(on: boolean): void;
+}
+const lightingInfo = new WeakMap<LightingRuntime, LightingInfo>();
 /** Debug counters of a runtime created by createLightingRuntime (WP14 F3 overlay / stats). */
-export function lightingStats(rt: LightingRuntime): { dynamicResident: number; flickerMode: FlickerMode } {
+export function lightingStats(rt: LightingRuntime): { dynamicResident: number; flickerMode: FlickerMode; bounceVpls: number } {
   const i = lightingInfo.get(rt);
-  return { dynamicResident: i ? i.dynamicResident : 0, flickerMode: i ? i.mode : 'standard' };
+  return { dynamicResident: i ? i.dynamicResident : 0, flickerMode: i ? i.mode : 'standard', bounceVpls: i ? i.bounceVpls : 0 };
+}
+/** URL bounce=0 / Systems.features.bounce: enable or disable the flashlight bounce VPLs (on by default). */
+export function setFlashlightBounce(rt: LightingRuntime, on: boolean): void {
+  lightingInfo.get(rt)?.setBounce(on);
 }

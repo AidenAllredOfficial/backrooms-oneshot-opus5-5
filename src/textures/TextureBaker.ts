@@ -9,7 +9,8 @@
 //  - per layer: HEIGHT -> scratch, ALBEDO -> albedo[L], ORMH (cavity AO from the scratch) -> ormh[L],
 //    normal (wrap-sampled Scharr over the scratch x heightScale x normalStrength) -> normal[L];
 //  - yield to the main thread every 4 layers; progress reported;
-//  - grime (512^2 RGBA8), water normals (512^2 RG8), cookie (256^2 RGBA8).
+//  - grime (512^2 RGBA8), water normals (512^2 RG8), cookie (512^2 RGBA16F: the flashlight's 7 % spill gradient
+//    bands in 8 bits).
 // Compile and generation times are logged separately (textures.compileMs / textures.genMs).
 
 import * as THREE from 'three';
@@ -60,9 +61,10 @@ function arrayTarget(S: number, srgb: boolean, anisotropy: number): THREE.WebGLA
   return rt;
 }
 
-function flatTarget(S: number, format: THREE.PixelFormat, wrap: THREE.Wrapping, anisotropy: number, name: string): THREE.WebGLRenderTarget {
+function flatTarget(S: number, format: THREE.PixelFormat, wrap: THREE.Wrapping, anisotropy: number, name: string,
+  type: THREE.TextureDataType = THREE.UnsignedByteType): THREE.WebGLRenderTarget {
   const rt = new THREE.WebGLRenderTarget(S, S, {
-    type: THREE.UnsignedByteType,
+    type,
     format,
     colorSpace: THREE.NoColorSpace,
     depthBuffer: false,
@@ -89,7 +91,8 @@ export async function generateTextures(renderer: THREE.WebGLRenderer, size: 512 
   ormhRT.texture.name = 'br-ormh';
   const grimeRT = flatTarget(GRIME_SIZE, THREE.RGBAFormat, THREE.RepeatWrapping, anisotropy, 'br-grime');
   const waterRT = flatTarget(WATER_NORMALS_SIZE, THREE.RGFormat, THREE.RepeatWrapping, anisotropy, 'br-water-normals');
-  const cookieRT = flatTarget(COOKIE_SIZE, THREE.RGBAFormat, THREE.ClampToEdgeWrapping, 1, 'br-cookie');
+  // HalfFloat: the renderer already requires EXT_color_buffer_float (RGBA16F is renderable, filterable, mipmappable)
+  const cookieRT = flatTarget(COOKIE_SIZE, THREE.RGBAFormat, THREE.ClampToEdgeWrapping, 1, 'br-cookie', THREE.HalfFloatType);
 
   const gen = createGenerator(renderer, S);
   const packedScratch = gen.packedScratch;
@@ -125,9 +128,10 @@ export async function generateTextures(renderer: THREE.WebGLRenderer, size: 512 
     gen.standalone(gen.water, waterRT, WATER_NORMALS_SIZE);
     gen.standalone(gen.cookie, cookieRT, COOKIE_SIZE);
     renderer.setRenderTarget(null);
-    // wait for the GPU so genMs measures the work, not just its submission
+    // wait for the GPU so genMs measures the work, not just its submission (the read's fence follows every draw
+    // issued so far, the cookie's included; the RGBA8 grime target avoids a half-float readback)
     const probe = new Uint8Array(4);
-    await renderer.readRenderTargetPixelsAsync(cookieRT, 0, 0, 1, 1, probe);
+    await renderer.readRenderTargetPixelsAsync(grimeRT, 0, 0, 1, 1, probe);
     genMs = performance.now() - tg;
   } catch (e) {
     albedoRT.dispose(); normalRT.dispose(); ormhRT.dispose();

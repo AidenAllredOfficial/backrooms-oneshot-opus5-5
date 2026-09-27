@@ -17,9 +17,10 @@ import { DEFAULT_SETTINGS } from '../../src/core/settings.ts';
 import type { FixtureRef, MaterialGlobals, TextureSet, TileRuntime, WorldQuery } from '../../src/core/runtime.ts';
 import { ATMOSPHERES, MOOD_MODS } from '../../src/lighting/atmospheres.ts';
 import { atmosphereTarget, createAtmosphereBlender, newParams } from '../../src/lighting/atmosphereBlend.ts';
-import { createLightingRuntime, FAR_FRACTION, FAR_WARM, sampleLightVolume } from '../../src/lighting/LightingRuntime.ts';
+import { createLightingRuntime, FAR_FRACTION, FAR_WARM, FLASH_METER_FOCUS, sampleLightVolume } from '../../src/lighting/LightingRuntime.ts';
 import { createAnomalyDirector, sparkBurstTime, lightDiesRoll } from '../../src/lighting/anomalyDirector.ts';
-import { FLASHLIGHT } from '../../src/lighting/Flashlight.ts';
+import { FLASHLIGHT, handSway, type FlashlightRig } from '../../src/lighting/Flashlight.ts';
+import { FLASHLIGHT_OPTICS } from '../../src/lighting/flashlightOptics.ts';
 import { createGlobals } from '../../src/materials/MaterialSystem.ts';
 import { LAYER_LATE } from '../../src/materials/shared.ts';
 
@@ -302,7 +303,18 @@ describe('LightingRuntime', () => {
     expect(fl.light.layers.isEnabled(0) && fl.light.layers.isEnabled(LAYER_LATE)).toBe(true);
     expect(fl.light.castShadow).toBe(true);
     expect(fl.light.shadow.camera.far).toBe(FLASHLIGHT.DISTANCE);
-    expect(fl.light.distance).toBe(25);
+    expect(fl.light.distance).toBe(FLASHLIGHT.DISTANCE);
+    // package F optics: one source for the photometry; the cookie spans exactly the cone (focus 1)
+    expect(fl.light.intensity).toBe(0);
+    expect(FLASHLIGHT.CD).toBe(FLASHLIGHT_OPTICS.PEAK_CD);
+    expect(fl.light.angle).toBe(FLASHLIGHT_OPTICS.CONE);
+    expect(fl.light.penumbra).toBe(FLASHLIGHT_OPTICS.PENUMBRA);
+    expect(fl.light.distance).toBe(FLASHLIGHT_OPTICS.RANGE);
+    expect(fl.light.shadow.focus).toBe(FLASHLIGHT_OPTICS.MAP_FOCUS);
+    // three reads the cookie at the normal-biased position: on a wall 0.3 m away that lookup must stay inside the map
+    // wherever the cone lights (else the bare cone shines through outside the cookie)
+    const tanRim = Math.tan(FLASHLIGHT_OPTICS.CONE);
+    expect(tanRim * (1 + FLASHLIGHT.NORMAL_BIAS / 0.3)).toBeLessThan(Math.tan(FLASHLIGHT_OPTICS.CONE * FLASHLIGHT_OPTICS.MAP_FOCUS));
     expect(fl.light.shadow.mapSize.x).toBe(512);
     expect(fl.light.shadow.needsUpdate).toBe(true);
     expect(fl.light.intensity).toBe(0);
@@ -332,6 +344,45 @@ describe('LightingRuntime', () => {
     expect(tx0).toBeGreaterThan(10 - FLASHLIGHT.CONVERGE + 0.25); // not there yet (lags)
     for (let i = 0; i < 40; i++) rt.update(1.016 + i / 60, 1 / 60, [], p, new THREE.PerspectiveCamera(), world());
     expect(fl.light.target.position.x).toBeCloseTo(10 - FLASHLIGHT.CONVERGE, 1);
+  });
+
+  it('flashlight meter focus and hand sway: none on frozen frames, small while walking', () => {
+    const scene = new THREE.Scene();
+    const rt = createLightingRuntime(scene, globals(), textures, QUALITY.high, DEFAULT_SETTINGS, new EventBus<GameEvents>());
+    const fl = rt.flashlight as FlashlightRig;
+    const p = player(10, 20);
+    p.eyeX = 10; p.eyeY = 1.62; p.eyeZ = 20; p.camYaw = 0.3; p.camPitch = -0.1; p.camRoll = 0;
+    fl.set(true);
+    rt.update(1, 0, [], p, new THREE.PerspectiveCamera(), world());
+    expect(rt.atmosphere().flashlight).toBe(FLASH_METER_FOCUS);
+    // the plain aim of the harness (no gait) as the reference
+    const ref = new THREE.Vector3();
+    fl.aim(10, 1.62, 20, 0.3, -0.1, 0, 0);
+    ref.copy(fl.light.target.position);
+    // frozen time (dt = 0) with a moving, tired player: no sway at all
+    p.speed = 4; p.stridePhase = 0.5; p.fatigue = 1;
+    rt.update(1, 0, [], p, new THREE.PerspectiveCamera(), world());
+    expect(fl.light.target.position.distanceTo(ref)).toBeLessThan(1e-12);
+    // walking at 4 m/s for 6 s: the aim sways, by less than 0.012 rad
+    const dir = new THREE.Vector3();
+    const refDir = ref.clone().sub(fl.light.position).normalize();
+    let maxA = 0;
+    for (let i = 0; i < 360; i++) {
+      p.stridePhase += 4 / 60 / 0.75; // ~0.75 m per step
+      rt.update(1 + i / 60, 1 / 60, [], p, new THREE.PerspectiveCamera(), world());
+      dir.copy(fl.light.target.position).sub(fl.light.position).normalize();
+      maxA = Math.max(maxA, dir.angleTo(refDir));
+    }
+    expect(maxA).toBeGreaterThan(0.003);
+    expect(maxA).toBeLessThan(0.012);
+    // the sway follows handSway exactly: zero at the start, standing still
+    const out = new Float64Array(2);
+    handSway(0, { speed: 0, stridePhase: 0.3, fatigue: 0.5 }, out);
+    expect([out[0], out[1]]).toEqual([0, 0]);
+    // off: the meter returns to the normal centre-weighted average
+    fl.set(false);
+    rt.update(8, 1 / 60, [], p, new THREE.PerspectiveCamera(), world());
+    expect(rt.atmosphere().flashlight).toBe(0);
   });
 });
 

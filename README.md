@@ -179,7 +179,9 @@ and shaders are not built twice. Under XWayland the loss does not happen, and `n
   13 small vignettes (a chair facing a wall, a ringing phone, an open car), anomalies, and props.
 - **Lighting.** A worker pool bakes the lighting per tile: direct light from every fixture, indirect light via probes,
   and ambient occlusion. A fast preview bake appears first and the full bake replaces it. The flashlight is the only
-  runtime light. Flickering fixtures are driven by shader uniforms on top of the baked result.
+  runtime light: an LED reflector beam (hot core, phosphor ring, flat spill, crisp rim, lens dirt) whose lit patch
+  bounces a soft fill into the room on medium and above. Flickering fixtures are driven by shader uniforms on top of
+  the baked result.
 - **Audio.** All sound is synthesized: fluorescent hum, footsteps by surface, room reverb, and sounds that bend
   around doorways.
 

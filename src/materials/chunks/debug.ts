@@ -61,7 +61,7 @@ vec3 brDbg = vec3( 0.0 );
 	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( 0.0 ); // package B
 	else if ( dv == ${DebugView.HEIGHT} ) brDbg = vec3( 0.0 ); // package B
 	else if ( dv == ${DebugView.VOLUMETRIC} ) brDbg = vec3( 0.0 ); // package F
-	else if ( dv == ${DebugView.BOUNCE} ) brDbg = vec3( 0.0 ); // package F
+	else if ( dv == ${DebugView.BOUNCE} ) brDbg = brFbE / BR_FB_DEBUG_LUX; // package F: flashlight bounce irradiance
 	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E
 	else if ( dv == ${DebugView.PROBE} ) brDbg = vec3( 0.0 ); // package D
 	else if ( dv == ${DebugView.SPECW} ) brDbg = vec3( 0.0 ); // package D
