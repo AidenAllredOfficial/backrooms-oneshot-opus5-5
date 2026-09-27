@@ -43,7 +43,8 @@ ${SSR_COMPOSITE_DEBUG}
 export function createMrtCompositeUniforms(): Record<string, THREE.IUniform> {
   return {
     tC0: { value: null }, tS1: { value: null }, tN2: { value: null },
-    tSsr: { value: null }, tDepth: { value: null }, uSsrP: { value: new THREE.Vector4() }, uLin: { value: new THREE.Vector3(1, 1, 1) },
+    tSsr: { value: null }, tMeta: { value: null }, tDepth: { value: null }, uSsrP: { value: new THREE.Vector4() },
+    uLin: { value: new THREE.Vector3(1, 1, 1) },
   };
 }
 
@@ -51,11 +52,14 @@ export class MrtComposite {
   readonly material = quadMaterial('br-mrt-composite', MRT_COMPOSITE_FRAG, {}, createMrtCompositeUniforms());
   private readonly quad = new FullscreenQuad();
   private ssr: THREE.Texture | null = null;
+  private meta: THREE.Texture | null = null;
   private debug = 0;
 
-  /** This frame's reflection (the SSR hook calls it before the composite; consumed by the next render). */
-  setReflection(tex: THREE.Texture | null, camera: THREE.PerspectiveCamera): void {
+  /** This frame's reflection and its metadata (the SSR hook calls it before the composite; consumed by the next
+   * render). */
+  setReflection(tex: THREE.Texture | null, meta: THREE.Texture | null, camera: THREE.PerspectiveCamera): void {
     this.ssr = tex;
+    this.meta = meta;
     (this.material.uniforms.uLin.value as THREE.Vector3).set(camera.near * camera.far, camera.far - camera.near, camera.far);
   }
 
@@ -72,9 +76,12 @@ export class MrtComposite {
     u.tN2.value = src.textures[2];
     u.tDepth.value = src.depthTexture;
     u.tSsr.value = this.ssr;
-    (u.uSsrP.value as THREE.Vector4).set(this.ssr ? 1 : 0, this.ssr ? this.debug : 0, 0, 0);
+    u.tMeta.value = this.meta;
+    const on = this.ssr !== null && this.meta !== null;
+    (u.uSsrP.value as THREE.Vector4).set(on ? 1 : 0, on ? this.debug : 0, 0, 0);
     this.quad.render(renderer, this.material, dst);
     this.ssr = null;
+    this.meta = null;
   }
 
   dispose(): void {

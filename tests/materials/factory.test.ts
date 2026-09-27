@@ -346,14 +346,16 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
   });
 
   it('decals blend the SSR attachment alpha with (Zero, OneMinusSrcAlpha) only when SSR is on', () => {
-    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.high);
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.medium);
     const d = sys.createTileMaterials(false).decal;
     expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([null, null, null]);
     applySurfaceDefines(d, 'decal', ALL_ON);
     expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([THREE.ZeroFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
     expect([d.blendSrc, d.blendDst, d.blendEquation]).toEqual([THREE.OneFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
-    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.high));
+    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.medium));
     expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([null, null, null]);
+    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.high)); // high / ultra trace SSR
+    expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([THREE.ZeroFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
   });
 
   it('program keys differ for every single-field change (no token collisions)', () => {
@@ -376,10 +378,11 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
     sys.setQuality({ ...QUALITY.high });
     expect(t.shell.version).toBe(v0);
     // floorRefl and airlight unchanged: the old early return skipped this
-    const q: QualityConfig = { ...QUALITY.high, detailMaps: true, flashlightBounce: 4 };
+    const q: QualityConfig = { ...QUALITY.high, detailMaps: false, flashlightBounce: 8 };
     sys.setQuality(q);
     expect(t.shell.version).toBeGreaterThan(v0);
-    expect(t.shell.defines).toMatchObject({ BR_DETAIL_MAPS: '', BR_BOUNCE_N: '4' });
+    expect(t.shell.defines).toMatchObject({ BR_BOUNCE_N: '8' });
+    expect(t.shell.defines).not.toHaveProperty('BR_DETAIL_MAPS');
     expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|${expectedKey(qualityDefinesOf(q))}`);
     expect(keyOf(t.water!)).toBe(`br-water-v2|${expectedKey(qualityDefinesOf(q))}`);
   });

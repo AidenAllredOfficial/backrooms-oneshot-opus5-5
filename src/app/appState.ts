@@ -13,6 +13,7 @@ import type {
 import type { WorkerInit } from '../core/worker.ts';
 import type { SpawnPoint } from '../core/world.ts';
 import type { PlanarReflection } from '../materials/PlanarReflection.ts';
+import type { ScreenSpaceReflections } from '../post/ssr/SsrTrace.ts';
 import type { WaterRipples } from '../materials/water/WaterRipples.ts';
 import type { WorkerPool } from '../stream/WorkerPool.ts';
 import type { Autopilot } from '../player/autopilot.ts';
@@ -41,6 +42,8 @@ export interface Systems {
   lighting: LightingRuntime;
   post: PostStack;
   reflection: PlanarReflection;
+  /** package D: screen-space reflections (the frame graph's 'hiz' and 'ssr' hooks; setQuality on preset changes) */
+  ssr: ScreenSpaceReflections;
   /** package E: the ripple heightfield around the player (updated in the loop, inside the GPU timer) */
   ripples: WaterRipples;
   anomaly: { reset(): void; update(t: number, dt: number, player: PlayerState, world: WorldQuery): void };

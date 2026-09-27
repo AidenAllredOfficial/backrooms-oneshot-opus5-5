@@ -103,22 +103,22 @@ export const SSR_TRACE_GLSL = /* glsl */ `
 #define BR_SSR_BEHIND_MAX ${SSR.BEHIND_MAX}
 // linear view depth (positive metres) of window depth d under projection proj
 float brSsrLinZ( float d, mat4 proj ) { return proj[ 3 ][ 2 ] / ( ( d * 2.0 - 1.0 ) + proj[ 2 ][ 2 ] ); }
-// min device depth of Hi-Z cell c at level lvl (clamped: the last texel covers the remainder)
-float brSsrHiZ( ivec2 c, int lvl ) {
-	ivec2 sz = max( textureSize( uHiZ, 0 ) >> lvl, ivec2( 1 ) );
+// min device depth of Hi-Z cell c at level lvl (clamped: the last texel covers the remainder); hz0 = level-0 size
+float brSsrHiZ( ivec2 c, int lvl, ivec2 hz0 ) {
+	ivec2 sz = max( hz0 >> lvl, ivec2( 1 ) );
 	return texelFetch( uHiZ, clamp( c, ivec2( 0 ), sz - 1 ), lvl ).r;
 }
 // device depth the ray is compared against at level-0 position q (cells): the full-resolution pixel when available
-float brSsrSceneD( vec2 q ) {
+float brSsrSceneD( vec2 q, ivec2 hz0 ) {
 #ifdef BR_SSR_DEPTH_AT
 	return BR_SSR_DEPTH_AT( ivec2( q * 2.0 ) );
 #else
-	return brSsrHiZ( ivec2( q ), 0 );
+	return brSsrHiZ( ivec2( q ), 0, hz0 );
 #endif
 }
 // the ray at o + d t is at or behind the depth buffer: within the thickness? (gap = share of the allowed thickness)
-bool brSsrAccept( vec3 p, mat4 proj, out float zs, out float gap ) {
-	zs = brSsrLinZ( brSsrSceneD( p.xy ), proj );
+bool brSsrAccept( vec3 p, mat4 proj, ivec2 hz0, out float zs, out float gap ) {
+	zs = brSsrLinZ( brSsrSceneD( p.xy, hz0 ), proj );
 	float zr = brSsrLinZ( p.z, proj );
 	gap = ( zr - zs ) / ( BR_SSR_THICK + BR_SSR_THICK_Z * zs );
 	return gap >= 0.0 && gap < 1.0;
@@ -152,6 +152,7 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 	float t = min( te.x, te.y ) + 1e-4;
 	if ( t >= tMax ) return false;
 	float zs, gap;
+	ivec2 hz0 = textureSize( uHiZ, 0 );
 	if ( d.z > 0.0 ) {
 		// receding: min-pyramid traversal
 		int maxLvl = min( int( uHiZInfo.z ) - 1, 7 );
@@ -161,7 +162,7 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 		for ( int i = 0; i < BR_SSR_STEPS; i ++ ) {
 			vec2 q = o.xy + dxy * t;
 			vec2 cell = floor( q / cs + sgn * 1e-3 );
-			float zmin = brSsrHiZ( ivec2( cell ), lvl );
+			float zmin = brSsrHiZ( ivec2( cell ), lvl, hz0 );
 			vec2 tc = ( ( cell + brX ) * cs - o.xy ) / dxy;
 			float tExit = min( tc.x, tc.y );
 			float tz = ( zmin - o.z ) / d.z; // where the ray reaches the cell's closest depth
@@ -178,8 +179,8 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 				t = max( t, tz );
 				if ( t > tMax ) break;
 				vec3 p = o + d * t;
-				if ( brSsrSceneD( p.xy ) <= p.z ) {
-					if ( brSsrAccept( p, proj, zs, gap ) ) {
+				if ( brSsrSceneD( p.xy, hz0 ) <= p.z ) {
+					if ( brSsrAccept( p, proj, hz0, zs, gap ) ) {
 						hitUv = p.xy / cells;
 						hitZ = zs;
 						hitGap = gap;
@@ -200,15 +201,15 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 	float tPrev = t;
 	for ( int i = 0; i < BR_SSR_LIN_STEPS; i ++ ) {
 		vec3 p = o + d * t;
-		if ( brSsrSceneD( p.xy ) <= p.z ) {
+		if ( brSsrSceneD( p.xy, hz0 ) <= p.z ) {
 			float lo = tPrev, hi = t;
 			for ( int k = 0; k < BR_SSR_BISECT; k ++ ) {
 				float mid = 0.5 * ( lo + hi );
 				vec3 pm = o + d * mid;
-				if ( brSsrSceneD( pm.xy ) <= pm.z ) hi = mid; else lo = mid;
+				if ( brSsrSceneD( pm.xy, hz0 ) <= pm.z ) hi = mid; else lo = mid;
 			}
 			p = o + d * hi;
-			if ( brSsrAccept( p, proj, zs, gap ) ) {
+			if ( brSsrAccept( p, proj, hz0, zs, gap ) ) {
 				hitUv = p.xy / cells;
 				hitZ = zs;
 				hitGap = gap;
@@ -254,8 +255,10 @@ void main() {
 }
 `;
 
-/** The half-resolution trace (one ray per 2x2 block, from its top-left pixel like the SSAO): premultiplied reflected
- * radiance x confidence (rgb), confidence (a). */
+/** The half-resolution trace (one ray per 2x2 block, from its top-left pixel like the SSAO). MRT: location 0 =
+ * premultiplied reflected radiance x confidence (rgb), confidence (a); location 1 = the representative pixel's
+ * metadata for the filter and the upsample: linear view depth, oct view normal, lobe roughness (0 where the pixel has
+ * no G-buffer specular). */
 export const SSR_TRACE_FRAG = /* glsl */ `
 precision highp float;
 precision highp int;
@@ -263,6 +266,8 @@ uniform highp sampler2D tDepth;   // full-resolution device depth
 uniform highp sampler2D tSpec;    // G-buffer att1: fallback specular x T (rgb), Ws x T (a)
 uniform highp sampler2D tGNR;     // G-buffer att2: oct view normal (rg), lobe roughness (b), 1 where written (a)
 uniform highp sampler2D tPyr;     // colour pyramid (opaque HDR before reflections)
+uniform highp sampler2D tAo;      // pre-shade SSAO (ba = oct view normal of the depth; this frame when uAoP.x = 1)
+uniform vec2 uAoP;                // x SSAO valid, y its texel step (full-resolution pixels)
 uniform highp sampler2D uHiZ;
 uniform vec4 uHiZInfo;
 uniform mat4 uProj;
@@ -271,6 +276,7 @@ uniform vec2 uFull;               // full-resolution size (px)
 uniform vec2 uPyrSize;            // pyramid level-0 size (px)
 uniform float uMaxRough;
 layout( location = 0 ) out highp vec4 outSsr;
+layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_DEPTH_AT( px ) texelFetch( tDepth, clamp( px, ivec2( 0 ), ivec2( uFull ) - 1 ), 0 ).x
 #define BR_SSR_MAX_DIST ${f(SSR.MAX_DIST)}
 #define BR_SSR_EDGE ${f(SSR.EDGE_FADE)}
@@ -293,9 +299,10 @@ vec3 brPixPos( ivec2 px ) {
 	ivec2 q = clamp( px, ivec2( 0 ), ivec2( uFull ) - 1 );
 	return brViewPos( texelFetch( tDepth, q, 0 ).x, ( vec2( q ) + 0.5 ) / uFull );
 }
-// view normal of the depth buffer at pixel px (the better-matching side on each axis; att2 exists only on glossy
-// pixels, so the hit surface's normal comes from its depth)
+// view normal of the depth buffer at pixel px (att2 exists only on glossy pixels, so the hit surface's normal comes
+// from its depth): the SSAO's (the same best-side derivative, one fetch) when it ran this frame, else 5 depth taps
 vec3 brDepthNormal( ivec2 px ) {
+	if ( uAoP.x > 0.5 ) return brOctDec( texelFetch( tAo, px / int( uAoP.y ), 0 ).ba );
 	vec3 c = brPixPos( px );
 	vec3 l = brPixPos( px - ivec2( 1, 0 ) ), r = brPixPos( px + ivec2( 1, 0 ) );
 	vec3 b = brPixPos( px - ivec2( 0, 1 ) ), u = brPixPos( px + ivec2( 0, 1 ) );
@@ -310,13 +317,16 @@ vec2 brProjPx( vec3 v ) {
 }
 void main() {
 	outSsr = vec4( 0.0 );
+	outMeta = vec4( 0.0 );
 	ivec2 p = min( ivec2( gl_FragCoord.xy ) * 2, ivec2( uFull ) - 1 );
 	vec4 s1 = texelFetch( tSpec, p, 0 );
 	vec4 g = texelFetch( tGNR, p, 0 );
+	if ( s1.a < 1e-4 || g.a < 0.5 ) return;
 	float rough = g.b;
-	if ( s1.a < 1e-4 || g.a < 0.5 || rough > uMaxRough ) return;
 	float d = texelFetch( tDepth, p, 0 ).x;
 	vec3 P = brViewPos( d, ( vec2( p ) + 0.5 ) / uFull );
+	outMeta = vec4( - P.z, g.rg, rough );
+	if ( rough > uMaxRough ) return;
 	vec3 N = brOctDec( g.rg );
 	vec3 V = - normalize( P );
 	float nv = dot( N, V );
@@ -351,40 +361,33 @@ void main() {
 
 /** Ultra: one 3x3 bilateral pass over the half-resolution result (premultiplied, so misses fade the confidence
  * smoothly); taps r = rough x FILTER_R texels apart (rounded, at most 2), none below FILTER_ROUGH: mirrors stay
- * sharp. Weights: Gaussian x depth x normal^FILTER_NPOW. */
+ * sharp. Weights: Gaussian x depth x normal^FILTER_NPOW, from the trace's metadata. */
 export const SSR_FILTER_FRAG = /* glsl */ `
 precision highp float;
 precision highp int;
 uniform highp sampler2D tSsr;
-uniform highp sampler2D tDepth;
-uniform highp sampler2D tGNR;
-uniform vec2 uFull;
-uniform vec3 uLin; // near x far, far - near, far
+uniform highp sampler2D tMeta;
 layout( location = 0 ) out highp vec4 outSsr;
 ${SSR_OCT_GLSL}
-float brLinZ( float d ) { return uLin.x / ( uLin.z - d * uLin.y ); }
 void main() {
 	ivec2 t = ivec2( gl_FragCoord.xy );
 	vec4 c = texelFetch( tSsr, t, 0 );
 	outSsr = c;
-	ivec2 full = ivec2( uFull ) - 1;
-	vec4 g = texelFetch( tGNR, min( t * 2, full ), 0 );
-	int r = int( floor( clamp( g.b * ${f(SSR.FILTER_R)}, 0.0, 2.0 ) + 0.5 ) );
-	if ( g.a < 0.5 || g.b <= ${f(SSR.FILTER_ROUGH)} || r == 0 ) return;
+	vec4 m = texelFetch( tMeta, t, 0 );
+	int r = int( floor( clamp( m.w * ${f(SSR.FILTER_R)}, 0.0, 2.0 ) + 0.5 ) );
+	if ( m.x <= 0.0 || m.w <= ${f(SSR.FILTER_ROUGH)} || r == 0 ) return;
 	ivec2 sz = textureSize( tSsr, 0 ) - 1;
-	vec3 Nc = brOctDec( g.rg );
-	float zc = brLinZ( texelFetch( tDepth, min( t * 2, full ), 0 ).x );
+	vec3 Nc = brOctDec( m.yz );
 	vec4 acc = c;
 	float ws = 1.0;
 	for ( int j = - 1; j <= 1; j ++ ) {
 		for ( int i = - 1; i <= 1; i ++ ) {
 			if ( i == 0 && j == 0 ) continue;
 			ivec2 q = clamp( t + ivec2( i, j ) * r, ivec2( 0 ), sz );
-			ivec2 pq = min( q * 2, full );
-			vec4 gq = texelFetch( tGNR, pq, 0 );
-			float zq = brLinZ( texelFetch( tDepth, pq, 0 ).x );
-			float w = exp( - 0.5 * float( i * i + j * j ) ) * gq.a * exp( - abs( zq - zc ) / ( ${f(SSR.FILTER_Z)} * zc ) )
-				* pow( max( dot( Nc, brOctDec( gq.rg ) ), 0.0 ), ${f(SSR.FILTER_NPOW)} );
+			vec4 mq = texelFetch( tMeta, q, 0 );
+			if ( mq.x <= 0.0 ) continue;
+			float w = exp( - 0.5 * float( i * i + j * j ) ) * exp( - abs( mq.x - m.x ) / ( ${f(SSR.FILTER_Z)} * m.x ) )
+				* pow( max( dot( Nc, brOctDec( mq.yz ) ), 0.0 ), ${f(SSR.FILTER_NPOW)} );
 			acc += w * texelFetch( tSsr, q, 0 );
 			ws += w;
 		}
@@ -395,11 +398,13 @@ void main() {
 
 /** Composite pieces (post/frame/MrtComposite.ts): declarations and the specular term of an MRT frame. With the SSR
  * off (uSsrP.x = 0) or where Ws is 0 the term is exactly the fallback att1.rgb. Otherwise the 4 half-resolution
- * texels around the pixel are weighted bilinear x depth x normal^UP_NPOW x roughness (only texels whose
- * representative pixel wrote the G-buffer), and the reflection replaces the fallback by its confidence:
+ * texels around the pixel are weighted bilinear x depth x normal^UP_NPOW x roughness (from the trace's metadata:
+ * texels whose representative pixel has no G-buffer specular do not count), and the reflection replaces the
+ * fallback by its confidence:
  *   spec = mix( s1.rgb, s1.a x ssr.rgb / ssr.a, ssr.a ). */
 export const SSR_COMPOSITE_PARS = /* glsl */ `
 uniform highp sampler2D tSsr;     // half-resolution premultiplied reflection (a = confidence)
+uniform highp sampler2D tMeta;    // half-resolution metadata: linear depth, oct view normal, roughness
 uniform highp sampler2D tDepth;   // full-resolution device depth of the MRT frame
 uniform vec4 uSsrP;               // x on, y debug view (REFL_DEBUG)
 uniform vec3 uLin;                // near x far, far - near, far
@@ -417,7 +422,6 @@ export const SSR_COMPOSITE_SPECULAR = /* glsl */ `
 		vec4 g = texelFetch( tN2, p, 0 );
 		vec3 Np = brOctDec( g.rg );
 		float zp = brLinZ( texelFetch( tDepth, p, 0 ).x );
-		ivec2 full = textureSize( tC0, 0 ) - 1;
 		ivec2 hs = textureSize( tSsr, 0 ) - 1;
 		// texel t represents pixel 2t: pixel p sits at p / 2 in texel units
 		vec2 tf = vec2( p ) * 0.5;
@@ -428,12 +432,10 @@ export const SSR_COMPOSITE_SPECULAR = /* glsl */ `
 		for ( int j = 0; j < 2; j ++ ) {
 			for ( int i = 0; i < 2; i ++ ) {
 				ivec2 t = min( t0 + ivec2( i, j ), hs );
-				ivec2 q = min( t * 2, full );
-				vec4 gq = texelFetch( tN2, q, 0 );
-				float zq = brLinZ( texelFetch( tDepth, q, 0 ).x );
+				vec4 mq = texelFetch( tMeta, t, 0 );
 				float bil = ( i == 0 ? 1.0 - fr.x : fr.x ) * ( j == 0 ? 1.0 - fr.y : fr.y ) + 0.01;
-				float w = bil * gq.a * exp( - abs( zp - zq ) / ( ${f(SSR.UP_Z)} * zp ) )
-					* pow( max( dot( Np, brOctDec( gq.rg ) ), 0.0 ), ${f(SSR.UP_NPOW)} ) * exp( - ${f(SSR.UP_ROUGH)} * abs( g.b - gq.b ) );
+				float w = mq.x > 0.0 ? bil * exp( - abs( zp - mq.x ) / ( ${f(SSR.UP_Z)} * zp ) )
+					* pow( max( dot( Np, brOctDec( mq.yz ) ), 0.0 ), ${f(SSR.UP_NPOW)} ) * exp( - ${f(SSR.UP_ROUGH)} * abs( g.b - mq.w ) ) : 0.0;
 				acc += w * texelFetch( tSsr, t, 0 );
 				ws += w;
 			}

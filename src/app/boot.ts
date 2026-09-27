@@ -24,6 +24,7 @@ import { createWaterRipples } from '../materials/water/WaterRipples.ts';
 import { createLightingRuntime } from '../lighting/LightingRuntime.ts';
 import { createAnomalyDirector } from '../lighting/anomalyDirector.ts';
 import { createPostStack, postInternals } from '../post/PostStack.ts';
+import { createScreenSpaceReflections } from '../post/ssr/SsrTrace.ts';
 import { collectPassMaterials, warmPassMaterials } from '../materials/warmup.ts';
 import { createDynamicResolution } from '../post/DynamicResolution.ts';
 import { bootPoolSizeFor, createWorkerPool, poolSizeFor, type WorkerPool } from '../stream/WorkerPool.ts';
@@ -285,6 +286,10 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
+  // package D: screen-space reflections on the frame graph (Hi-Z after the prepass, the trace after the opaque render)
+  const ssr = createScreenSpaceReflections(q);
+  if (frame) ssr.attach(frame);
+  if (q.ssr !== 'off') await warmPassMaterials(r, ssr.materials);
   const ripples = createWaterRipples(materials.globals, q, core.bus); // resets itself on teleports / seed changes
   const anomaly = createAnomalyDirector(core.bus, lighting, core.scene);
   cb.progress('shaders', 0.3);
@@ -326,7 +331,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
   startup.clear();
   return {
-    q, features: featuresOf(p), textures, materials, lighting, post, reflection, ripples, anomaly, dynRes, pool,
+    q, features: featuresOf(p), textures, materials, lighting, post, reflection, ssr, ripples, anomaly, dynRes, pool,
     poolTarget: poolSize(q), streamer, player, audio, input, init,
     spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
   };
@@ -369,6 +374,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   s.post.setSize(innerWidth, innerHeight);
   s.lighting.setQuality(nq);
   s.reflection.setQuality(nq);
+  s.ssr.setQuality(nq);
   s.ripples.setQuality(nq);
   s.audio.setQuality(nq);
   if (nq.detailMaps && nq.shaderDetail !== 'lite' && !s.textures.detail) s.textures.detail = await generateDetailTextures(r, nq.anisotropy);
@@ -379,6 +385,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
     // the frame graph's own quad programs (pyramid, MRT composite) on presets with split frames; already-linked
     // programs cost nothing here
     if (internals && nq.colorPyramidScale > 0) mats.push(...internals.scenePass.materials);
+    if (nq.ssr !== 'off') mats.push(...s.ssr.materials); // package D: a new trace program when ssrSteps changed
     await warmPassMaterials(r, mats);
   } finally {
     fresh.forEach((p, i) => { p.enabled = wasEnabled[i]; });
