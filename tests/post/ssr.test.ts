@@ -9,6 +9,8 @@ import {
   SSR_TRACE_GLSL,
 } from '../../src/post/ssr/ssrGlsl.ts';
 import { MRT_COMPOSITE_FRAG } from '../../src/post/frame/MrtComposite.ts';
+import { PYR_MAX } from '../../src/post/frame/ColorPyramid.ts';
+import { HDR_CLAMP } from '../../src/core/constants.ts';
 import { ssrSettingsOf, ssrStepFor } from '../../src/post/ssr/SsrTrace.ts';
 
 describe('Hi-Z layout', () => {
@@ -137,6 +139,15 @@ describe('shader sources', () => {
     expect(ssrStepFor(QUALITY.ultra.renderScale)).toBe(3);
     expect(SSR_TRACE_FRAG).toContain('ivec2 p = min( ivec2( gl_FragCoord.xy ) * uStep, ivec2( uFull ) - 1 );');
     expect(SSR_COMPOSITE_SPECULAR).toContain('vec2 tf = vec2( p ) / uSsrP.z;');
+  });
+
+  it('half-float mips never reach the cone lookups as Inf: the pyramid is clamped, a non-finite lookup is a miss', () => {
+    // gl.generateMipmap may sum a 2x2 block of an RGBA16F level in half precision (NVIDIA GL): 4 x PYR_MAX must fit
+    expect(4 * PYR_MAX).toBeLessThan(65504);
+    expect(PYR_MAX).toBeLessThanOrEqual(HDR_CLAMP);
+    const i = SSR_TRACE_FRAG.indexOf('vec3 col = textureGrad( tPyr');
+    expect(i).toBeGreaterThan(0);
+    expect(SSR_TRACE_FRAG.slice(i, i + 400)).toContain('if ( any( isnan( col ) ) || any( isinf( col ) ) ) return;');
   });
 
   it('presets: high and ultra trace, ultra filters; low and medium do not', () => {

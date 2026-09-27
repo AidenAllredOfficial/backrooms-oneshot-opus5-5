@@ -372,6 +372,9 @@ void main() {
 	nS = dot( nS, nS ) > 1e-10 ? normalize( nS ) : vec2( 0.0, 1.0 );
 	float s = clamp( 1.0 / max( nv, BR_SSR_NV ), 1.0, BR_SSR_STRETCH );
 	vec3 col = textureGrad( tPyr, hitUv, nS * ( D * s ) / uPyrSize, vec2( - nS.y, nS.x ) * D / uPyrSize ).rgb;
+	// a non-finite pyramid texel (half-float mips overflowing on a lamp; ColorPyramid clamps against it) is a miss,
+	// never a firefly clamped to BR_HDR_CLAMP
+	if ( any( isnan( col ) ) || any( isinf( col ) ) ) return;
 	// confidence: screen border, roughness cut-off, ray length, rays toward the camera, thickness
 	vec2 eb = min( hitUv, 1.0 - hitUv ) / BR_SSR_EDGE;
 	float conf = clamp( min( eb.x, eb.y ), 0.0, 1.0 );

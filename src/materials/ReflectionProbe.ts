@@ -1,5 +1,5 @@
 // src/materials/ReflectionProbe.ts — package D: the camera-room reflection probe (high 128 px, ultra 256 px faces).
-// A HalfFloat cube is captured around an ANCHOR near the eye, GGX-prefiltered into a second cube (mip k = roughness
+// A float cube is captured around an ANCHOR near the eye, GGX-prefiltered into a HalfFloat cube (mip k = roughness
 // k / (K - 1), K = probeLevels) and published with the room box (lighting/probeBox.ts) as MaterialGlobals.probeTex /
 // probeOn / probeLod / probeMin / probeMax / probePos. The surface programs box-project and lightmap-normalise it
 // (chunks/probe.ts); chunks/lighting.ts mixes it into the environment and the clearcoat radiance, where the SSR
@@ -167,14 +167,18 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
   const offLoad = bus ? bus.on('tileLoaded', stale) : null;
   const offUnload = bus ? bus.on('tileUnloaded', stale) : null;
 
-  function ensureTargets(): void {
+  function ensureTargets(renderer: THREE.WebGLRenderer): void {
     if (captureRT && captureRT.width === size) return;
     releaseTargets();
     const opts = {
       type: THREE.HalfFloatType, format: THREE.RGBAFormat, generateMipmaps: false, stencilBuffer: false,
       minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, colorSpace: THREE.NoColorSpace,
     } as const;
-    captureRT = new THREE.WebGLCubeRenderTarget(size, { ...opts, depthBuffer: true });
+    // the capture is FLOAT where float textures filter: gl.generateMipmap on an RGBA16F cube holding lamps near
+    // HDR_CLAMP overflows to Inf on some drivers (NVIDIA GL sums a 2x2 block in half precision), and the prefilter
+    // would spread it into every mip (the whole frame then goes white). 4-8 MB at 256 px, next to nothing to fill.
+    const floatCapture = renderer.extensions.has('OES_texture_float_linear');
+    captureRT = new THREE.WebGLCubeRenderTarget(size, { ...opts, type: floatCapture ? THREE.FloatType : THREE.HalfFloatType, depthBuffer: true });
     captureRT.texture.name = 'Probe.Capture';
     filteredRT = new THREE.WebGLCubeRenderTarget(size, { ...opts, depthBuffer: false });
     filteredRT.texture.name = 'Probe.Filtered';
@@ -303,7 +307,7 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
         if (lastStorey >= 0) api.invalidate();
         lastStorey = p.s;
       }
-      ensureTargets();
+      ensureTargets(renderer);
       // ---- anchor
       if (world.isLoaded(p.eyeX, p.eyeZ)) {
         const a = pending ? next : live, box = pending ? nextBox : liveBox;
@@ -391,13 +395,14 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
     },
     faceMeans(renderer) {
       if (!captureRT || !filteredRT || !liveValid) return null;
-      const px = new Uint16Array(size * size * 4);
+      const half = captureRT.texture.type === THREE.HalfFloatType;
+      const px = half ? new Uint16Array(size * size * 4) : new Float32Array(size * size * 4);
       const out: number[][] = [];
       const r3 = (v: number): number => Math.round(v * 1000) / 1000;
       for (let f = 0; f < 6; f++) {
         renderer.readRenderTargetPixels(captureRT, 0, 0, size, size, px, f);
         const m = [0, 0, 0];
-        for (let i = 0; i < size * size; i++) for (let c = 0; c < 3; c++) m[c] += THREE.DataUtils.fromHalfFloat(px[i * 4 + c]);
+        for (let i = 0; i < size * size; i++) for (let c = 0; c < 3; c++) m[c] += half ? THREE.DataUtils.fromHalfFloat(px[i * 4 + c]) : px[i * 4 + c];
         out.push(m.map((v) => r3(v / (size * size))));
       }
       // the filtered cube as the surfaces sample it: the 6 axis directions at every prefiltered mip

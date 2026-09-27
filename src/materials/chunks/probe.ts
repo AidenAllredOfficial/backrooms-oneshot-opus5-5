@@ -103,7 +103,9 @@ vec3 brCubeDir( int face, vec2 st ) {
 `;
 
 /** The GGX prefilter of one face at one mip (N = V = R). uSamples[i] = (tangent-space L, capture LOD); the weight is
- * L.z (N.L), zero for samples below the horizon. uCount = 1 copies the capture (mirror level). */
+ * L.z (N.L), zero for samples below the horizon. uCount = 1 copies the capture (mirror level). A non-finite capture
+ * texel (a driver's half-float mip generation overflowing on a lamp; the capture is float where it can be) is dropped
+ * instead of turning the whole filtered cube, and every surface reflecting it, into NaN. */
 export const PROBE_FILTER_FRAG = /* glsl */ `
 precision highp float;
 precision highp int;
@@ -114,10 +116,12 @@ uniform int uCount;
 uniform vec4 uSamples[ ${PROBE.SAMPLES} ];
 layout( location = 0 ) out highp vec4 outColor;
 ${CUBE_DIR_GLSL}
+bool brProbeFinite( vec3 c ) { return ! any( isnan( c ) ) && ! any( isinf( c ) ); }
 void main() {
 	vec3 N = normalize( brCubeDir( uFace, gl_FragCoord.xy / uSize ) );
 	if ( uCount <= 1 ) {
-		outColor = vec4( textureLod( tCube, N, 0.0 ).rgb, 1.0 );
+		vec3 c = textureLod( tCube, N, 0.0 ).rgb;
+		outColor = vec4( brProbeFinite( c ) ? c : vec3( 0.0 ), 1.0 );
 		return;
 	}
 	vec3 up = abs( N.y ) < 0.999 ? vec3( 0.0, 1.0, 0.0 ) : vec3( 1.0, 0.0, 0.0 );
@@ -129,7 +133,9 @@ void main() {
 		if ( i >= uCount ) break;
 		vec4 s = uSamples[ i ];
 		if ( s.z <= 0.0 ) continue;
-		acc += textureLod( tCube, T * s.x + B * s.y + N * s.z, s.w ).rgb * s.z;
+		vec3 c = textureLod( tCube, T * s.x + B * s.y + N * s.z, s.w ).rgb;
+		if ( ! brProbeFinite( c ) ) continue;
+		acc += c * s.z;
 		ws += s.z;
 	}
 	outColor = vec4( acc / max( ws, 1e-6 ), 1.0 );

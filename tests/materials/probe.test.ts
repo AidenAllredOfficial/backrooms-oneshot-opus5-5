@@ -103,6 +103,13 @@ describe('prefilter', () => {
     expect(PROBE_FILTER_FRAG).toContain(`uniform vec4 uSamples[ ${PROBE.SAMPLES} ];`);
   });
 
+  it('a non-finite capture texel is dropped, never spread into the filtered cube (both the copy and the GGX sum)', () => {
+    expect(PROBE_FILTER_FRAG).toContain('bool brProbeFinite( vec3 c ) { return ! any( isnan( c ) ) && ! any( isinf( c ) ); }');
+    expect(PROBE_FILTER_FRAG).toContain('outColor = vec4( brProbeFinite( c ) ? c : vec3( 0.0 ), 1.0 );');
+    const loop = PROBE_FILTER_FRAG.slice(PROBE_FILTER_FRAG.indexOf('for ( int i = 0;'));
+    expect(loop.indexOf('if ( ! brProbeFinite( c ) ) continue;')).toBeLessThan(loop.indexOf('acc += c * s.z;'));
+  });
+
   it('Hammersley: the radical inverse is the bit-reversed fraction', () => {
     expect(radicalInverse(0)).toBe(0);
     expect(radicalInverse(1)).toBe(0.5);
