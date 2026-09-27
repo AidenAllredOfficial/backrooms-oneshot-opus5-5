@@ -77,7 +77,8 @@ void gen(vec2 uv, inout Surf s) {
  * imprint), 4 tie holes per panel, bug holes, laitance mottling. Relief for parallax occlusion mapping: the face rests
  * at 0.9 (x CONCRETE_WALL_HS = 18 mm above height 0, pomTop 0.92) and the tie holes are cones from the rim down to 0
  * (the plastic cones of the snap ties leave 18 mm deep conical recesses); every other amplitude is 1/5 of its value at
- * the former 4 mm heightScale, so normals and cavity AO of the face are unchanged. */
+ * the former 4 mm heightScale, so normals and cavity AO of the face are unchanged. The cone keeps the concrete colour
+ * (a little darker): the relief shades it. */
 const CONCRETE_WALL_HS = 0.02; // heightScale (m per height unit)
 const CONCRETE_WALL = /* glsl */ `
 #define SS 4
@@ -104,7 +105,10 @@ void gen(vec2 uv, inout Surf s) {
   col *= 1.0 + 0.05 * mot + 0.03 * mot2 + 0.025 * grain;
   col *= 1.0 - 0.35 * bug;
   col *= 1.0 - 0.2 * seamLine + 0.03 * fin;
-  col = mix(col, srgb8(78.0, 76.0, 72.0), tie);
+  // the cone recess is the same concrete (cast against a smooth plastic cone, a little darker from form oil and dirt):
+  // its depth now darkens it through the cavity AO, micro-shadowing and POM; the former dark plug colour on top of
+  // that turned every tie hole into a pure black disc
+  col = mix(col, col * 0.62, tie);
   col *= 1.0 - 0.1 * tieRing;
   s.albedo = col;
   float face = 0.9 + 0.008 * grain + 0.006 * mot2 - 0.06 * bug + 0.05 * fin + 0.008 * tieRing;
