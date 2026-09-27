@@ -12,6 +12,9 @@
 //   base=N                        lit view of an alpha layer (DECAL_ATLAS, SIGNAGE, ...): composite it over layer N
 //                                 (soft alpha, alpha-tested for SIGNAGE/chalk-like hard edges) instead of discarding
 //   check=0                       skip the GPU checks
+//   checks=albedo,range,seam,orient   which GPU checks run (default all): range = per-layer albedo percentile range
+//                                 (stats().albedoRange) and the texture height maximum against SURFACE_PHYS.pomTop
+//                                 (stats().heightMax, heightFails)
 //   hud=0                         hide the text overlay
 //   packh=1                       force the packed RGBA8 height scratch (fallback without float colour buffers)
 // window.__backrooms (HarnessDebugAPI): ready once the textures are generated, the checks have run and a few frames
@@ -20,10 +23,14 @@
 import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { HarnessDebugAPI, LayerAlbedoReport } from '../core/debug.ts';
-import { MAT_COUNT, Mat } from '../core/ids.ts';
+import { MAT_COUNT, Mat, type MatId } from '../core/ids.ts';
 import { LAYER_DEFS, layerRepeatY } from '../core/materials.ts';
 import type { TextureSet } from '../core/runtime.ts';
-import { arrowOrientationCheck, layerAlbedoCheck, reduceAtlasSlots, reduceLayers, tileSeamCheck, tileSeamCheckDetailed, type OrientationReport, type SeamDetail } from '../textures/albedoCheck.ts';
+import { SURFACE_PHYS } from '../materials/chunks/params.ts';
+import {
+  arrowOrientationCheck, layerAlbedoCheck, layerAlbedoRangeCheck, layerHeightMax, reduceAtlasSlots, reduceLayers, tileSeamCheck,
+  tileSeamCheckDetailed, type LayerRangeReport, type OrientationReport, type SeamDetail,
+} from '../textures/albedoCheck.ts';
 import { generateTextures, textureBakeStats } from '../textures/TextureBaker.ts';
 import { setForcePackedScratch } from '../textures/programs.ts';
 import { LAYER_RECIPES_FULL } from '../textures/registry.ts';
@@ -46,7 +53,7 @@ const baseParam = q.get('base');
 const baseLayer = baseParam !== null && baseParam !== '' ? Math.max(0, Math.min(MAT_COUNT - 1, Number(baseParam) | 0)) : -1;
 const tFixed = q.has('t') ? Number(q.get('t')) : null;
 const runChecks = q.get('check') !== '0';
-const checkList = (q.get('checks') ?? 'albedo,seam,orient').split(',');
+const checkList = (q.get('checks') ?? 'albedo,range,seam,orient').split(',');
 const hud = q.get('hud') !== '0';
 if (q.get('packh') === '1') setForcePackedScratch(true); // exercise the RGBA8 packed-height scratch fallback
 
@@ -200,6 +207,8 @@ async function main(): Promise<void> {
   let frames = 0;
   let phase = 'textures';
   let albedo: LayerAlbedoReport[] | null = null;
+  let range: LayerRangeReport[] | null = null;
+  let heightMax: Float64Array | null = null;
   let seams: SeamDetail[] | null = null;
   let orient: OrientationReport[] | null = null;
   let ormhMeans: Float64Array | null = null;
@@ -216,6 +225,11 @@ async function main(): Promise<void> {
       programs: renderer.info.programs?.length ?? 0,
       albedoFails: albedo ? albedo.filter((r) => !r.ok).map((r) => `${r.name} m=${r.measured.map((v) => v.toFixed(3)).join(',')} d=${r.declared.join(',')}`) : null,
       albedo: albedo?.map((r) => ({ n: r.name, m: r.measured.map((v) => +v.toFixed(4)), ok: r.ok })) ?? null,
+      albedoRange: range?.map((r) => ({ n: r.name, p2: +r.p2.toFixed(4), p98: +r.p98.toFixed(4), ok: r.ok })) ?? null,
+      albedoRangeFails: range ? range.filter((r) => !r.ok).map((r) => `${r.name} p2=${r.p2.toFixed(3)} p98=${r.p98.toFixed(3)}`) : null,
+      // POM layers: the relief top must stay within 0.02 of SURFACE_PHYS.pomTop
+      heightMax: heightMax ? Array.from(heightMax, (v, l) => `${LAYER_DEFS[l].name}: ${v.toFixed(3)}${SURFACE_PHYS[l as MatId].pomTop > 0 ? ` (pomTop ${SURFACE_PHYS[l as MatId].pomTop})` : ''}`) : null,
+      heightFails: heightMax ? LAYER_DEFS.filter((d) => SURFACE_PHYS[d.id].pomTop > 0 && heightMax![d.id] > SURFACE_PHYS[d.id].pomTop + 0.02).map((d) => `${d.name}: ${heightMax![d.id].toFixed(3)}`) : null,
       seamMax: seams ? Math.max(...seams.map((s) => s.maxEdgeDelta)) * 255 : null,
       seamFails: seams ? seams.filter((s) => s.maxEdgeDelta >= 2 / 255).map((s) => `${LAYER_DEFS[s.layer].name}:${s.parts.join('/')}`) : null,
       orientation: orient,
@@ -335,6 +349,11 @@ async function main(): Promise<void> {
         ormhMeans = await reduceLayers(renderer, ts.ormh, ts.size);
         signSlots = await reduceAtlasSlots(renderer, ts.albedo, ts.size, Mat.SIGNAGE);
       }
+      phase = 'range check';
+      if (checkList.includes('range')) {
+        range = await layerAlbedoRangeCheck(renderer, ts);
+        heightMax = await layerHeightMax(renderer, ts);
+      }
       phase = 'seam check';
       if (checkList.includes('seam')) seams = await tileSeamCheckDetailed(renderer, ts);
       phase = 'orientation check';
@@ -353,6 +372,11 @@ async function main(): Promise<void> {
     const bad = albedo.filter((r) => !r.ok);
     lines.push(`albedo: ${albedo.length - bad.length}/${albedo.length} within 10%`);
     for (const r of bad) lines.push(`  FAIL ${r.name}: ${r.measured.map((v) => v.toFixed(3)).join(' ')} vs ${r.declared.join(' ')}`);
+  }
+  if (range) {
+    const bad = range.filter((r) => !r.ok);
+    lines.push(`albedo range: ${range.length - bad.length}/${range.length} p2/p98 in [0.02, 0.9]`);
+    for (const r of bad) lines.push(`  FAIL ${r.name}: p2 ${r.p2.toFixed(3)} p98 ${r.p98.toFixed(3)}`);
   }
   if (seams) {
     const worst = seams.reduce((a, s) => (s.maxEdgeDelta > a.maxEdgeDelta ? s : a), seams[0]);

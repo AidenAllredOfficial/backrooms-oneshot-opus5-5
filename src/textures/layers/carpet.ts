@@ -45,8 +45,8 @@ void gen(vec2 uv, inout Surf s) {
   col = mix(base, col, mix(0.55, 1.0, tb));
   // tuft crowns catch light, gaps and creases are shadowed pile
   col *= mix(0.93, 1.03, tuft) * (1.0 - 0.12 * crease) * mix(0.96, 1.02, loops);
-  // cluster lean: sheen / value shift (+-4 %), slightly warmer where the pile leans toward the viewer
-  col *= 1.0 + 0.04 * lean;
+  // cluster lean: sheen / value shift (+-6 %), slightly warmer where the pile leans toward the viewer
+  col *= 1.0 + 0.06 * lean;
   col *= mix(vec3(1.0), vec3(1.015, 1.0, 0.97), sat(0.5 + lean));
   // colour mottling +-6 %
   float mot = fbm(uv, PM(9.0), 4, 9);
@@ -128,7 +128,7 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 export const TEXTILE_RECIPES: RecipeTable = {
-  [Mat.CARPET_L0]: { glsl: CARPET_L0, normalStrength: 1.0, heightScale: 0.0025 },
+  [Mat.CARPET_L0]: { glsl: CARPET_L0, normalStrength: 1.0, heightScale: 0.0035 },
   [Mat.CARPET_OFFICE]: { glsl: CARPET_OFFICE, normalStrength: 0.9, heightScale: 0.003 },
   [Mat.FABRIC_PARTITION]: { glsl: FABRIC_PARTITION, normalStrength: 0.6, heightScale: 0.0008 },
 };

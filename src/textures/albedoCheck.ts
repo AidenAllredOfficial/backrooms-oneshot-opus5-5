@@ -3,6 +3,8 @@
 // layerAlbedoCheck: a reduction shader over mip level 0 of the albedo array (texelFetch of the SRGB8_ALPHA8 array
 //   decodes to linear before averaging; the driver's 1x1 mip is never used because some drivers average sRGB
 //   mips in gamma space). Each layer must be within 10 % of LAYER_DEFS.albedoMean per channel (floor 0.01).
+// layerAlbedoRangeCheck: the same reduction per 32x32 cell; the 2nd / 98th luminance percentiles of each opaque layer
+//   must stay physically plausible (ALBEDO_RANGE). layerHeightMax: the highest cell mean of the texture height.
 // tileSeamCheck: re-evaluates every recipe one texel OUTSIDE the texture (virtual row -1 and column -1, i.e. the
 //   continuation of the infinite periodic surface) and compares it with the stored last row / column, which is
 //   what the sampler shows there when the texture tiles. Compared: albedo rgba (stored sRGB bytes), ormh rgba and
@@ -87,6 +89,40 @@ export function layerAlbedoCheck(renderer: THREE.WebGLRenderer, set: TextureSet)
       const ok = measured.every((m, i) => Math.abs(m - declared[i]) <= Math.max(0.1 * declared[i], 0.01));
       out.push({ layer: l, name: d.name, measured, declared, ok });
     }
+    return out;
+  });
+}
+
+/** Layers whose albedo is artwork or mostly transparent (no physical range to check). */
+const RANGE_EXEMPT: ReadonlySet<number> = new Set([Mat.SIGNAGE, Mat.DECAL_ATLAS, Mat.FLOOR_PAINT, Mat.METAL_GRATE]);
+/** Plausible linear albedo range of real opaque materials: charcoal ~0.03 to fresh snow ~0.9. */
+export const ALBEDO_RANGE: readonly [number, number] = [0.02, 0.9];
+
+export interface LayerRangeReport { layer: number; name: string; p2: number; p98: number; ok: boolean }
+
+/** 2nd / 98th percentiles of the 32x32 cell mean luminance of each opaque layer (mip 0, linear); ok when both lie in
+ * ALBEDO_RANGE, i.e. no recipe feature large enough to see is darker than charcoal or brighter than snow. */
+export function layerAlbedoRangeCheck(renderer: THREE.WebGLRenderer, set: TextureSet): Promise<LayerRangeReport[]> {
+  return withState(renderer, async () => {
+    const lum: number[][] = Array.from({ length: MAT_COUNT }, () => []);
+    await reduceLayersImpl(renderer, set.albedo, set.size, (l, _x, _y, v) => { lum[l].push(0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]); });
+    const out: LayerRangeReport[] = [];
+    for (let l = 0; l < MAT_COUNT; l++) {
+      if (RANGE_EXEMPT.has(l)) continue;
+      const s = lum[l].sort((a, b) => a - b);
+      const p2 = s[Math.floor(0.02 * (s.length - 1))], p98 = s[Math.ceil(0.98 * (s.length - 1))];
+      out.push({ layer: l, name: LAYER_DEFS[l].name, p2, p98, ok: p2 >= ALBEDO_RANGE[0] && p98 <= ALBEDO_RANGE[1] });
+    }
+    return out;
+  });
+}
+
+/** Per layer: the highest 32x32 cell mean of the texture height (normal.a, mip 0). Parallax occlusion mapping takes
+ * the relief top at SURFACE_PHYS.pomTop, so a layer's cells must not rise far above it. Length MAT_COUNT. */
+export function layerHeightMax(renderer: THREE.WebGLRenderer, set: TextureSet): Promise<Float64Array> {
+  return withState(renderer, async () => {
+    const out = new Float64Array(MAT_COUNT);
+    await reduceLayersImpl(renderer, set.normal, set.size, (l, _x, _y, v) => { out[l] = Math.max(out[l], v[3]); });
     return out;
   });
 }

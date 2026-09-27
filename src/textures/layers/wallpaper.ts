@@ -6,8 +6,9 @@ import type { RecipeTable } from './types.ts';
 /** Level 0 wallpaper: mustard vinyl-coated paper in two 0.6 m rolls (+-2 % shade offset). Print: vertical stripe
  * system on a 0.15 m pitch (a slightly darker ink band carrying a column of stacked up-pointing chevrons, flanked by
  * pinlines) and, in the light band between, a faint damask fleur on a 0.3 m diamond lattice (+-4 % value, 0.2 mm
- * emboss, ink a touch glossier than the paper). Paper: fine vertical strie, supersampled 1 mm fibre, cloudy
- * formation; vertical roll-seam ridge. Lifted edges, fading and stains come from the WP7 mask. */
+ * emboss, ink a touch glossier than the paper). Paper: satin vinyl coat (roughness ~0.7), fine vertical strie,
+ * supersampled 1 mm fibre, cloudy formation, a slight cockle (~0.25 mm over 7 cm, seen only in grazing sheen);
+ * vertical roll-seam ridge. Lifted edges, fading and stains come from the WP7 mask. */
 const WALLPAPER_L0 = /* glsl */ `
 #define SS 4
 // damask fleur, q in metres from the motif centre (+y up); returns ink coverage 0..1
@@ -74,12 +75,14 @@ void gen(vec2 uv, inout Surf s) {
   float seamDirt = gauss(dSeam / 0.004);
   c *= 1.0 - 0.3 * gap - 0.04 * seamDirt;
   s.albedo = c;
-  s.height = 0.45 + 0.25 * ink + 0.05 * fibre + 0.035 * strie + 0.28 * gauss(dSeam / 0.0018) - 0.2 * gap;
-  s.rough = 0.845 - 0.06 * ink - 0.07 * gauss(dSeam / 0.006) + 0.015 * fibre + 0.01 * strie;
+  s.height = 0.45 + 0.25 * ink + 0.05 * fibre + 0.035 * strie + 0.28 * gauss(dSeam / 0.0018) - 0.2 * gap
+           + 0.3 * fbm(uv, PM(7.0), 2, 17);
+  s.rough = 0.70 - 0.07 * ink - 0.06 * gauss(dSeam / 0.006) + 0.015 * fibre + 0.01 * strie;
 }
 `;
 
-/** Manila: beige paper-backed vinyl with a linen emboss and vertical double pinstripes at 0.15 m pitch. */
+/** Manila: beige paper-backed vinyl (satin, ~0.72) with a linen emboss, a slight cockle and vertical double
+ * pinstripes at 0.15 m pitch. */
 const WALLPAPER_MANILA = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -110,8 +113,9 @@ void gen(vec2 uv, inout Surf s) {
   float gap = lineM(dSeam, 0.0002);
   c *= 1.0 - 0.3 * gap - 0.03 * gauss(dSeam / 0.003);
   s.albedo = c;
-  s.height = 0.45 + 0.18 * linen + 0.05 * (dark + light) + 0.25 * gauss(dSeam / 0.0015) - 0.2 * gap;
-  s.rough = 0.8 + 0.03 * (linen - 0.5) - 0.04 * (dark + light);
+  s.height = 0.45 + 0.18 * linen + 0.05 * (dark + light) + 0.25 * gauss(dSeam / 0.0015) - 0.2 * gap
+           + 0.3 * fbm(uv, PM(7.0), 2, 17);
+  s.rough = 0.72 + 0.03 * (linen - 0.5) - 0.04 * (dark + light);
 }
 `;
 
