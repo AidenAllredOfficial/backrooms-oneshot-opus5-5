@@ -1,11 +1,13 @@
 // tests/mesh/fixtures.test.ts — WP5 acceptance: recessed fixtures are emitted whole in the tile containing their
 // centre (never split across tiles), lens emission / flags / shimmer inputs follow rule 6, and dynLights slots match
-// tileOfPoint of the neighbourhood's dynamic fixtures.
+// tileOfPoint of the neighbourhood's dynamic fixtures. Graphics-realism C.2: every lens (OFF included) carries its
+// emitter profile (aux.x = size / lamp axis, aux.z = profile | variant, aux.w = state, tint.a = seed & 255).
 
 import { describe, expect, test, vi } from 'vitest';
 import { CELL, CHUNK_SIZE } from '../../src/core/constants.ts';
 import { tileCell0, tileOfPoint } from '../../src/core/grid.ts';
-import { DYING_MEAN, LightState, Mat, VFlag, Zone, isRecessedFixture, type StoreyId, type ZoneId } from '../../src/core/ids.ts';
+import { EP, recessedProfile, unpackLensParam, unpackProfile } from '../../src/core/emitterProfile.ts';
+import { DYING_MEAN, FixtureKind, LightState, Mat, VFlag, Zone, isRecessedFixture, type StoreyId, type ZoneId } from '../../src/core/ids.ts';
 import { fixtureRadiance, type Fixture } from '../../src/core/layout.ts';
 import { DYN_SLOT_OFFSETS, type MeshBuffers } from '../../src/core/mesh.ts';
 import type { LayoutNeighborhood } from '../../src/core/world.ts';
@@ -73,15 +75,28 @@ describe('recessed fixtures (straddle rule)', () => {
         const flags = m.flags[v], emit = m.emit[v];
         const tint = [m.tint[v * 4], m.tint[v * 4 + 1], m.tint[v * 4 + 2], m.tint[v * 4 + 3]];
         const aux3 = m.aux[v * 4 + 3];
+        // emitter profile contract, every state
+        const alongX = Math.abs(f.tx) >= Math.abs(f.tz);
+        const U = Math.round((alongX ? f.w : f.h) / 0.6), V = Math.round((alongX ? f.h : f.w) / 0.6);
+        expect(unpackLensParam(m.aux[v * 4])).toEqual([U, V, alongX ? 0 : 1]);
+        expect(m.aux[v * 4 + 1]).toBe(0);
+        const [ep, variant] = unpackProfile(m.aux[v * 4 + 2]);
+        const want = recessedProfile(f.kind, U, V, alongX ? 0 : 1, f.seed, nb.center.zone);
+        expect([ep, variant]).toEqual([want.ep, want.variant]);
+        expect(ep).toBe(f.kind === FixtureKind.SKY_PANEL ? EP.OPAL : ep === EP.LOUVER ? EP.LOUVER : EP.PRISM);
+        expect(tint[3]).toBe(f.seed & 255);
+        if (f.kind === FixtureKind.TROFFER_2x4) expect(U * V).toBe(2);
         switch (f.state) {
           case LightState.ON:
             expect(emit).toBeCloseTo(fixtureRadiance(f), 3);
             expect(flags & (VFlag.DYN_EMIT | VFlag.SHIMMER)).toBe(0);
             expect(tint[0]).toBe(Math.round(f.color[0] * 255));
+            expect(aux3).toBe(LightState.ON);
             break;
           case LightState.OFF:
             expect(emit).toBe(0);
             expect(tint.slice(0, 3)).toEqual([Math.round(0.55 * 255), Math.round(0.53 * 255), Math.round(0.5 * 255)]);
+            expect(aux3).toBe(LightState.OFF);
             break;
           case LightState.DYING:
             expect(emit).toBeCloseTo(fixtureRadiance(f) * DYING_MEAN, 3);

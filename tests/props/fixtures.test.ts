@@ -4,13 +4,17 @@
 // exactly w/2 and the HIGHBAY disk radius w/2; state handling (OFF / DYING / BUZZ / dynamic FLICKER / ANOMALY):
 // emit scale, DYN_EMIT / SHIMMER flags, aux.w = state and tint.a = seed & 255 on those vertices; tint = colour;
 // suspensions reach the ceiling (HIGHBAY: the joist at ceil - 0.6); winding follows normals; no NaN.
+// Graphics-realism C.3: emissive parts carry their emitter profile (aux.z bits 1-4 / 5-7, aux.x) with the profile's
+// uv scheme, lens sides and OFF fixtures stay legacy, and non-emissive parts keep aux.z = the prop's bits.
 
 import { describe, expect, it } from 'vitest';
+import { EP, unpackProfile } from '../../src/core/emitterProfile.ts';
 import { DYING_MEAN, FixtureKind, LightState, Mat, VFlag, type FixtureKindId, type LightStateId } from '../../src/core/ids.ts';
 import { fixtureRadiance, type Fixture } from '../../src/core/layout.ts';
 import type { MeshBuffers } from '../../src/core/mesh.ts';
 import { GeometryWriter } from '../../src/core/writer.ts';
 import { emitFixture } from '../../src/props/index.ts';
+import { PartBuilder } from '../../src/props/builder.ts';
 import { emitFixtureInto } from '../../src/props/fixtures.ts';
 import { bounds, mirroredAtlasTris, triNormal, validate, windingMismatch } from './meshUtil.ts';
 
@@ -230,5 +234,109 @@ describe('WP6 surface fixtures', () => {
     expect(Array.from(a.position)).toEqual(Array.from(b.position));
     expect(Array.from(a.index)).toEqual(Array.from(b.index));
     for (let i = 0; i < a.vertexCount; i++) expect(c.position[i * 3] - a.position[i * 3]).toBeCloseTo(19.2, 3);
+  });
+});
+
+describe('C.3 emitter profiles on surface fixtures', () => {
+  /** Emissive vertices grouped by profile code: ep -> vertex indices. */
+  function byProfile(m: MeshBuffers): Map<number, number[]> {
+    const out = new Map<number, number[]>();
+    for (const i of emissiveVerts(m)) {
+      const ep = unpackProfile(m.aux[i * 4 + 2])[0];
+      if (!out.has(ep)) out.set(ep, []);
+      out.get(ep)?.push(i);
+    }
+    return out;
+  }
+  const EXPECT: Readonly<Record<number, number[]>> = {
+    [FixtureKind.TUBE_STRIP]: [EP.TUBE], [FixtureKind.CAGE_BULB]: [EP.BULB], [FixtureKind.HIGHBAY]: [EP.HIGHBAY],
+    [FixtureKind.PENDANT_LINEAR]: [EP.DROP, EP.LEGACY], [FixtureKind.SODIUM]: [EP.SODIUM, EP.LEGACY],
+    [FixtureKind.EXIT_SIGN]: [EP.LEGACY], [FixtureKind.UNDERWATER]: [EP.LEGACY], [FixtureKind.VENDING]: [EP.LEGACY],
+    [FixtureKind.RED_BULB]: [EP.BULB],
+  };
+
+  it('emissive parts carry the expected profile codes; only the tower bit of auxBits survives on emitters', () => {
+    for (const kind of SURFACE_KINDS) {
+      const f = fixture(kind, mountsOf(kind)[0]);
+      const w = new GeometryWriter(512);
+      emitFixtureInto(w, f, 19.2, 0, Number.NaN, 0xfd, 54); // tower bit + every dust / coat bit set
+      const m = w.finish();
+      expect([...byProfile(m).keys()].sort(), `kind ${kind}`).toEqual([...EXPECT[kind]].sort());
+      for (const i of emissiveVerts(m)) expect(m.aux[i * 4 + 2] & 1, `kind ${kind}`).toBe(1);
+      for (const i of emissiveVerts(m)) if (unpackProfile(m.aux[i * 4 + 2])[0] === EP.LEGACY) expect(m.aux[i * 4 + 2]).toBe(1);
+    }
+  });
+
+  it('profile uv schemes: tube v in [-0.5, 0.5] with param = length cm; highbay |uv| <= 1; drop / sodium in [0, 1]^2', () => {
+    const tube = build(fixture(FixtureKind.TUBE_STRIP, DOWN_X));
+    const tv = byProfile(tube).get(EP.TUBE) ?? [];
+    let vMin = Infinity, vMax = -Infinity;
+    const variants = new Set<number>();
+    for (const i of tv) {
+      vMin = Math.min(vMin, tube.uv[i * 2 + 1]); vMax = Math.max(vMax, tube.uv[i * 2 + 1]);
+      expect(tube.aux[i * 4]).toBe(120);
+      variants.add(unpackProfile(tube.aux[i * 4 + 2])[1]);
+    }
+    expect(vMin).toBeCloseTo(-0.5, 4);
+    expect(vMax).toBeCloseTo(0.5, 4);
+    expect([...variants].sort()).toEqual([0, 1]); // one profile variant per tube
+    const hb = build(fixture(FixtureKind.HIGHBAY, DOWN_X));
+    let rMax = 0;
+    for (const i of byProfile(hb).get(EP.HIGHBAY) ?? []) rMax = Math.max(rMax, Math.hypot(hb.uv[i * 2], hb.uv[i * 2 + 1]));
+    expect(rMax).toBeCloseTo(1, 3);
+    for (const [kind, ep, len] of [[FixtureKind.PENDANT_LINEAR, EP.DROP, 120], [FixtureKind.SODIUM, EP.SODIUM, 45]]) {
+      const m = build(fixture(kind as FixtureKindId, DOWN_Z));
+      const vs = byProfile(m).get(ep) ?? [];
+      expect(vs.length).toBe(4);
+      const us = vs.map((i) => m.uv[i * 2]), ws = vs.map((i) => m.uv[i * 2 + 1]);
+      expect(Math.min(...us)).toBeCloseTo(0, 4); expect(Math.max(...us)).toBeCloseTo(1, 4);
+      expect(Math.min(...ws)).toBeCloseTo(0, 4); expect(Math.max(...ws)).toBeCloseTo(1, 4);
+      for (const i of vs) expect(m.aux[i * 4]).toBe(len);
+    }
+  });
+
+  it('the uv scale never leaks into the following parts (non-emissive uvs equal the OFF fixture\'s)', () => {
+    for (const kind of [FixtureKind.TUBE_STRIP, FixtureKind.HIGHBAY, FixtureKind.PENDANT_LINEAR, FixtureKind.SODIUM] as FixtureKindId[]) {
+      const on = build(fixture(kind, DOWN_X)), off = build(fixture(kind, DOWN_X, LightState.OFF));
+      expect(on.vertexCount).toBe(off.vertexCount);
+      for (let i = 0; i < on.vertexCount; i++) {
+        if (on.emit[i] > 0) continue; // the emitter itself (OFF: the same part with metre uvs)
+        expect(on.uv[i * 2], `kind ${kind} v${i}`).toBeCloseTo(off.uv[i * 2], 5);
+        expect(on.uv[i * 2 + 1], `kind ${kind} v${i}`).toBeCloseTo(off.uv[i * 2 + 1], 5);
+      }
+    }
+  });
+
+  it('OFF fixtures keep the legacy look (no profile bits)', () => {
+    for (const kind of SURFACE_KINDS) {
+      const m = build(fixture(kind, mountsOf(kind)[0], LightState.OFF));
+      for (let i = 0; i < m.vertexCount; i++) expect(unpackProfile(m.aux[i * 4 + 2])[0], `kind ${kind}`).toBe(EP.LEGACY);
+    }
+  });
+});
+
+describe('C.3 PartBuilder aux.z contract', () => {
+  function one(fn: (b: PartBuilder) => void, auxBits: number): number[] {
+    const w = new GeometryWriter(16);
+    const b = new PartBuilder();
+    b.begin(w, false, auxBits, 40, 7);
+    fn(b);
+    b.quad(b.v(0, 0, 0, 0, 1, 0, 0, 0), b.v(1, 0, 0, 0, 1, 0, 1, 0), b.v(1, 0, 1, 0, 1, 0, 1, 1), b.v(0, 0, 1, 0, 1, 0, 0, 1));
+    const m = w.finish();
+    return [m.aux[0], m.aux[1], m.aux[2], m.aux[3], m.uv[2], m.uv[5]];
+  }
+  it('mat(): aux.z = auxBits with bit 1 = coat; aux.x = the roughness override', () => {
+    expect(one((b) => b.mat(Mat.PLASTIC), 0b10101101)[2]).toBe(0b10101101);
+    expect(one((b) => b.mat(Mat.PLASTIC, -1, -1, -1, 0, 0, false), 0b10101111)[2]).toBe(0b10101101);
+    expect(one((b) => b.mat(Mat.PLASTIC, -1, -1, -1, 0, 0.4, true), 0b10101101)).toEqual(expect.arrayContaining([102]));
+    expect(one((b) => b.mat(Mat.PLASTIC, -1, -1, -1, 0, 0.4, true), 0b10101101)[2]).toBe(0b10101111);
+  });
+  it('emissive(): aux = (param, 0, tower | ep << 1 | variant << 5, ceilByte); uvScale(su, sv) until the next material', () => {
+    const a = one((b) => { b.emissive(Mat.PLASTIC, 1, 1, 1, 100, 0, 0, 9, EP.TUBE, 1, 120); b.uvScale(0.5, 2); }, 0b11111101);
+    expect(a.slice(0, 4)).toEqual([120, 0, 1 | (EP.TUBE << 1) | (1 << 5), 40]);
+    expect(a[4]).toBeCloseTo(0.5, 6); // u of vertex (1, 0, 0) = 1 * 0.5
+    expect(a[5]).toBeCloseTo(2, 6); // v of vertex (1, 0, 1)... = 1 * 2
+    const c = one((b) => { b.emissive(Mat.PLASTIC, 1, 1, 1, 100, 0, 0, 9, EP.TUBE, 1, 120); b.uvScale(0.5, 2); b.mat(Mat.PLASTIC); }, 1);
+    expect(c[4]).toBeCloseTo(1 / 0.6, 5); // back to metres / the PLASTIC repeat (0.6 m)
   });
 });

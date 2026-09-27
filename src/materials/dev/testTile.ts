@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import { EMISSION, LV } from '../../core/constants.ts';
+import { EP, lensParam, lensVariant, profileBits } from '../../core/emitterProfile.ts';
 import { toHalf } from '../../core/half.ts';
 import { LightState, Mat, VFlag } from '../../core/ids.ts';
 import type { MatId } from '../../core/ids.ts';
@@ -280,31 +281,35 @@ export function buildDevTile(opts: { vctOnly?: boolean } = {}): DevTile {
   };
   const dynColor: V3 = [1, 0.95, 0.85];
   const lensQuads: { l: Light; flags: number; aux: [number, number, number, number]; tint: [number, number, number, number]; emit: number }[] = [];
+  // emitter profile aux (core/emitterProfile.ts): troffers 1 x 2 tiles with 3 lamps along v (PRISM), sky panels 2 x 2
+  // (OPAL); tint.a = the fixture seed byte in every state
+  const trofferAux = (state: number): [number, number, number, number] => [lensParam(1, 2, 1), 0, profileBits(EP.PRISM, lensVariant(3, false)), state];
+  const skyAux: [number, number, number, number] = [lensParam(2, 2, 0), 0, profileBits(EP.OPAL, 0), 0];
   if (!opts.vctOnly) {
     for (const [x, z] of [[1.8, 2.4], [4.2, 2.4], [7.2, 2.4], [1.8, 7.2], [4.2, 7.2], [7.2, 7.2]] as const) {
       const l = troffer(1, x, z, 2.695, 3300);
-      lensQuads.push({ l, flags: 0, aux: [0, 0, 0, 0], tint: [255, 247, 224, 255], emit: 3300 });
+      lensQuads.push({ l, flags: 0, aux: trofferAux(0), tint: [255, 247, 224, (x * 37 + z * 11) & 255], emit: 3300 });
     }
     // a DYING shimmer lens and an OFF lens in room A (DYING light still lights at DYING_MEAN)
     const dying = troffer(1, 7.2, 4.8, 2.695, 3300 * 0.35);
-    lensQuads.push({ l: dying, flags: VFlag.SHIMMER, aux: [0, 0, 0, LightState.DYING], tint: [255, 235, 240, 77], emit: 3300 * 0.35 });
-    lensQuads.push({ l: { c: [1.8, 2.695, 4.8], hu: [0.3, 0, 0], hv: [0, 0, 0.6], L: [0, 0, 0], dyn: false, room: 1 }, flags: 0, aux: [0, 0, 0, 0], tint: [140, 135, 128, 255], emit: 0 });
+    lensQuads.push({ l: dying, flags: VFlag.SHIMMER, aux: trofferAux(LightState.DYING), tint: [255, 235, 240, 77], emit: 3300 * 0.35 });
+    lensQuads.push({ l: { c: [1.8, 2.695, 4.8], hu: [0.3, 0, 0], hv: [0, 0, 0.6], L: [0, 0, 0], dyn: false, room: 1 }, flags: 0, aux: trofferAux(LightState.OFF), tint: [140, 135, 128, 5], emit: 0 });
   }
   for (const [x, z] of [[12.0, 2.4], [16.8, 2.4], [12.0, 7.2], [16.8, 7.2]] as const) {
     const dyn = x === 16.8 && z === 7.2;
     const l = troffer(2, x, z, 2.695, 3300, dyn);
     if (dyn) l.L = mul(dynColor, 3300) as V3;
-    lensQuads.push({ l, flags: dyn ? VFlag.DYN_EMIT : 0, aux: [0, 0, 0, dyn ? LightState.FLICKER : 0], tint: [255, 247, 224, dyn ? 91 : 255], emit: 3300 });
+    lensQuads.push({ l, flags: dyn ? VFlag.DYN_EMIT : 0, aux: trofferAux(dyn ? LightState.FLICKER : 0), tint: [255, 247, 224, dyn ? 91 : (x * 37 + z * 11) & 255], emit: 3300 });
   }
   if (opts.vctOnly) for (const [x, z] of [[2.4, 2.4], [7.2, 2.4], [2.4, 7.2], [7.2, 7.2], [2.4, 12], [7.2, 12], [2.4, 16.8],
     [7.2, 16.8], [12, 12], [16.8, 12], [12, 16.8], [16.8, 16.8]] as const) {
     const l = troffer(2, x, z, 2.695, 3300);
-    lensQuads.push({ l, flags: 0, aux: [0, 0, 0, 0], tint: [255, 247, 224, 255], emit: 3300 });
+    lensQuads.push({ l, flags: 0, aux: trofferAux(0), tint: [255, 247, 224, (x * 37 + z * 11) & 255], emit: 3300 });
   }
   if (!opts.vctOnly) for (const [x, z] of [[3.6, 11.4], [9.6, 11.4], [15.6, 11.4], [3.6, 17.4], [9.6, 17.4], [15.6, 17.4]] as const) {
     const l: Light = { c: [x, 3.595, z], hu: [0.6, 0, 0], hv: [0, 0, 0.6], L: [2500 * 0.92, 2500 * 0.97, 2500], dyn: false, room: 3 };
     ROOMS[2].lights.push(l);
-    lensQuads.push({ l, flags: 0, aux: [0, 0, 0, 0], tint: [235, 247, 255, 255], emit: 2500 });
+    lensQuads.push({ l, flags: 0, aux: skyAux, tint: [235, 247, 255, (x * 37 + z * 11) & 255], emit: 2500 });
   }
 
   // ---- shell: floors, ceilings, walls

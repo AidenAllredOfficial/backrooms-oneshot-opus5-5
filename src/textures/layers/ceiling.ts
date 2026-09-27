@@ -44,28 +44,22 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Troffer prismatic lens: 4 mm pyramid grid in the normal map, two tube hot-stripes in the emissive mask
- * (ormh.a), a 2 cm painted frame with mask 0. */
+/** Troffer prismatic lens: 4 mm pyramid grid in the normal map and two tube hot-stripes in the emissive mask
+ * (ormh.a, used only by the low / lite path; medium and up shape lenses analytically, chunks/emitters.ts). One
+ * continuous sheet: no frame or rim shade per 0.6 m repeat (a 2x4 lens used to read as two squares with a divider,
+ * a sky panel as four). The stripe mask is scaled so the lens mean stays what the old framed texture had. */
 const PANEL_LENS = /* glsl */ `
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
   TileInfo t = tiles(m, FRAME);
-  float e = t.edge;
-  float w = 0.7 * aaM();
-  float fr = 1.0 - smoothstep(0.02 - w, 0.02 + w, e);
   vec2 pc = fract(m / 0.004) - 0.5;
   float pyr = 1.0 - 2.0 * max(abs(pc.x), abs(pc.y));
   float lx = t.local.x;
   float tube = gauss((lx + 0.1) / 0.035) + gauss((lx - 0.1) / 0.035);
-  float inner = smoothstep(0.02, 0.08, e);
-  float em = (0.62 + 0.38 * sat(tube)) * mix(0.82, 1.0, inner);
-  s.emissive = em * (1.0 - fr);
-  vec3 lensCol = TABLE_ALBEDO * (1.0 + 0.03 * (pyr - 0.5));
-  vec3 frameCol = srgb8(236.0, 236.0, 230.0);
-  s.albedo = mix(lensCol, frameCol, fr);
-  float lip = 1.0 - smoothstep(0.012, 0.02, e);
-  s.height = mix(0.3 + 0.25 * pyr, 0.8 + 0.15 * lip, fr);
-  s.rough = mix(0.22, 0.4, fr);
+  s.emissive = 0.848 * (0.62 + 0.38 * sat(tube));
+  s.albedo = TABLE_ALBEDO * (1.0 + 0.03 * (pyr - 0.5));
+  s.height = 0.3 + 0.25 * pyr;
+  s.rough = 0.22;
 }
 `;
 
