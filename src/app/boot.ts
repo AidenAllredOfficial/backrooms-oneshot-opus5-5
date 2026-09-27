@@ -273,6 +273,11 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const lighting = createLightingRuntime(core.scene, materials.globals, textures, q, settings, core.bus);
   lighting.setFlickerMode(core.flickerMode);
   const post = createPostStack(r, core.scene, core.camera, q, settings);
+  // the frame graph publishes the pyramid and the pre-shade SSAO into the material globals; presets with split
+  // frames compile its quad programs now, not at the first frame with water in view
+  const frame = postInternals(post)?.scenePass;
+  frame?.bindGlobals(materials.globals);
+  if (frame && q.colorPyramidScale > 0) await warmPassMaterials(r, frame.materials);
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
@@ -350,9 +355,10 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   // new post passes (AO mode, SMAA preset) stay out of the frame until their programs are linked in parallel
   // (KHR_parallel_shader_compile): the switch no longer stalls a frame on a synchronous link (R2 B9)
   const internals = postInternals(s.post);
-  const before = new Set<object>(internals ? internals.passes : []);
+  // the pre-shade SSAO helper is a frame-graph hook, not a composer pass: a new one waits the same way
+  const before = new Set<object>(internals ? [...internals.passes, internals.ao] : []);
   s.post.setQuality(nq);
-  const fresh = internals ? internals.passes.filter((p) => !before.has(p)) : [];
+  const fresh: { enabled: boolean }[] = internals ? [...internals.passes, internals.ao].filter((p) => !before.has(p)) : [];
   const wasEnabled = fresh.map((p) => p.enabled);
   for (const p of fresh) p.enabled = false;
   s.post.setSize(innerWidth, innerHeight);
@@ -362,7 +368,11 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   s.materials.setQuality(nq);
   s.dynRes = createDynamicResolution(s.post, r, nq);
   try {
-    await warmPassMaterials(r, collectPassMaterials(fresh));
+    const mats = collectPassMaterials(fresh);
+    // the frame graph's own quad programs (pyramid, MRT composite) on presets with split frames; already-linked
+    // programs cost nothing here
+    if (internals && nq.colorPyramidScale > 0) mats.push(...internals.scenePass.materials);
+    await warmPassMaterials(r, mats);
   } finally {
     fresh.forEach((p, i) => { p.enabled = wasEnabled[i]; });
   }

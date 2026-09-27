@@ -10,7 +10,8 @@ import { buildTile } from '../../src/mesh/buildTile.ts';
 import { createDepthMaterial } from '../../src/materials/DepthMaterial.ts';
 import { HELPERS_GLSL } from '../../src/materials/chunks/common.ts';
 import { TUNE } from '../../src/materials/chunks/params.ts';
-import { PREPASS, renderWithPrepass } from '../../src/materials/prepass.ts';
+import { PREPASS, PREPASS_LATE, renderWithPrepass } from '../../src/materials/prepass.ts';
+import { LAYER_LATE } from '../../src/materials/shared.ts';
 import { buildSurfaceVertex } from '../../src/materials/SurfaceMaterial.ts';
 import { genNb, tileKey } from '../mesh/helpers.ts';
 
@@ -139,6 +140,70 @@ describe('renderWithPrepass', () => {
     expect(t.decal.visible).toBe(true);
     expect(t.renderer.autoClear).toBe(true);
     expect(t.depth).toMatchObject({ locked: false, mask: true });
+  });
+
+  it('frame-graph options: afterDepth runs once between the renders, excludeLayer applies to shading only', () => {
+    const t = setup();
+    const cam = new THREE.PerspectiveCamera();
+    cam.layers.enable(LAYER_LATE);
+    const order: string[] = [];
+    const masks: number[] = [];
+    t.renderer.render = () => { order.push(t.props.material === t.depthMat ? 'prepass' : 'shade'); masks.push(cam.layers.mask); };
+    renderWithPrepass(t.renderer as unknown as THREE.WebGLRenderer, t.scene, cam, {
+      afterDepth: () => {
+        order.push('afterDepth');
+        // materials restored, shadow map already updated (auto-update off), depth still writable
+        expect(t.props.material).toBe(t.surf);
+        expect(t.decal.visible).toBe(true);
+        expect(t.renderer.shadowMap.autoUpdate).toBe(false);
+        expect(t.depth).toMatchObject({ locked: false, mask: true });
+      },
+      excludeLayer: () => LAYER_LATE,
+    });
+    expect(order).toEqual(['prepass', 'afterDepth', 'shade']);
+    expect(masks).toEqual([3, 1]);
+    expect(cam.layers.mask).toBe(3);
+  });
+
+  it('restores the camera layers when the shading render throws', () => {
+    const t = setup();
+    const cam = new THREE.PerspectiveCamera();
+    cam.layers.enable(LAYER_LATE);
+    let n = 0;
+    t.renderer.render = () => { if (++n === 2) throw new Error('boom'); };
+    expect(() => renderWithPrepass(t.renderer as unknown as THREE.WebGLRenderer, t.scene, cam, { excludeLayer: () => LAYER_LATE })).toThrow('boom');
+    expect(cam.layers.mask).toBe(3);
+    expect(t.depth).toMatchObject({ locked: false, mask: true });
+    expect(t.renderer.shadowMap.autoUpdate).toBe(true);
+  });
+
+  it('records whether a hidden LAYER_LATE mesh is in view (options only; idle draw ranges do not count)', () => {
+    const t = setup();
+    const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+    cam.layers.enable(LAYER_LATE);
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial());
+    water.layers.set(LAYER_LATE);
+    t.scene.add(water);
+    const at = (z: number, count = Infinity): boolean => {
+      water.position.set(0, 0, z);
+      water.geometry.setDrawRange(0, count);
+      t.scene.updateMatrixWorld(true);
+      renderWithPrepass(t.renderer as unknown as THREE.WebGLRenderer, t.scene, cam, {});
+      return PREPASS_LATE.visible;
+    };
+    expect(at(-5)).toBe(true);
+    expect(at(20)).toBe(false); // behind the camera
+    expect(at(-5, 0)).toBe(false);
+    expect(at(-5)).toBe(true);
+    // the mirrored view (no options) leaves the flag alone
+    water.position.set(0, 0, 20);
+    t.scene.updateMatrixWorld(true);
+    renderWithPrepass(t.renderer as unknown as THREE.WebGLRenderer, t.scene, cam);
+    expect(PREPASS_LATE.visible).toBe(true);
+    expect(water.visible).toBe(true);
+    // a camera that does not render the late layer never asks for a split
+    cam.layers.disable(LAYER_LATE);
+    expect(at(-5)).toBe(false);
   });
 
   it('renders once when disabled', () => {

@@ -148,7 +148,9 @@ whole 3 x 3 chunk ring so their images are deterministic; `bake=preview` / `bake
 
 **GPU cost.** On the development laptop (RTX 5070 Ti) a frame at high and 1080p costs about 1.6-2 ms of GPU time,
 and ultra at 1440p (a 3840 × 2160 supersampled buffer) about 6-7 ms. The scene is drawn with a depth prepass (each
-visible pixel is shaded once; the image is identical), and ambient occlusion runs at half resolution.
+visible pixel is shaded once; the image is identical). Ambient occlusion runs at half resolution between the depth
+prepass and shading, so it darkens only indirect light (with the albedo's multi-bounce: yellow corners stay yellow),
+and on high and ultra short screen-space contact shadows ground furniture, monitors and chair legs in the baked light.
 `__backrooms.gpuBench()` measures the current view, `__backrooms.gpuProfile(seconds)` splits it by pass.
 
 See [the performance audit](docs/PERFORMANCE_AUDIT.md) for measurements, changes and reproduction steps.

@@ -39,10 +39,11 @@ const camera = new THREE.PerspectiveCamera(62, 16 / 9, 0.05, 400);
 
 describe('post effect layout', () => {
   it('pass order matches DESIGN §5.WP11', () => {
-    expect(POST_PASSES.map((p) => p.name)).toEqual(['RenderPass', 'AmbientOcclusionPass', 'AutoExposurePass', 'EffectPass', 'EffectPass', 'EffectPass']);
-    expect(POST_PASSES[3].effects).toEqual(['BloomEffect', 'ExposureEffect', 'ToneMappingEffect', 'ColorGradeEffect']);
-    expect(POST_PASSES[4].effects).toEqual(['SMAAEffect|FXAAEffect']); // alone
-    expect(POST_PASSES[5].effects).toEqual(['LensEffect', 'FilmGrainEffect']);
+    // no AO pass: the pre-shade SSAO is a frame-graph hook inside the RenderPass (post/ScenePass.ts)
+    expect(POST_PASSES.map((p) => p.name)).toEqual(['RenderPass', 'AutoExposurePass', 'EffectPass', 'EffectPass', 'EffectPass']);
+    expect(POST_PASSES[2].effects).toEqual(['BloomEffect', 'ExposureEffect', 'ToneMappingEffect', 'ColorGradeEffect']);
+    expect(POST_PASSES[3].effects).toEqual(['SMAAEffect|FXAAEffect']); // alone
+    expect(POST_PASSES[4].effects).toEqual(['LensEffect', 'FilmGrainEffect']);
   });
 
   it('the lens is CONVOLUTION without mainUv; grain/exposure/grade are plain', () => {

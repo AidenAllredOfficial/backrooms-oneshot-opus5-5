@@ -111,6 +111,14 @@ export function passLabel(p: Pass, i: number): string {
   return p.name || `pass${i}`;
 }
 
+/** The parts of post/ScenePass.ts the profiler times (duck-typed: any pass carrying `hooks`). */
+interface FrameGraphTargets {
+  hooks: Record<string, { name: string; run(...a: never[]): void }[]>;
+  pyramid: { build(...a: never[]): void };
+  composite: { render(...a: never[]): void };
+  renderLate(...a: never[]): void;
+}
+
 export interface ProfileTargets {
   renderer: THREE.WebGLRenderer;
   passes: Pass[];
@@ -121,7 +129,15 @@ export interface ProfileTargets {
 /** Hook every target; returns the restore function. */
 export function hookAll(prof: GpuProfiler, t: ProfileTargets): () => void {
   const undo: (() => void)[] = [];
-  t.passes.forEach((p, i) => undo.push(hookSegment(prof, p, 'render', passLabel(p, i))));
+  t.passes.forEach((p, i) => {
+    undo.push(hookSegment(prof, p, 'render', passLabel(p, i)));
+    const fg = p as unknown as Partial<FrameGraphTargets>;
+    if (!fg.hooks || !fg.pyramid || !fg.composite) return;
+    for (const list of Object.values(fg.hooks)) for (const h of list) undo.push(hookSegment(prof, h, 'run', h.name));
+    undo.push(hookSegment(prof, fg.pyramid, 'build', 'pyramid'));
+    undo.push(hookSegment(prof, fg.composite, 'render', 'mrtComposite'));
+    undo.push(hookSegment(prof, fg as FrameGraphTargets, 'renderLate', 'late'));
+  });
   undo.push(hookSegment(prof, t.finalPass, 'render', `final:${passLabel(t.finalPass, 0)}`));
   undo.push(hookSegment(prof, t.renderer.shadowMap as unknown as { render(): void }, 'render', 'shadowMap'));
   undo.push(hookSegment(prof, t.reflection, 'update', 'reflection'));

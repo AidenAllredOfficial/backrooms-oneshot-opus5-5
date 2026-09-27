@@ -1,11 +1,13 @@
-// src/post/AmbientOcclusionPass.ts — screen-space ambient occlusion (replaces N8AO, which cost 9.5 ms of a 15.8 ms
-// ultra frame on an RTX 5070 Ti: 64 samples at full resolution, two denoise passes, an accumulation copy, a
-// composite and another full-screen copy).
+// src/post/AmbientOcclusionPass.ts — pre-shade screen-space ambient occlusion (SsaoPre; replaced N8AO, which cost
+// 9.5 ms of a 15.8 ms ultra frame on an RTX 5070 Ti: 64 samples at full resolution, two denoise passes, an
+// accumulation copy, a composite and another full-screen copy).
 //
-// The estimator and the composite are N8AO's, so the look carries over: view-space hemisphere samples on a
-// Fibonacci disk lifted onto the hemisphere around the depth-reconstructed normal, a smooth range check
-// (radius · falloff · 0.2 in view depth), and colour = scene · mix(aoColor, 1, ao^intensity). The work is organised
-// differently:
+// The estimator is N8AO's: view-space hemisphere samples on a Fibonacci disk lifted onto the hemisphere around the
+// depth-reconstructed normal and a smooth range check (radius · falloff · 0.2 in view depth). It runs as the frame
+// graph's afterDepth hook 'ssao' (post/ScenePass.ts), between the depth prepass and shading, so the surface shader
+// applies the occlusion where it belongs: to the indirect light only, with albedo multi-bounce, and only the part the
+// bake has not already applied (chunks/screenspace.ts brSsao, chunks/lighting.ts). Direct light, emitters, haze and
+// water are no longer darkened. Steps:
 //  0. The view depth of the full-resolution pixel each AO texel represents, into an R32F target at AO resolution,
 //     and a second level at half that (every other texel, not averaged): the scattered sample taps read these small
 //     textures (cache friendly, no per-tap linearisation); taps farther than 16 AO texels read the coarse level,
@@ -16,19 +18,18 @@
 //     and an octahedral view-space normal in one RGBA16F texel.
 //  2. A separable bilateral denoise (horizontal, then vertical; 5 taps each) with weights (0.5, 1, 1, 1, 0.5): every
 //     residue class of the 4x4 pattern gets the same total weight, so flat areas lose the pattern exactly.
-//     Edge-stopping as N8AO's denoise (tangent-plane distance and normal agreement).
-//  3. The composite multiplies the scene colour in place (blend ZERO, SRC_COLOR; needsSwap = false), upsampling
-//     from the 2x2 nearest AO texels weighted by bilinear weight x the distance of the full-resolution pixel to
-//     each texel's tangent plane x the agreement of the pixel's own normal (from full-resolution depth) with the
-//     texel's. Plane distance alone lets the two faces of a crease borrow each other's AO (each face passes
-//     within a centimetre of the other's plane there), which drew the AO edge along the side of every ceiling
-//     grid bar in 2-pixel steps. A pixel with no texel of its own surface in the 2x2 (a face narrower than two
-//     pixels) uses that surface's texels in the surrounding 4x4, and failing that is left unoccluded (a cable).
-//     It samples the composer's stable depth copy, never the input buffer's own depth attachment, so there is
-//     no feedback loop.
+//     Edge-stopping as N8AO's denoise (tangent-plane distance and normal agreement). It filters .r only and copies
+//     the centre texel's view depth and normal (.gba) unchanged: the surface shader's depth- and normal-aware upsample
+//     and the contact shadows read them.
+// The result (aoRT: r AO, g view Z, ba oct view normal) is published as MaterialGlobals.ssaoTex with ssaoParams (x on,
+// y = the atmosphere's aoIntensity x SSAO_POW_SCALE, z = the tangent-plane falloff, w = the texel step), ssaoProj
+// (P00, P11, P20, P21) and ssaoSize (the full-resolution size). The hook reads the opaque target's own depth texture
+// while that target is not bound (the composer's stable copy is filled only after the scene pass) and binds only
+// its own targets.
 
 import * as THREE from 'three';
-import { Pass } from 'postprocessing';
+import type { MaterialGlobals } from '../core/runtime.ts';
+import { FullscreenQuad, quadMaterial } from './frame/quad.ts';
 
 export interface AoSettings {
   /** hemisphere samples per AO texel */
@@ -36,10 +37,6 @@ export interface AoSettings {
   /** AO at half the drawing-buffer resolution */
   halfRes: boolean;
 }
-
-const VERT = /* glsl */ `
-void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }
-`;
 
 const COMMON = /* glsl */ `
 precision highp float;
@@ -186,73 +183,6 @@ void main() {
 }
 `;
 
-const COMPOSITE_FRAG = /* glsl */ `
-${COMMON}
-uniform highp sampler2D tAo;
-uniform float uPlane;
-uniform float uIntensity;
-uniform vec3 uColor; // linear
-layout( location = 0 ) out highp vec4 outColor;
-// how well AO texel q (value s) describes the surface at P with normal N: distance of P to the texel's tangent
-// plane, and normal agreement (the two faces of a crease are within a centimetre of each other's planes there)
-float brSameSurface( vec4 s, ivec2 q, vec3 P, vec3 N ) {
-	if ( s.g >= 1e4 ) return 0.0;
-	vec3 Ns = brOctDec( s.ba );
-	float nd = max( dot( N, Ns ), 0.0 );
-	nd *= nd; nd *= nd; nd *= nd;
-	return exp( - abs( dot( P - brTexelPos( q, s.g ), Ns ) ) / uPlane ) * nd;
-}
-void main() {
-	ivec2 x = ivec2( gl_FragCoord.xy );
-	float d = texelFetch( tDepth, x, 0 ).x;
-	if ( d >= 1.0 ) { outColor = vec4( 1.0 ); return; }
-	float ao;
-#if BR_AO_STEP == 1
-	ao = texelFetch( tAo, x, 0 ).r;
-#else
-	vec3 P = brViewPos( d, ( vec2( x ) + 0.5 ) / uFull );
-	vec3 N = brNormal( x, d, P );
-	ivec2 sz = textureSize( tAo, 0 );
-	vec2 fc = vec2( x ) * 0.5;
-	ivec2 b = ivec2( floor( fc ) );
-	vec2 f = fc - vec2( b );
-	float sum = 0.0, wsum = 0.0, gmax = 0.0;
-	for ( int j = 0; j < 2; j ++ ) {
-		for ( int i = 0; i < 2; i ++ ) {
-			ivec2 q = min( b + ivec2( i, j ), sz - 1 );
-			vec4 s = texelFetch( tAo, q, 0 );
-			float g = brSameSurface( s, q, P, N );
-			float w = ( ( i == 0 ? 1.0 - f.x : f.x ) * ( j == 0 ? 1.0 - f.y : f.y ) + 1e-3 ) * g;
-			sum += s.r * w;
-			wsum += w;
-			gmax = max( gmax, g );
-		}
-	}
-	if ( gmax < 0.1 ) {
-		// no AO texel of the 2x2 lies on this pixel's surface (a face or sliver narrower than two pixels, such as
-		// the side of a ceiling grid bar at a glancing angle): the texels of that surface in the surrounding 4x4
-		sum = wsum = 0.0;
-		for ( int j = -1; j <= 2; j ++ ) {
-			for ( int i = -1; i <= 2; i ++ ) {
-				ivec2 q = clamp( b + ivec2( i, j ), ivec2( 0 ), sz - 1 );
-				vec4 s = texelFetch( tAo, q, 0 );
-				vec2 dq = vec2( q * 2 - x );
-				float w = exp( - 0.125 * dot( dq, dq ) ) * brSameSurface( s, q, P, N );
-				sum += s.r * w;
-				wsum += w;
-			}
-		}
-	}
-	// nothing of this surface within 4 pixels (a wire thinner than a pixel): unoccluded, rather than the AO of
-	// whatever lies behind it
-	ao = wsum > 1e-4 ? sum / wsum : 1.0;
-#endif
-	float a = pow( clamp( ao, 0.0, 1.0 ), uIntensity );
-	// N8AO: mix( scene, color * scene, 1 - ao ) = scene * mix( color, 1, ao ), applied by the blend (dst * src)
-	outColor = vec4( mix( uColor, vec3( 1.0 ), a ), 1.0 );
-}
-`;
-
 /** N8AO's hemisphere set: Fibonacci disk points lifted onto the unit hemisphere. */
 export function hemisphereSamples(n: number): THREE.Vector3[] {
   const out: THREE.Vector3[] = [];
@@ -265,21 +195,28 @@ export function hemisphereSamples(n: number): THREE.Vector3[] {
   return out;
 }
 
-function quadMaterial(name: string, frag: string, defines: Record<string, string | number>, uniforms: Record<string, THREE.IUniform>): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    name, glslVersion: THREE.GLSL3, vertexShader: VERT, fragmentShader: frag, defines, uniforms,
-    depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
-  });
+/** The afterDepth hook's view of the frame (post/ScenePass.ts FrameContext). */
+export interface SsaoFrame {
+  renderer: THREE.WebGLRenderer;
+  camera: THREE.PerspectiveCamera;
+  depth: THREE.Texture;
+  width: number;
+  height: number;
+  globals: MaterialGlobals | null;
 }
 
-export class AmbientOcclusionPass extends Pass {
+export class SsaoPre {
   /** N8AO-compatible parameters */
   radius = 0.7;
   distanceFalloff = 0.6;
+  /** the atmosphere's aoIntensity (the shader's exponent is this x powScale) */
   intensity = 1;
-  /** linear RGB */
-  readonly color = new THREE.Color(0, 0, 0);
+  powScale = 1;
+  /** off: the hook renders nothing and the surfaces skip the lookup (ssaoParams.x = 0) */
+  enabled = true;
   readonly settings: Readonly<AoSettings>;
+  /** full-resolution pixels per AO texel */
+  readonly step: number;
   private readonly cam: THREE.PerspectiveCamera;
   private readonly zRT: THREE.WebGLRenderTarget;
   private readonly zRT2: THREE.WebGLRenderTarget;
@@ -288,18 +225,17 @@ export class AmbientOcclusionPass extends Pass {
   private readonly zMat: THREE.ShaderMaterial;
   private readonly aoMat: THREE.ShaderMaterial;
   private readonly denoiseMat: THREE.ShaderMaterial;
-  private readonly compMat: THREE.ShaderMaterial;
   private readonly all: readonly THREE.ShaderMaterial[];
-  private readonly full = new THREE.Vector2(1, 1);
-  private depth: THREE.Texture | null = null;
+  private readonly quad = new FullscreenQuad();
+  private readonly full = new THREE.Vector2(0, 0);
+  /** the globals this helper published into and the texture it replaced there (restored on dispose) */
+  private published: { g: MaterialGlobals; prev: THREE.Texture } | null = null;
 
   constructor(camera: THREE.PerspectiveCamera, settings: AoSettings) {
-    super('AmbientOcclusionPass');
-    this.needsSwap = false;
-    this.needsDepthTexture = true;
     this.cam = camera;
     this.settings = { samples: Math.max(4, Math.min(64, Math.round(settings.samples))), halfRes: settings.halfRes };
     const step = this.settings.halfRes ? 2 : 1;
+    this.step = step;
     const opts = {
       type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
       generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
@@ -323,31 +259,24 @@ export class AmbientOcclusionPass extends Pass {
       uRadius: { value: this.radius }, uFalloff: { value: this.distanceFalloff },
     });
     this.denoiseMat = quadMaterial('br-ao-denoise', DENOISE_FRAG, defs, { ...shared, tAo: { value: this.aoRT.texture }, uPlane: { value: 0.1 }, uDir: { value: new THREE.Vector2(1, 0) } });
-    this.compMat = quadMaterial('br-ao-composite', COMPOSITE_FRAG, defs, {
-      ...shared, tAo: { value: this.aoRT.texture }, uPlane: { value: 0.1 }, uIntensity: { value: 1 }, uColor: { value: new THREE.Color() },
-    });
-    // in-place multiply of the scene colour (alpha kept)
-    this.compMat.blending = THREE.CustomBlending;
-    this.compMat.blendEquation = THREE.AddEquation;
-    this.compMat.blendSrc = THREE.ZeroFactor;
-    this.compMat.blendDst = THREE.SrcColorFactor;
-    this.compMat.blendSrcAlpha = THREE.ZeroFactor;
-    this.compMat.blendDstAlpha = THREE.OneFactor;
-    this.all = [this.zMat, this.aoMat, this.denoiseMat, this.compMat];
-    this.fullscreenMaterial = this.aoMat;
+    this.all = [this.zMat, this.aoMat, this.denoiseMat];
   }
 
-  /** Every program of the pass (compiled ahead by the quality switch). */
+  /** Every program of the helper (compiled ahead by the quality switch). */
   get materials(): readonly THREE.ShaderMaterial[] { return this.all; }
 
-  override setDepthTexture(depthTexture: THREE.Texture): void {
-    this.depth = depthTexture;
-  }
+  /** r AO, g view Z, ba oct view normal (valid after renderPre). */
+  get texture(): THREE.Texture { return this.aoRT.texture; }
 
-  override setSize(width: number, height: number): void {
+  /** the tangent-plane falloff of the denoise and the surface upsample (m) */
+  get plane(): number { return this.radius * this.distanceFalloff * 0.2; }
+
+  /** Size the targets for a `width` x `height` full-resolution frame (reallocates only on change). */
+  setSize(width: number, height: number): void {
     const w = Math.max(1, width), h = Math.max(1, height);
+    if (w === this.full.x && h === this.full.y) return;
     this.full.set(w, h);
-    const s = this.settings.halfRes ? 2 : 1;
+    const s = this.step;
     const aw = Math.ceil(w / s), ah = Math.ceil(h / s);
     this.zRT.setSize(aw, ah);
     this.zRT2.setSize(Math.ceil(aw / 2), Math.ceil(ah / 2));
@@ -355,55 +284,65 @@ export class AmbientOcclusionPass extends Pass {
     this.denoiseRT.setSize(aw, ah);
   }
 
-  override render(renderer: THREE.WebGLRenderer, inputBuffer: THREE.WebGLRenderTarget | null): void {
-    if (!inputBuffer || !this.depth) return;
+  /** Z, coarse Z, AO and the separable denoise from `depth` (the full-resolution depth texture, not bound);
+   * binds only its own targets and leaves the result in aoRT. */
+  renderPre(renderer: THREE.WebGLRenderer, depth: THREE.Texture): void {
     const cam = this.cam;
-    const plane = this.radius * this.distanceFalloff * 0.2;
-    for (const m of this.materials) {
+    for (const m of this.all) {
       const u = m.uniforms;
-      u.tDepth.value = this.depth;
+      u.tDepth.value = depth;
       u.uNear.value = cam.near;
       u.uFar.value = cam.far;
     }
     const au = this.aoMat.uniforms;
     au.uRadius.value = this.radius;
     au.uFalloff.value = this.distanceFalloff;
-    this.denoiseMat.uniforms.uPlane.value = plane;
-    const cu = this.compMat.uniforms;
-    cu.uPlane.value = plane;
-    cu.uIntensity.value = this.intensity;
-    (cu.uColor.value as THREE.Color).copy(this.color);
+    this.denoiseMat.uniforms.uPlane.value = this.plane;
 
-    const step = this.settings.halfRes ? 2 : 1;
-    this.fullscreenMaterial = this.zMat;
+    const step = this.step;
     this.zMat.uniforms.uZStep.value = step;
-    renderer.setRenderTarget(this.zRT);
-    renderer.render(this.scene, this.camera);
+    this.quad.render(renderer, this.zMat, this.zRT);
     this.zMat.uniforms.uZStep.value = step * 2;
-    renderer.setRenderTarget(this.zRT2);
-    renderer.render(this.scene, this.camera);
-    this.fullscreenMaterial = this.aoMat;
-    renderer.setRenderTarget(this.aoRT);
-    renderer.render(this.scene, this.camera);
-    // separable denoise: aoRT -> denoiseRT (horizontal) -> aoRT (vertical); the composite reads aoRT
+    this.quad.render(renderer, this.zMat, this.zRT2);
+    this.quad.render(renderer, this.aoMat, this.aoRT);
+    // separable denoise: aoRT -> denoiseRT (horizontal) -> aoRT (vertical); the surfaces read aoRT
     const du = this.denoiseMat.uniforms;
-    this.fullscreenMaterial = this.denoiseMat;
     du.tAo.value = this.aoRT.texture;
     (du.uDir.value as THREE.Vector2).set(1, 0);
-    renderer.setRenderTarget(this.denoiseRT);
-    renderer.render(this.scene, this.camera);
+    this.quad.render(renderer, this.denoiseMat, this.denoiseRT);
     du.tAo.value = this.denoiseRT.texture;
     (du.uDir.value as THREE.Vector2).set(0, 1);
-    renderer.setRenderTarget(this.aoRT);
-    renderer.render(this.scene, this.camera);
-    this.fullscreenMaterial = this.compMat;
-    renderer.setRenderTarget(inputBuffer);
-    renderer.render(this.scene, this.camera);
-    this.fullscreenMaterial = this.aoMat;
+    this.quad.render(renderer, this.denoiseMat, this.aoRT);
   }
 
-  override dispose(): void {
-    this.depth = null;
+  /** The 'ssao' hook body: render (when enabled) and publish into the material globals. */
+  run(f: SsaoFrame): void {
+    const g = f.globals;
+    if (!this.enabled) {
+      if (g) g.ssaoParams.value.x = 0;
+      return;
+    }
+    this.setSize(f.width, f.height);
+    this.renderPre(f.renderer, f.depth);
+    if (!g) return;
+    if (g.ssaoTex.value !== this.aoRT.texture) {
+      if (!this.published || this.published.g !== g) this.published = { g, prev: g.ssaoTex.value };
+      g.ssaoTex.value = this.aoRT.texture;
+    }
+    g.ssaoParams.value.set(1, this.intensity * this.powScale, this.plane, this.step);
+    const e = f.camera.projectionMatrix.elements;
+    g.ssaoProj.value.set(e[0], e[5], e[8], e[9]);
+    g.ssaoSize.value.set(this.full.x, this.full.y, 1 / this.full.x, 1 / this.full.y);
+  }
+
+  dispose(): void {
+    // a successor (quality switch) publishes on its first enabled frame; until then no surface binds a freed target
+    const p = this.published;
+    if (p && p.g.ssaoTex.value === this.aoRT.texture) {
+      p.g.ssaoTex.value = p.prev;
+      p.g.ssaoParams.value.x = 0;
+    }
+    this.published = null;
     this.zRT.dispose();
     this.zRT2.dispose();
     this.aoRT.dispose();
@@ -411,6 +350,5 @@ export class AmbientOcclusionPass extends Pass {
     this.zMat.dispose();
     this.aoMat.dispose();
     this.denoiseMat.dispose();
-    this.compMat.dispose();
   }
 }
