@@ -254,10 +254,9 @@ export const TUNE = {
   // --- lighting
   DIRECT_MIN_ROUGH: 0.25, // baked dominant-direction specular never sharper than this (it is an area estimate)
   NG_MIN: 0.2,
-  // props read the light volume in front of their surface (chunks/lighting.ts lvLookup): up-facing surfaces look up
-  // n.y * this many LV levels (a whole level: a seat top never blends in the samples under its own frame)...
+  // props: up-facing surfaces look up n.y * this many light-volume levels (chunks/lighting.ts lvLookup; a whole level:
+  // a seat top never blends in the samples under its own frame)
   LV_BIAS_LEVELS: 1.0,
-  LV_BIAS_XZ: 0.3, // ...and by n.xz * this (m, half an LV step) horizontally
   // --- emission-map reflections
   EM_LOD_PER_ROUGH: 5.0,
   EM_ROUGH_CUT: 0.5, // emission-map reflections at full weight below this roughness (spec gate)
@@ -434,7 +433,6 @@ export function glslConstants(): string {
 #define BR_DIRECT_MIN_ROUGH ${f(TUNE.DIRECT_MIN_ROUGH)}
 #define BR_NG_MIN ${f(TUNE.NG_MIN)}
 #define BR_LV_BIAS_K ${f(TUNE.LV_BIAS_LEVELS)}
-#define BR_LV_BIAS_XZ ${f(TUNE.LV_BIAS_XZ)}
 #define BR_EM_LOD ${f(TUNE.EM_LOD_PER_ROUGH)}
 #define BR_EM_ROUGH_CUT ${f(TUNE.EM_ROUGH_CUT)}
 #define BR_EM_ROUGH_END ${f(TUNE.EM_ROUGH_END)}

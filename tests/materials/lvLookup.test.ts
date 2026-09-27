@@ -1,13 +1,11 @@
-// tests/materials/lvLookup.test.ts — the props' front-side light-volume lookup (chunks/lighting.ts lvLookup, the TS
-// twin of the BR_LV block): an up-facing surface never blends in volume samples below its own plane (the samples
-// under a lounge chair's frame are in its shadow and lit from below; blended into the seat top they drew a dark
-// blotch), and every lookup moves out of the surface horizontally without crossing a wall of its own cell.
+// tests/materials/lvLookup.test.ts — the props' light-volume lookup (chunks/lighting.ts lvLookup, the TS twin of the
+// BR_LV block): an up-facing surface never blends in volume samples below its own plane (the samples under a lounge
+// chair's frame are in its shadow and lit from below; blended into the seat top they drew a dark blotch).
 
 import { describe, expect, it } from 'vitest';
 import { CELL, LV } from '../../src/core/constants.ts';
 import { FRAG_LIGHTS_GLSL, lvLevel, lvLookup } from '../../src/materials/chunks/lighting.ts';
 import { HELPERS_GLSL } from '../../src/materials/chunks/common.ts';
-import { TUNE } from '../../src/materials/chunks/params.ts';
 
 const Y = LV.Y;
 const UP = [0, 1, 0] as const, DOWN = [0, -1, 0] as const;
@@ -26,7 +24,7 @@ describe('lvLevel', () => {
   });
 });
 
-describe('lvLookup: front-side light-volume lookup', () => {
+describe('lvLookup: up-facing surfaces look up', () => {
   it('an up-facing surface blends no level below it (within the volume)', () => {
     for (let y = 0; y <= Y[LV.NY - 2]; y += 0.01) {
       const [i0, w0, i1, w1] = corners(lvLookup([6, y, 6], UP, 0)[1]);
@@ -62,30 +60,23 @@ describe('lvLookup: front-side light-volume lookup', () => {
     }
   });
 
-  it('vertical faces keep the plain level and move half an LV step out along the normal', () => {
+  it('vertical faces keep the plain level and the fragment\'s own (wall-clamped) point', () => {
     const [x, k, z] = lvLookup([6.1, 1.1, 6.2], [1, 0, 0], 0);
     expect(k).toBeCloseTo(lvLevel(1.1), 12);
-    expect(x).toBeCloseTo(6.1 + TUNE.LV_BIAS_XZ, 12);
-    expect(z).toBeCloseTo(6.2, 12);
-    expect(TUNE.LV_BIAS_XZ).toBeCloseTo(LV.STEP / 2, 12);
-  });
-
-  it('never moves the lookup through an occluding side of the fragment\'s own cell', () => {
+    expect(x).toBe(6.1);
+    expect(z).toBe(6.2);
     const x0 = 5 * CELL, z0 = 5 * CELL;
-    // a back panel 0.1 m in front of a west wall, facing it: held 0.3 m inside the cell
+    // 0.1 m from a west wall (bit 8) / a north wall (bit 1): held 0.3 m inside the cell, whatever the normal
     expect(lvLookup([x0 + 0.1, 1, z0 + 0.6], [-1, 0, 0], 8)[0]).toBeCloseTo(x0 + 0.3, 12);
-    // the same face with an open west side reads beyond the cell line
-    expect(lvLookup([x0 + 0.1, 1, z0 + 0.6], [-1, 0, 0], 0)[0]).toBeCloseTo(x0 - 0.2, 12);
-    // north wall (bit 1), face turned toward it
-    expect(lvLookup([x0 + 0.6, 1, z0 + 0.05], [0, 0, -1], 1)[2]).toBeCloseTo(z0 + 0.3, 12);
+    expect(lvLookup([x0 + 0.6, 1, z0 + 0.05], [0, 1, 0], 1)[2]).toBeCloseTo(z0 + 0.3, 12);
+    expect(lvLookup([x0 + 0.1, 1, z0 + 0.6], [-1, 0, 0], 0)[0]).toBeCloseTo(x0 + 0.1, 12);
   });
 });
 
 describe('GLSL: BR_LV block', () => {
-  it('clamps with the fragment\'s own cell, offsets along the geometric normal and shifts the level', () => {
+  it('clamps the fragment\'s own point inside its cell and shifts the level of up-facing surfaces', () => {
     expect(FRAG_LIGHTS_GLSL).toContain('ivec2 cell = ivec2( floor( brLvP.xz / BR_CELL ) )');
-    expect(FRAG_LIGHTS_GLSL).toContain('vec2 brLvQ = brLvP.xz + brNWg.xz * BR_LV_BIAS_XZ');
-    expect(FRAG_LIGHTS_GLSL).toContain('brLvV( brLvP.y, max( brNWg.y, 0.0 ) * BR_LV_BIAS_K )');
+    expect(FRAG_LIGHTS_GLSL).toContain('vec3 brUvw = vec3( brLvP.x / BR_TILE, brLvV( brLvP.y, max( brNWg.y, 0.0 ) * BR_LV_BIAS_K ), brLvP.z / BR_TILE )');
     expect(HELPERS_GLSL).toContain('float brLvV( float y, float dk )');
     expect(HELPERS_GLSL).toContain('clamp( k + dk, 0.0, BR_LV_NY - 1.0 )');
   });

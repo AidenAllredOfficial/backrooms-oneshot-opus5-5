@@ -52,11 +52,10 @@ vec3 brDbg = vec3( 0.0 );
 #ifdef BR_LV
 		brDbg = brLmA.rgb / BR_DEBUG_LUX;
 #else
-		// the shell has no light volume (and must not reference uVolA): show the volume coordinate a prop facing the
-		// same way would sample here (the front-side lookup of chunks/lighting.ts without the wall clamp: u = x / tile,
-		// v = the non-uniform LV level, w = z / tile)
-		vec2 lp = vBrLocal.xz + brNWg.xz * BR_LV_BIAS_XZ;
-		brDbg = vec3( lp.x / BR_TILE, brLvV( vBrLocal.y, max( brNWg.y, 0.0 ) * BR_LV_BIAS_K ), lp.y / BR_TILE );
+		// the shell has no light volume (and must not reference uVolA): show the volume coordinate a prop would
+		// sample here, 0.3 m off the surface (u = x / tile, v = the non-uniform LV level, w = z / tile)
+		vec3 lp = vBrLocal + brNWg * 0.3;
+		brDbg = vec3( lp.x / BR_TILE, brLvV( lp.y, 0.0 ), lp.z / BR_TILE );
 #endif
 	}
 	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( brWet, brFilm, brPuddle ); // package B: r wet, g film, b standing water
