@@ -37,7 +37,7 @@ export const conversationPit: LandmarkGenerator = {
     const d = P.depthCm / 100;
     cells(lm, p0, p0, p1, p1, { floorCm: P.depthCm, floorMat: Mat.CARPET_OFFICE });
     const [s0, s1] = P.steps;
-    ramp(lm, s0 * CELL, p0 * CELL, s1 * CELL, (p0 + 1) * CELL, 0, -1, d, 0, 3, Mat.CARPET_OFFICE);
+    ramp(lm, s0 * CELL, p0 * CELL, s1 * CELL, (p0 + 1) * CELL, 0, -1, d, 0, 3, Mat.CARPET_OFFICE, true);
     // built-in benches along the pit walls (upholstered), leaving the steps free
     const A = p0 * CELL, B = p1 * CELL;
     const seat = d + 0.42, dep = 0.6;

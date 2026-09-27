@@ -1,7 +1,8 @@
 // tests/bake/volumeNear.test.ts — prop light volume near-field (bake/volume.ts with BakeQuality.nearRays): samples
 // under a desk are in its shadow and lose the far-field light the desk hides, samples above it are lit (the cell
-// bitset's point below the desk top is not), samples well above are nearly unchanged; without near rays (low /
-// medium), samples in a cell whose bitset point lies inside a filing cabinet are lit by per-sample rays too.
+// bitset's point below the desk top is not), samples well above are nearly unchanged; full bakes without near rays
+// (low / medium) give every sample the per-sample ray test (the one over the desk top and the ones in a cell whose
+// bitset point lies inside a filing cabinet are lit); preview bakes keep the cell bitset alone.
 
 import { describe, expect, it } from 'vitest';
 import { LV } from '../../src/core/constants.ts';
@@ -36,6 +37,7 @@ describe('light volume near a desk', () => {
   const near = bakeTile(nb, TILE, s, 'full', Q16, 'all').volume.a;
   const nearDirect = bakeTile(nb, TILE, s, 'full', Q16, 'direct').volume.a;
   const bitsetDirect = bakeTile(nb, TILE, s, 'preview', Q_HIGH, 'direct').volume.a; // (preview: cell bitset only)
+  const farDirect = bakeTile(nb, TILE, s, 'full', Q_HIGH, 'direct').volume.a;
 
   it('the sample under the desk (0.2 m) gets <= 0.6x the light of the sample 1.8 m beside it', () => {
     const under = lv(near, 14, 0, 14), beside = lv(near, 17, 0, 14);
@@ -47,7 +49,10 @@ describe('light volume near a desk', () => {
     const over = lv(nearDirect, 14, 1, 14);
     expect(over).toBeGreaterThan(0.5 * lv(nearDirect, 17, 1, 14));
     expect(over).toBeGreaterThan(1.5 * lv(bitsetDirect, 14, 1, 14));
-    expect(lv(near, 14, 1, 14)).toBeGreaterThan(1.5 * lv(far, 14, 1, 14));
+    // without near rays (low, medium) too: every sample in a cell with boxes takes the per-sample ray, not the bitset
+    // (whose point under the desk top baked it dark: 1.5x less than the near-field bake)
+    expect(lv(farDirect, 14, 1, 14)).toBeGreaterThan(0.5 * lv(farDirect, 17, 1, 14));
+    expect(lv(far, 14, 1, 14)).toBeGreaterThan(0.8 * lv(near, 14, 1, 14));
   });
 
   it('the samples 1.5 m and 2.3 m up change < 2%', () => {

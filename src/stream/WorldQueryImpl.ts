@@ -431,7 +431,8 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
     rNx = ax === 0 ? -Math.sign(dx) : 0; rNy = ax === 1 ? -Math.sign(dy) : 0; rNz = ax === 2 ? -Math.sign(dz) : 0;
   };
 
-  /** The chunk's ramps (stair flights): the walkable inclined top, hit from above. */
+  /** The chunk's ramps (stair flights): the walkable inclined top, hit from above; a FILLED body also on its sides
+   * and ends (vertical faces from its low end up to the walking surface). */
   const rayRamps = (d: ChunkData, x: number, y: number, z: number, dx: number, dy: number, dz: number): void => {
     const r = d.collision.ramps;
     for (let o = 0; o < r.length; o += 8) {
@@ -443,6 +444,7 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
       else if (dir === 1) { gx = -(y1 - y0) / (x1 - x0 || 1); hc = y0 - gx * x1; }
       else if (dir === 2) { gz = (y1 - y0) / (z1 - z0 || 1); hc = y0 - gz * z0; }
       else { gz = -(y1 - y0) / (z1 - z0 || 1); hc = y0 - gz * z1; }
+      if (r[o + 7] !== 0) rayFilledSide(d, x, y, z, dx, dy, dz, x0, z0, x1, z1, Math.min(y0, y1), hc, gx, gz);
       const den = dy - gx * dx - gz * dz; // < 0: the ray descends onto the slope
       if (!(den < 0)) continue;
       const t = (hc + gx * x + gz * z - y) / den;
@@ -453,6 +455,29 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
       rBest = t; rWhat = RAY_RAMP; rNx = -gx * nl; rNy = nl; rNz = -gz * nl;
       rMat = d.layout.floorMat[((worldToCell(pz) - d.key.cz * CHUNK_CELLS) * CHUNK_CELLS) + worldToCell(px) - d.key.cx * CHUNK_CELLS] ?? -1;
     }
+  };
+
+  /** A FILLED ramp's vertical faces (footprint [x0, x1] x [z0, z1], from `ylo` up to the walking surface h = hc + gx *
+   * x + gz * z): the entry face of the ray into the footprint's slab, when the entry point lies under the surface. */
+  const rayFilledSide = (d: ChunkData, x: number, y: number, z: number, dx: number, dy: number, dz: number,
+    x0: number, z0: number, x1: number, z1: number, ylo: number, hc: number, gx: number, gz: number): void => {
+    let t0 = -Infinity, t1 = Infinity, ax = -1;
+    if (dx !== 0) {
+      const a = (x0 - x) / dx, b = (x1 - x) / dx;
+      t0 = a < b ? a : b; t1 = a < b ? b : a; ax = 0;
+    } else if (x < x0 || x > x1) return;
+    if (dz !== 0) {
+      const a = (z0 - z) / dz, b = (z1 - z) / dz;
+      const n = a < b ? a : b, f = a < b ? b : a;
+      if (n > t0) { t0 = n; ax = 2; }
+      if (f < t1) t1 = f;
+    } else if (z < z0 || z > z1) return;
+    if (ax < 0 || !(t0 > 1e-6) || t0 > t1 || t0 >= rBest) return;
+    const px = x + dx * t0, py = y + dy * t0, pz = z + dz * t0;
+    if (py < ylo || py > hc + gx * px + gz * pz) return; // under the floor, or above the walking surface (the top test)
+    rBest = t0; rWhat = RAY_RAMP; rNx = ax === 0 ? -Math.sign(dx) : 0; rNy = 0; rNz = ax === 2 ? -Math.sign(dz) : 0;
+    const ex = px + dx * 1e-4, ez = pz + dz * 1e-4; // the material of the cell just inside the face
+    rMat = d.layout.floorMat[((worldToCell(ez) - d.key.cz * CHUNK_CELLS) * CHUNK_CELLS) + worldToCell(ex) - d.key.cx * CHUNK_CELLS] ?? -1;
   };
 
   /** Material of a recorded box hit at (hx, hy, hz): the edge's face material for wall pieces, the floor material on
@@ -553,7 +578,12 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
       const r = c.ramps;
       for (let o = 0; o < r.length; o += 8) {
         if (!inRampXZ(r, o, lx, lz)) continue;
-        const under = rampHeight(r, o, lx, lz) - RAMP_SLAB;
+        const h = rampHeight(r, o, lx, lz);
+        if (r[o + 7] !== 0) { // a FILLED body is solid from the floor up to its walking surface: no room under it
+          if (h > y + EPS && y < best) best = y;
+          continue;
+        }
+        const under = h - RAMP_SLAB;
         if (under >= y - EPS && under < best) best = under;
       }
       return best;

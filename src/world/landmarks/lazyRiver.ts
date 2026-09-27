@@ -42,10 +42,10 @@ export const lazyRiver: LandmarkGenerator = {
     }
     cells(lm, iu0, iv0, iu1, iv1, { floorMat: Mat.TERRAZZO });
     // steps: down from the deck on both ends, up onto the island top and bottom
-    ramp(lm, ou0 * CELL, 6 * CELL, (ou0 + 1) * CELL, 8 * CELL, -1, 0, fy, 0, 4, tile);
-    ramp(lm, (ou1 - 1) * CELL, 6 * CELL, ou1 * CELL, 8 * CELL, 1, 0, fy, 0, 4, tile);
-    ramp(lm, 7 * CELL, (iv0 - 1) * CELL, 9 * CELL, iv0 * CELL, 0, 1, fy, 0, 4, tile);
-    ramp(lm, 7 * CELL, iv1 * CELL, 9 * CELL, (iv1 + 1) * CELL, 0, -1, fy, 0, 4, tile);
+    ramp(lm, ou0 * CELL, 6 * CELL, (ou0 + 1) * CELL, 8 * CELL, -1, 0, fy, 0, 4, tile, true);
+    ramp(lm, (ou1 - 1) * CELL, 6 * CELL, ou1 * CELL, 8 * CELL, 1, 0, fy, 0, 4, tile, true);
+    ramp(lm, 7 * CELL, (iv0 - 1) * CELL, 9 * CELL, iv0 * CELL, 0, 1, fy, 0, 4, tile, true);
+    ramp(lm, 7 * CELL, iv1 * CELL, 9 * CELL, (iv1 + 1) * CELL, 0, -1, fy, 0, 4, tile, true);
     // wet deck
     cells(lm, 0, 0, W, 1, { flagsSet: CellFlag.WET });
     cells(lm, 0, L - 1, W, L, { flagsSet: CellFlag.WET });

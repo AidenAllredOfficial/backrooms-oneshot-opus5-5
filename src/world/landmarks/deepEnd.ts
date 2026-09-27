@@ -51,7 +51,7 @@ export const deepEnd: LandmarkGenerator = {
     cells(lm, pu0, DEEP_END.stepsV, pu1, DEEP_END.stepsV + 1, { floorCm: DEEP_END.shallowCm, waterCm: w, floorMat: Mat.POOL_MOSAIC });
     cells(lm, pu0, DEEP_END.shallowV, pu1, DEEP_END.shallowV + 1, { floorCm: DEEP_END.shallowCm, waterCm: w, floorMat: Mat.POOL_MOSAIC });
     cells(lm, pu0, pv0, pu1, pv1, { floorCm: DEEP_END.deepCm, waterCm: w, floorMat: Mat.POOL_MOSAIC, flagsSet: CellFlag.NOWALK });
-    ramp(lm, pu0 * CELL, DEEP_END.stepsV * CELL, pu1 * CELL, (DEEP_END.stepsV + 1) * CELL, 0, -1, DEEP_END.shallowCm / 100, 0, 3, tile);
+    ramp(lm, pu0 * CELL, DEEP_END.stepsV * CELL, pu1 * CELL, (DEEP_END.stepsV + 1) * CELL, 0, -1, DEEP_END.shallowCm / 100, 0, 3, tile, true);
     water(lm, pu0, DEEP_END.stepsV, pu1, pv0, w / 100, DEEP_END.shallowCm / 100);
     water(lm, pu0, pv0, pu1, pv1, w / 100, DEEP_END.deepCm / 100);
     // float rope along the deep edge (FLOAT_ROPE spans one cell edge, floats at the water line)
@@ -81,7 +81,7 @@ export const deepEnd: LandmarkGenerator = {
     const pvf = pv1 * CELL + 0.05, pvb = (pv1 + 1.3) * CELL; // platform along v (front edge at the pool lip)
     box(lm, pa, pvf, pb, pvb, 0, py, tile, WALK);
     // stairs: a ramp on the +u side of the platform, ascending toward -u (8 risers of 0.19 m)
-    ramp(lm, pb, pvf + 0.15, pb + 2.2, pvb - 0.05, -1, 0, 0, py, 8, tile);
+    ramp(lm, pb, pvf + 0.15, pb + 2.2, pvb - 0.05, -1, 0, 0, py, 8, tile, true);
     // rails: thin boxes on the platform's back and -u sides (the front is the board, the +u side the stairs)
     box(lm, pa, pvb - 0.05, pb, pvb, py, py + 1.0, Mat.METAL_PAINTED, SOLIDF);
     box(lm, pa, pvf, pa + 0.05, pvb, py, py + 1.0, Mat.METAL_PAINTED, SOLIDF);

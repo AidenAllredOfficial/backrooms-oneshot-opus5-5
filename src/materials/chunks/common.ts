@@ -259,14 +259,28 @@ int brChannelSlot( int k, vec2 local, vec2 parity ) {
 	return brSlotOf( dx, dz );
 }
 
-// ---- light-volume v coordinate for a storey-relative height (LV.Y levels are not uniform)
-float brLvV( float y ) {
+// ---- light-volume levels of a storey-relative height (LV.Y levels are not uniform; TS twin lvLevels in
+// chunks/lighting.ts): x = the plain fractional level i + t; y = the level of an up-facing prop surface (ny =
+// max(n.y, 0)), where level i keeps its trilinear weight only while it lies less than BR_LV_BACK_D behind the surface
+// plane (h * ny, smoothstep): further down it is under the prop's own seat, frame or top, and y reads the first level
+// at or above the surface. Both are continuous in y (at a level the lookup is that level).
+vec2 brLvK( float y, float ny ) {
 	y = clamp( y, BR_LV_Y[ 0 ], BR_LV_Y[ BR_LV_NYI - 1 ] );
-	float k = 0.0;
+	float k = 0.0, h = 0.0, dy = 1.0;
 	for ( int i = 0; i < BR_LV_NYI - 1; i ++ ) {
-		if ( y >= BR_LV_Y[ i ] ) k = float( i ) + ( y - BR_LV_Y[ i ] ) / ( BR_LV_Y[ i + 1 ] - BR_LV_Y[ i ] );
+		if ( y >= BR_LV_Y[ i ] ) { k = float( i ); h = y - BR_LV_Y[ i ]; dy = BR_LV_Y[ i + 1 ] - BR_LV_Y[ i ]; }
 	}
-	return ( min( k, BR_LV_NY - 1.0 ) + 0.5 ) / BR_LV_NY;
+	float t = h / dy;
+	float b = 1.0 - smoothstep( 0.0, BR_LV_BACK_D, h * ny ); // the lower level's kept weight
+	return vec2( k + t, min( k + t / max( t + ( 1.0 - t ) * b, 1e-4 ), BR_LV_NY - 1.0 ) );
+}
+// light an up-facing receiver takes from a light-volume sample (a = uVolA, b = uVolB texel): its ambient part and its
+// directional part while the baked direction lies above the horizon (RE_Direct with n = n_g = +y; TS twin lvUpLight)
+float brLvUp( vec4 a, vec4 b ) {
+	vec3 d = b.xyz * 2.0 - 1.0;
+	float l = length( d ), w = clamp( b.a, 0.0, 1.0 );
+	float up = l > 1e-3 ? clamp( d.y / ( l * BR_NG_MIN ), 0.0, 1.0 ) : 1.0;
+	return brLuma( max( a.rgb, vec3( 0.0 ) ) ) * ( 1.0 - w + w * up );
 }
 
 // ---- lightmap dominant direction decode (w forced to 0 for a degenerate direction)

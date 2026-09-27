@@ -1,7 +1,9 @@
 // src/mesh/stairs.ts — WP5 ramps / stairs (§5 WP5 rule 7): visual treads, risers and stringers mapped to one RAMP
 // chart per ramp (texels projected by xz onto the sloped plane from (x0,y0) to (x1,y1)), plus a sloped soffit 0.15 m
-// below the nosing line (SOFFIT chart) so stacked flights are opaque from below. Faces are split at cell lines and
-// filtered by ownership. Pure module.
+// below the nosing line (SOFFIT chart) so stacked flights are opaque from below. FILLED ramps (SolidFlag.FILLED:
+// masonry steps, pool entries, daises) are built-up bodies instead: sides and a free-standing back face down to the
+// floor, each on its own vertical BOX chart (lit as the wall of a block, with its floor contact), and no soffit.
+// Faces are split at cell lines and filtered by ownership. Pure module.
 
 import { CELL, TILE_SIZE } from '../core/constants.ts';
 import { SolidFlag, VFlag } from '../core/ids.ts';
@@ -11,9 +13,9 @@ import { clipPoly, polyArea, splitByCells } from './geom.ts';
 import { ChartSpec, polyFace, state, type FaceState, type Plan, type V3 } from './plan.ts';
 import { cix, type TileGrid } from './tileGrid.ts';
 import { kf } from './uv.ts';
-import { underwater } from './walls.ts';
+import { underwater, vSpec } from './walls.ts';
 
-const K_SOFFIT = 4 as ChartKindId, K_RAMP = 7 as ChartKindId;
+const K_SOFFIT = 4 as ChartKindId, K_BOX = 5 as ChartKindId, K_RAMP = 7 as ChartKindId;
 const EPS = 1e-5;
 type Ramp = Extract<Solid, { kind: 'ramp' }>;
 type Box = Extract<Solid, { kind: 'box' }>;
@@ -73,6 +75,7 @@ function emitRamp(plan: Plan, g: TileGrid, r: Ramp, rank: number, boxes: Box[]):
     }
   };
   const y0 = r.y0, y1 = r.y1;
+  const filled = (r.flags & SolidFlag.FILLED) !== 0;
   const backedBy = highEndBacked(g, boxes, P, L, W, y1, sv);
   const backed = backedBy !== 0;
   // the high end on a cell line backed by cells: the step / cover face on that line replaces the top riser
@@ -93,12 +96,13 @@ function emitRamp(plan: Plan, g: TileGrid, r: Ramp, rank: number, boxes: Box[]):
     }
   }
   if (fl === Infinity) fl = Math.min(y0, y1);
-  const bottom = (s: number): number => Math.max(nose(s) - off, fl);
-  // s* where the soffit line meets the floor (nose - off == fl)
+  // bottom line of the sides: the soffit line (open flight) or the floor (filled body)
+  const bottom = (s: number): number => (filled ? fl : Math.max(nose(s) - off, fl));
+  // s* where the soffit line meets the floor (nose - off == fl); a filled body has no soffit (s* = L)
   const kn = n === 0 ? (y1 - y0) / L : n === 1 ? 0 : rise / dep;
   const n0 = nose(0) - off;
   let sStar = kn > 1e-9 ? (fl - n0) / kn : n0 > fl ? 0 : L;
-  sStar = Math.max(0, Math.min(L, sStar));
+  sStar = filled ? L : Math.max(0, Math.min(L, sStar));
 
   // RAMP chart: sloped plane (s = 0, y0) -> (s = L, y1), texels projected by xz
   const k = (y1 - y0) / L;
@@ -117,6 +121,19 @@ function emitRamp(plan: Plan, g: TileGrid, r: Ramp, rank: number, boxes: Box[]):
   const up: V3 = [0, 1, 0];
   const quad = (a: number[], b: number[], c: number[], d: number[], nn: V3, sp: ChartSpec = spec): void => {
     for (const pp of cutCoplanarBoxes(g, boxes, [...a, ...b, ...c, ...d], nn)) emitSplit(plan, g, pp, nn, st, r.bakeGroup, sp);
+  };
+  // filled bodies: the vertical chart of a side (face at w, facing sg along wv) or of the back face (s = L, facing sv)
+  const wallSpecs = new Map<string, ChartSpec>();
+  const wallSpec = (tag: string, nn: V3): ChartSpec => {
+    let sp = wallSpecs.get(tag);
+    if (sp) return sp;
+    const ax: 0 | 2 = nn[0] !== 0 ? 0 : 2, sg = nn[ax];
+    const q = tag === 'e' ? P(L, 0, 0) : P(0, tag === 'c' ? 0 : W, 0);
+    sp = plan.addSpec(vSpec(K_BOX, r.bakeGroup, r.mat, `5${kf(r.id, 10)}${kf(rank, 5)}${tag}`, ax, q[ax], sg));
+    const [u0, u1] = ax === 0 ? [Z0, Z1] : [X0, X1]; // u runs along z (x-facing) or x (z-facing)
+    sp.cont = (u0 < -EPS ? 1 : 0) | (u1 > TILE_SIZE + EPS ? 2 : 0);
+    wallSpecs.set(tag, sp);
+    return sp;
   };
 
   if (n === 0) {
@@ -138,7 +155,7 @@ function emitRamp(plan: Plan, g: TileGrid, r: Ramp, rank: number, boxes: Box[]):
   }
   // back face at the high end of a free-standing flight (nothing beyond it at the top height)
   const yBack = bottom(L), yTop = n > 1 ? y0 + (n - 1) * rise : y1;
-  if (!backed && yTop - yBack > EPS) quad(P(L, W, yBack), P(L, 0, yBack), P(L, 0, yTop), P(L, W, yTop), sv);
+  if (!backed && yTop - yBack > EPS) quad(P(L, W, yBack), P(L, 0, yBack), P(L, 0, yTop), P(L, W, yTop), sv, filled ? wallSpec('e', sv) : spec);
   // stringers: strips per tread between the bottom line and the tread / slope, split at s*
   const strips: [number, number, number, number][] = []; // s0, s1, top(s0), top(s1)
   if (n === 0) strips.push([0, L, y0, y1]);
@@ -152,7 +169,8 @@ function emitRamp(plan: Plan, g: TileGrid, r: Ramp, rank: number, boxes: Box[]):
       const ba = bottom(a), bb = bottom(b);
       if (ta - ba <= EPS && tb - bb <= EPS) continue;
       for (const [w, sg] of [[0, -1], [W, 1]] as [number, number][]) {
-        quad(P(a, w, ba), P(b, w, bb), P(b, w, tb), P(a, w, ta), [wv[0] * sg, 0, wv[2] * sg]);
+        const nn: V3 = [wv[0] * sg, 0, wv[2] * sg];
+        quad(P(a, w, ba), P(b, w, bb), P(b, w, tb), P(a, w, ta), nn, filled ? wallSpec(w === 0 ? 'c' : 'd', nn) : spec);
       }
     }
   }

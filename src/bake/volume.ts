@@ -10,8 +10,9 @@
 // get one DDA ray from the sample itself instead of the cell bitset (a chair under a desk is in the desk's shadow,
 // a monitor above it is not), the probe SH blends towards the probes' far field and is corrected by q.nearRays
 // traced sphere rays (prop faces replace the far field they hide), and the stored AO drops by the rays' box-hit
-// fraction; full bakes with q.nearRays > 0 leave out the analytic AO of prop boxes. The other full bakes (low /
-// medium) use the same per-light rays in cells whose bitset point lies inside a box (a filing cabinet or vending
+// fraction; full bakes with q.nearRays > 0 leave out the analytic AO of prop boxes. Full bakes without near rays
+// (low / medium) use the same per-light rays for every non-tower sample (the cell bitset's point can lie inside a car's
+// cabin), and every full bake uses them in cells whose bitset point lies inside a box (a filing cabinet or vending
 // machine around the cell centre was black). Encoding (consistent with the shell lightmap decode in WP9):
 //   a.rgb = total irradiance on a surface facing the dominant direction's light (sum of the light deltas' E plus
 //           the L0 (direction-averaged) indirect irradiance), a.a = spherical AO;
@@ -19,7 +20,8 @@
 //   b.w   = directionality |V| / E in [0, 1];
 //   c     = per-channel dynamic luminance (direct + bounce: probe L0 in the full bake, the per-light constant in
 //           the preview), only when the tile has dynamic light.
-// Samples inside solids are invalid and dilated (6-neighbour average, repeated).
+// Samples inside solids (or on a face two occluder boxes share: visgrid.ts insideOccluder) are invalid and dilated
+// (6-neighbour average, repeated).
 // wallMask: 18 x 18 (tile cells + ring), r = bits N1 E2 S4 W8 of the cell sides that occlude at 1.2 m above the
 // higher floor (or face a SOLID / out-of-group neighbour).
 
@@ -41,7 +43,7 @@ import { diffusedAt, type Diffusion } from './preview.ts';
 import type { ProbeSet } from './probes.ts';
 import { SH_E1, shIrradianceL0 } from './sh.ts';
 import { HALO_OFF, LB, LG, LR, luma, quant, windowDist2, windowW } from './util.ts';
-import { insideBox } from './visgrid.ts';
+import { insideBox, insideOccluder } from './visgrid.ts';
 import { visBits } from './visbits.ts';
 
 const sel = new Int32Array(16);
@@ -78,10 +80,16 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
           const fl = g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c];
           if (y <= fl || y >= g.ceil[c]) continue;
         }
-        if (insideBox(g, c, x, y, z, group)) continue;
+        if (insideOccluder(g, c, x, y, z, group)) continue; // (also on a face two boxes share)
         valid[s] = 1;
         const nw = nearRays > 0 && !tower ? nearWeight(job, c, x, y, z, 0, 0, 0, group, false) : 0;
         const near = nw > 0;
+        // per-sample direct visibility where boxes may hide a light: near-field samples, and every non-tower sample of
+        // a full bake without near rays (low, medium). The bitset alone answers for its cell-centre point at the nearest
+        // bit height: in the cells of a car that point lies inside the cabin, and the samples all over the car (up to
+        // 1.5 m, above its roof) baked black (dark smudges on its hood and windshield); under a lounge chair's frame the
+        // samples missed its shadow. Preview bakes (replaced by the full bake) keep the bitset alone.
+        const rayVis = near || (full && nearRays === 0 && !tower);
         aoAt(job, x, y, z, 0, 0, 0, c, group, true, nearRays > 0);
         const ao = aoOut.ao;
         AO[s] = ao;
@@ -89,10 +97,11 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
         if (doDirect) {
           const m = selectLights(job, x, y, z, 0, 0, 0, c, group, 0, tower ? FILTER_NONE : FILTER_CELL, sel);
           const layer = tower ? 0 : nearestBit(job, c, y);
-          // per-sample light rays: near-field samples (q.nearRays > 0); in the other full bakes (low / medium) the
-          // samples of cells whose bitset point lies inside a box (filing cabinets, vending machines, crates: the
-          // cell bitset sees nothing from there and the prop came out black)
-          const nearL = near || (full && !tower && insideBox(g, c, Math.floor(x) + 0.5, job.cellY[c * 5 + layer], Math.floor(z) + 0.5, group));
+          // per-sample light rays: rayVis above (near-field samples; every non-tower sample of a bake without near
+          // rays), plus, in every full bake, the samples of cells whose bitset point lies inside a box (filing
+          // cabinets, vending machines, crates: the cell bitset sees nothing from there and the prop came out black;
+          // with near rays such a sample can lie outside the near-field region)
+          const nearL = rayVis || (full && !tower && insideBox(g, c, Math.floor(x) + 0.5, job.cellY[c * 5 + layer], Math.floor(z) + 0.5, group));
           if (!tower) { // K_MAX tail: weak lights as omni point deltas with bitset visibility
             tailSum(job, x, y, z, 0, 0, 0, c, 1 << layer, P === null);
             er += tail.r; eg += tail.g; eb += tail.b; vx += tail.vx; vy += tail.vy; vz += tail.vz;
@@ -190,11 +199,14 @@ function lightDelta(job: BakeJob, l: number, x: number, y: number, z: number, c:
   return f * w;
 }
 
-/** lightDelta for near-field samples: when the sample's own cell holds a box rising above the sample or above the
- * bitset's cell-centre point at the nearest bit height (a chair under a desk; a monitor sample above a desk top that
- * hides the light from the bit below it; rack decks between the bits of a tall hall), and a box could cut the segment
- * to the emitter (classify.ts boxesBetween), one DDA ray from the sample to the emitter centre decides instead of
- * the bitset (like tower samples). */
+/**
+ * lightDelta for near-field samples (and every non-tower sample of a bake without near rays): when the sample's own
+ * cell holds a box rising above the sample or above the bitset's cell-centre point at the nearest bit height (a chair
+ * under a desk; a monitor sample above a desk top that hides the light from the bit below it; rack decks between the
+ * bits of a tall hall; a car, whose cabin swallows the bit point), and a box could cut the segment to the emitter
+ * (classify.ts boxesBetween), one DDA ray from the sample to the emitter centre decides instead of the bitset (like
+ * tower samples).
+ */
 function lightDeltaNear(job: BakeJob, l: number, x: number, y: number, z: number, c: number, group: number, layer: number): number {
   const yc = Math.min(y, job.cellY[c * 5 + layer]);
   const ray = job.boxTop[c] > yc && boxesBetween(job, c, l, Math.min(yc, lightLowY(job, l)));

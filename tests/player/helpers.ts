@@ -180,9 +180,10 @@ export class TestWorld implements WorldQuery {
       if (lx < bx[o] || lx > bx[o + 3] || lz < bx[o + 2] || lz > bx[o + 5]) continue;
       if (bx[o + 1] >= y && bx[o + 1] < best) best = bx[o + 1];
     }
-    // ramp undersides (a flight's soffit), like WP10's query
+    // ramp undersides (a flight's soffit; a FILLED body is solid down to the floor), like WP10's query
     for (let o = 0; o < e.c.ramps.length; o += 8) {
       const h = rampHeightAt(e.c.ramps, o, lx, lz);
+      if (h === h && e.c.ramps[o + 7] !== 0) { if (h > y + 1e-6 && y < best) best = y; continue; }
       if (h === h && h - RAMP_SLAB >= y - 1e-6 && h - RAMP_SLAB < best) best = h - RAMP_SLAB;
     }
     return best;

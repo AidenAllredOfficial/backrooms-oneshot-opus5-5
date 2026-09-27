@@ -5,7 +5,8 @@
 //   boxFlags  n    SolidFlag bits (COLLIDE always; WALKABLE_TOP where the top is a floor the player may stand on)
 //   cellStart 1025 CSR prefix offsets into cellBoxes
 //   cellBoxes      indices of boxes whose XZ footprint, expanded by PLAYER.radius, overlaps the cell
-//   ramps     n*8  x0,z0,x1,z1,y0,y1,dir,0 (walkable inclined planes: stair flights)
+//   ramps     n*8  x0,z0,x1,z1,y0,y1,dir,filled (walkable inclined planes: stair flights; filled = 1 for a
+//                  SolidFlag.FILLED body, solid down to the floor, else 0: an open flight with a soffit)
 //
 // Sources (§5 WP12 "Collision build"):
 //   * edges: core/edges edgePieces() of every EDGE_COLLIDES kind (GLITCH included), thickness edgeThickness(kind).
@@ -195,7 +196,7 @@ export function buildChunkCollision(l: ChunkLayout): ChunkCollision {
       B.add(s.min[0], s.min[1], s.min[2], s.max[0], s.max[1], s.max[2], (s.flags & SolidFlag.WALKABLE_TOP) ? F_WALK : F_COLLIDE);
     } else if (s.kind === 'ramp') {
       if (!(s.flags & (SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP))) continue;
-      ramps.push(Math.min(s.x0, s.x1), Math.min(s.z0, s.z1), Math.max(s.x0, s.x1), Math.max(s.z0, s.z1), s.y0, s.y1, s.dir, 0);
+      ramps.push(Math.min(s.x0, s.x1), Math.min(s.z0, s.z1), Math.max(s.x0, s.x1), Math.max(s.z0, s.z1), s.y0, s.y1, s.dir, (s.flags & SolidFlag.FILLED) !== 0 ? 1 : 0);
     } else if (s.kind === 'pipe') {
       if (!(s.flags & SolidFlag.COLLIDE)) continue;
       const r = s.r;

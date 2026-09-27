@@ -36,7 +36,7 @@
 
 import { CELL, CHUNK_CELLS, CHUNK_CELL_COUNT } from '../../core/constants.ts';
 import { cellIdx, floorDiv, mod } from '../../core/grid.ts';
-import { CeilKind, CellFlag, DecalKind, EdgeKind, EmitterKind, FixtureKind, Mat, PropKind, Zone, type StoreyId } from '../../core/ids.ts';
+import { CeilKind, CellFlag, DecalKind, EdgeKind, EmitterKind, FixtureKind, Mat, PropKind, SolidFlag, Zone, type StoreyId } from '../../core/ids.ts';
 import { NO_WATER } from '../../core/layout.ts';
 import { hash01, hash2, hash4, hash5, hash6, Rng, SALT } from '../../core/rng.ts';
 import type {
@@ -434,10 +434,11 @@ function generate(ctx: ZoneGenContext): void {
     const li = gi - gi0, lj = gj - gj0;
     return inChunk(li, lj) ? cellIdx(li, lj) : -1;
   };
+  /** Tiled masonry steps (terrace ramps, arch steps, pool entries): FILLED bodies down to the floor. */
   const addRamp = (r: Rect, dir: 0 | 1 | 2 | 3, y0: number, y1: number, steps: number): void => {
     g.addSolid({
       kind: 'ramp', x0: (r.i0 - gi0) * CELL, z0: (r.j0 - gj0) * CELL, x1: (r.i1 - gi0) * CELL, z1: (r.j1 - gj0) * CELL,
-      y0, y1, dir, steps, mat: Mat.POOL_TILE, flags: WALK_FLAGS, bakeGroup: 0,
+      y0, y1, dir, steps, mat: Mat.POOL_TILE, flags: WALK_FLAGS | SolidFlag.FILLED, bakeGroup: 0,
     });
   };
   const placer = createFixturePlacer(ctx);

@@ -879,7 +879,7 @@ function insetFloor(st: St, ctx: ZoneGenContext, lf: LeafRect, delta: number, ra
   const lo = Math.min(base, target), hi = Math.max(base, target);
   g.addSolid({
     kind: 'ramp', x0, z0, x1, z1, y0: lo / 100, y1: hi / 100, dir: delta < 0 ? out : inward, steps: 3 * rampLen,
-    mat: ctx.palette.floorMat, flags: SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.WALKABLE_TOP | SolidFlag.RENDER,
+    mat: ctx.palette.floorMat, flags: SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.WALKABLE_TOP | SolidFlag.RENDER | SolidFlag.FILLED,
     bakeGroup: 0,
   });
   for (let lj = lf.lj0; lj < lf.lj1; lj++) for (let li = lf.li0; li < lf.li1; li++) st.busy[cellIdx(li, lj)] = 1;

@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { CELL, WALL_T } from '../../src/core/constants.ts';
 import { cellIdx, exIdx, ezIdx, type ChunkKey } from '../../src/core/grid.ts';
-import { CellFlag, EdgeKind, Mat, Mood, PropKind, Zone, type StoreyId } from '../../src/core/ids.ts';
+import { CellFlag, EdgeKind, Mat, Mood, PropKind, SolidFlag, Zone, type StoreyId } from '../../src/core/ids.ts';
 import { createEmptyLayout, type ChunkLayout } from '../../src/core/layout.ts';
 import { LAYER_DEFS } from '../../src/core/materials.ts';
 import type { RaycastHit } from '../../src/core/runtime.ts';
@@ -119,5 +119,33 @@ describe('WorldQuery.raycast', () => {
     // at the jamb (x = 1.25, inside the 0.6 m jamb band of a 1.2 m cell with a narrower door)
     expect(q2.raycast!(1.25, 1.0, 22, 0, 0, 1, 40, h)).toBe(true);
     expect(h.t).toBeCloseTo(24 - WALL_T / 2 - 22, 5);
+  });
+
+  it('a FILLED ramp is hit on its sides and ends below its walking surface; an open flight only on its top', () => {
+    const l = room();
+    // two 1.2 m-high flights ascending +x over x 12..14.4: filled at z 18..19.2, open at z 21.6..22.8
+    const flight = (id: number, z0: number, filled: boolean): void => {
+      l.solids.push({ kind: 'ramp', id, x0: 12, z0, x1: 14.4, z1: z0 + 1.2, y0: 0, y1: 1.2, dir: 0, steps: 8, mat: Mat.POOL_TILE,
+        flags: SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP | SolidFlag.RENDER | (filled ? SolidFlag.FILLED : 0), bakeGroup: 0 });
+    };
+    flight(1, 18, true);
+    flight(2, 21.6, false);
+    const q2 = query(l);
+    // along +z at x = 14, 0.5 m up (walking surface 1.0 m there): the filled body's side face z = 18
+    expect(q2.raycast!(14, 0.5, 16, 0, 0, 1, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(2, 5);
+    expect([h.nx, h.ny, h.nz]).toEqual([0, 0, -1]);
+    // the same ray through the open flight's side reaches whatever lies beyond (no ramp hit at z = 21.6)
+    expect(q2.raycast!(14, 0.5, 20, 0, 0, 1, 40, h)).toBe(false);
+    // above the walking surface at the entry point: not a side hit (x = 12.5: surface 0.25 m)
+    expect(q2.raycast!(12.5, 0.5, 16, 0, 0, 1, 40, h)).toBe(false);
+    // the high end face (x = 14.4) from +x, 0.6 m up
+    expect(q2.raycast!(16, 0.6, 18.6, -1, 0, 0, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(16 - 14.4, 5);
+    expect(h.nx).toBe(1);
+    // from above: the walking surface, as before
+    expect(q2.raycast!(13.2, 2, 18.6, 0, -1, 0, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(2 - 0.6, 5);
+    expect(h.ny).toBeGreaterThan(0.8);
   });
 });

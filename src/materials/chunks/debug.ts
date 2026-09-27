@@ -60,7 +60,7 @@ vec3 brDbg = vec3( 0.0 );
 		// the shell has no light volume (and must not reference uVolA): show the volume coordinate a prop would
 		// sample here, 0.3 m off the surface (u = x / tile, v = the non-uniform LV level, w = z / tile)
 		vec3 lp = vBrLocal + brNWg * 0.3;
-		brDbg = vec3( lp.x / BR_TILE, brLvV( lp.y ), lp.z / BR_TILE );
+		brDbg = vec3( lp.x / BR_TILE, ( brLvK( lp.y, 0.0 ).x + 0.5 ) / BR_LV_NY, lp.z / BR_TILE );
 #endif
 	}
 	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( brWet, brFilm, brPuddle ); // package B: r wet, g film, b standing water

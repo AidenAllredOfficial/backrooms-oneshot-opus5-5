@@ -127,6 +127,26 @@ describe('player on the production WorldQuery (WP10)', () => {
     expect(walkX(7.0, PLAYER.height)).toBeLessThan(6 - PLAYER.radius * 0.9 + 1e-3); // side at body height
   });
 
+  it('ramps: a FILLED body is solid down to the floor (no walking or crouching under its high end)', () => {
+    const l = openLayout();
+    l.solids.push({ kind: 'ramp', id: 1, x0: 6, z0: 6, x1: 7.2, z1: 13.2, y0: 1.0, y1: 4.0, dir: 2, steps: 20, mat: 9,
+      flags: SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP | SolidFlag.FILLED, bakeGroup: 0 });
+    const w = new RealWorld().add(l);
+    const scratch = new Float32Array(SCRATCH_BOXES * 6);
+    const walkX = (z: number, height: number): number => {
+      const s = createPlayerState(0, 4, 0, z, 0, 0);
+      for (let i = 0; i < 480; i++) moveAndCollide(w.q, s, 1.45 / 120, 0, height, scratch);
+      return s.x;
+    };
+    // the open flight's soffit is 2.05 m up at z = 9 (walked under above); the filled body is not
+    expect(walkX(9.0, PLAYER.height)).toBeLessThan(6 - PLAYER.radius * 0.9 + 1e-3);
+    expect(MOVE_RESULT.blocked).toBe(true);
+    expect(walkX(12.0, PLAYER.crouchHeight)).toBeLessThan(6 - PLAYER.radius * 0.9 + 1e-3);
+    // on top of it the player still walks: its walking surface is a floor, and the ceiling above is the room's
+    expect(w.q.ceilingAt(6.6, 9.0, 2.6)).toBeGreaterThan(2.65); // (the room ceiling, not the body)
+    expect(w.q.floorAt(6.6, 9.0, 2.25)).toBeCloseTo(2.25, 5); // (1.0 + 3.0 * 3 / 7.2)
+  });
+
   it('walking into an unloaded chunk is blocked', () => {
     const w = new RealWorld().add(openLayout(0, 0, 0));
     const s = createPlayerState(0, 35, 0, 10, yawOf(1, 0), 0);
