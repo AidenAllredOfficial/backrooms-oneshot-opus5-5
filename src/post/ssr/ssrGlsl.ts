@@ -255,7 +255,8 @@ void main() {
 }
 `;
 
-/** The half-resolution trace (one ray per 2x2 block, from its top-left pixel like the SSAO). MRT: location 0 =
+/** The trace at half the display resolution (one ray per step x step block, from its top-left pixel like the SSAO;
+ * step 2, or 3 on ultra's 1.5x supersampled buffer). MRT: location 0 =
  * premultiplied reflected radiance x confidence (rgb), confidence (a); location 1 = the representative pixel's
  * metadata for the filter and the upsample: linear view depth, oct view normal, lobe roughness (0 where the pixel has
  * no G-buffer specular). */
@@ -275,6 +276,7 @@ uniform mat4 uProjInv;
 uniform vec2 uFull;               // full-resolution size (px)
 uniform vec2 uPyrSize;            // pyramid level-0 size (px)
 uniform float uMaxRough;
+uniform int uStep;                // full-resolution pixels per trace texel (2, 3 on ultra's 1.5x buffer)
 layout( location = 0 ) out highp vec4 outSsr;
 layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_DEPTH_AT( px ) texelFetch( tDepth, clamp( px, ivec2( 0 ), ivec2( uFull ) - 1 ), 0 ).x
@@ -318,7 +320,7 @@ vec2 brProjPx( vec3 v ) {
 void main() {
 	outSsr = vec4( 0.0 );
 	outMeta = vec4( 0.0 );
-	ivec2 p = min( ivec2( gl_FragCoord.xy ) * 2, ivec2( uFull ) - 1 );
+	ivec2 p = min( ivec2( gl_FragCoord.xy ) * uStep, ivec2( uFull ) - 1 );
 	vec4 s1 = texelFetch( tSpec, p, 0 );
 	vec4 g = texelFetch( tGNR, p, 0 );
 	if ( s1.a < 1e-4 || g.a < 0.5 ) return;
@@ -332,6 +334,7 @@ void main() {
 	float nv = dot( N, V );
 	if ( nv < 0.01 ) return;
 	vec3 R = reflect( - V, N );
+	if ( R.z >= BR_SSR_RZ1 ) return; // toward the camera: faded out anyway
 	vec2 hitUv;
 	float hitZ, hitGap, rayT;
 	// start just off the surface: its own depth must not stop the ray
@@ -406,12 +409,19 @@ export const SSR_COMPOSITE_PARS = /* glsl */ `
 uniform highp sampler2D tSsr;     // half-resolution premultiplied reflection (a = confidence)
 uniform highp sampler2D tMeta;    // half-resolution metadata: linear depth, oct view normal, roughness
 uniform highp sampler2D tDepth;   // full-resolution device depth of the MRT frame
-uniform vec4 uSsrP;               // x on, y debug view (REFL_DEBUG)
+uniform vec4 uSsrP;               // x on, y debug view (REFL_DEBUG), z full-resolution pixels per trace texel
 uniform vec3 uLin;                // near x far, far - near, far
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
 #define BR_DEBUG_NITS ${f(TUNE.DEBUG_NITS)}
 ${SSR_OCT_GLSL}
 float brLinZ( float d ) { return uLin.x / ( uLin.z - d * uLin.y ); }
+// the upsample weight of a half-resolution texel with metadata m for a pixel at depth zp, normal Np, roughness rp
+// (0 where the texel's pixel has no G-buffer specular)
+float brUpW( vec4 m, float zp, vec3 Np, float rp ) {
+	if ( m.x <= 0.0 ) return 0.0;
+	return exp( - abs( zp - m.x ) / ( ${f(SSR.UP_Z)} * zp ) ) * pow( max( dot( Np, brOctDec( m.yz ) ), 0.0 ), ${f(SSR.UP_NPOW)} )
+		* exp( - ${f(SSR.UP_ROUGH)} * abs( rp - m.w ) );
+}
 `;
 
 /** Inside main() after `vec4 s1` (att1 at pixel p): sets `vec3 spec` and `vec4 ssr` (the upsampled reflection). */
@@ -419,28 +429,27 @@ export const SSR_COMPOSITE_SPECULAR = /* glsl */ `
 	vec3 spec = s1.rgb;
 	vec4 ssr = vec4( 0.0 );
 	if ( uSsrP.x > 0.5 && s1.a > 0.0 ) {
-		vec4 g = texelFetch( tN2, p, 0 );
-		vec3 Np = brOctDec( g.rg );
-		float zp = brLinZ( texelFetch( tDepth, p, 0 ).x );
 		ivec2 hs = textureSize( tSsr, 0 ) - 1;
-		// texel t represents pixel 2t: pixel p sits at p / 2 in texel units
-		vec2 tf = vec2( p ) * 0.5;
+		// texel t represents pixel step x t: pixel p sits at p / step in texel units
+		vec2 tf = vec2( p ) / uSsrP.z;
 		ivec2 t0 = ivec2( floor( tf ) );
 		vec2 fr = tf - vec2( t0 );
-		vec4 acc = vec4( 0.0 );
-		float ws = 0.0;
-		for ( int j = 0; j < 2; j ++ ) {
-			for ( int i = 0; i < 2; i ++ ) {
-				ivec2 t = min( t0 + ivec2( i, j ), hs );
-				vec4 mq = texelFetch( tMeta, t, 0 );
-				float bil = ( i == 0 ? 1.0 - fr.x : fr.x ) * ( j == 0 ? 1.0 - fr.y : fr.y ) + 0.01;
-				float w = mq.x > 0.0 ? bil * exp( - abs( zp - mq.x ) / ( ${f(SSR.UP_Z)} * zp ) )
-					* pow( max( dot( Np, brOctDec( mq.yz ) ), 0.0 ), ${f(SSR.UP_NPOW)} ) * exp( - ${f(SSR.UP_ROUGH)} * abs( g.b - mq.w ) ) : 0.0;
-				acc += w * texelFetch( tSsr, t, 0 );
-				ws += w;
-			}
+		ivec2 t1 = min( t0 + 1, hs );
+		t0 = min( t0, hs );
+		vec4 r00 = texelFetch( tSsr, t0, 0 ), r10 = texelFetch( tSsr, ivec2( t1.x, t0.y ), 0 );
+		vec4 r01 = texelFetch( tSsr, ivec2( t0.x, t1.y ), 0 ), r11 = texelFetch( tSsr, t1, 0 );
+		// all four missed (or were not traced): the fallback, without the bilateral weights
+		if ( max( max( r00.a, r10.a ), max( r01.a, r11.a ) ) > 0.0 ) {
+			vec4 g = texelFetch( tN2, p, 0 );
+			vec3 Np = brOctDec( g.rg );
+			float zp = brLinZ( texelFetch( tDepth, p, 0 ).x );
+			vec4 m00 = texelFetch( tMeta, t0, 0 ), m10 = texelFetch( tMeta, ivec2( t1.x, t0.y ), 0 );
+			vec4 m01 = texelFetch( tMeta, ivec2( t0.x, t1.y ), 0 ), m11 = texelFetch( tMeta, t1, 0 );
+			vec4 w = vec4( ( 1.0 - fr.x ) * ( 1.0 - fr.y ), fr.x * ( 1.0 - fr.y ), ( 1.0 - fr.x ) * fr.y, fr.x * fr.y ) + 0.01;
+			w *= vec4( brUpW( m00, zp, Np, g.b ), brUpW( m10, zp, Np, g.b ), brUpW( m01, zp, Np, g.b ), brUpW( m11, zp, Np, g.b ) );
+			float ws = w.x + w.y + w.z + w.w;
+			if ( ws > 1e-3 ) ssr = ( w.x * r00 + w.y * r10 + w.z * r01 + w.w * r11 ) / ws;
 		}
-		if ( ws > 1e-3 ) ssr = acc / ws;
 		spec = mix( s1.rgb, s1.a * ssr.rgb / max( ssr.a, 1e-4 ), ssr.a );
 	}
 `;

@@ -287,7 +287,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
   // package D: screen-space reflections on the frame graph (Hi-Z after the prepass, the trace after the opaque render)
-  const ssr = createScreenSpaceReflections(q);
+  const ssr = createScreenSpaceReflections(q, () => post.renderScale);
   if (frame) ssr.attach(frame);
   if (q.ssr !== 'off') await warmPassMaterials(r, ssr.materials);
   const ripples = createWaterRipples(materials.globals, q, core.bus); // resets itself on teleports / seed changes

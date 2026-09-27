@@ -54,12 +54,14 @@ export class MrtComposite {
   private ssr: THREE.Texture | null = null;
   private meta: THREE.Texture | null = null;
   private debug = 0;
+  private step = 2;
 
   /** This frame's reflection and its metadata (the SSR hook calls it before the composite; consumed by the next
    * render). */
-  setReflection(tex: THREE.Texture | null, meta: THREE.Texture | null, camera: THREE.PerspectiveCamera): void {
+  setReflection(tex: THREE.Texture | null, meta: THREE.Texture | null, step: number, camera: THREE.PerspectiveCamera): void {
     this.ssr = tex;
     this.meta = meta;
+    this.step = step;
     (this.material.uniforms.uLin.value as THREE.Vector3).set(camera.near * camera.far, camera.far - camera.near, camera.far);
   }
 
@@ -78,7 +80,7 @@ export class MrtComposite {
     u.tSsr.value = this.ssr;
     u.tMeta.value = this.meta;
     const on = this.ssr !== null && this.meta !== null;
-    (u.uSsrP.value as THREE.Vector4).set(on ? 1 : 0, on ? this.debug : 0, 0, 0);
+    (u.uSsrP.value as THREE.Vector4).set(on ? 1 : 0, on ? this.debug : 0, this.step, 0);
     this.quad.render(renderer, this.material, dst);
     this.ssr = null;
     this.meta = null;

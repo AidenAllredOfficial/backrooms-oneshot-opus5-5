@@ -9,7 +9,7 @@ import {
   SSR_TRACE_GLSL,
 } from '../../src/post/ssr/ssrGlsl.ts';
 import { MRT_COMPOSITE_FRAG } from '../../src/post/frame/MrtComposite.ts';
-import { ssrSettingsOf } from '../../src/post/ssr/SsrTrace.ts';
+import { ssrSettingsOf, ssrStepFor } from '../../src/post/ssr/SsrTrace.ts';
 
 describe('Hi-Z layout', () => {
   it('level 0 is half the frame (rounded up), then floor-halved down to 1x1, HIZ_LEVELS of them built', () => {
@@ -129,6 +129,14 @@ describe('shader sources', () => {
 
   it('the ultra filter leaves mirrors sharp', () => {
     expect(SSR_FILTER_FRAG).toContain(`m.w <= ${SSR.FILTER_ROUGH}`);
+  });
+
+  it('traces at half the display resolution: 2x2 blocks, 3x3 on ultra\'s 1.5x supersampled buffer', () => {
+    expect(ssrStepFor(1)).toBe(2);
+    expect(ssrStepFor(0.7)).toBe(2);
+    expect(ssrStepFor(QUALITY.ultra.renderScale)).toBe(3);
+    expect(SSR_TRACE_FRAG).toContain('ivec2 p = min( ivec2( gl_FragCoord.xy ) * uStep, ivec2( uFull ) - 1 );');
+    expect(SSR_COMPOSITE_SPECULAR).toContain('vec2 tf = vec2( p ) / uSsrP.z;');
   });
 
   it('presets: high and ultra trace, ultra filters; low and medium do not', () => {

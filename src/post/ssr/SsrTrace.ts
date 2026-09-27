@@ -1,6 +1,7 @@
 // src/post/ssr/SsrTrace.ts — package D: screen-space reflections on the frame graph (post/ScenePass.ts).
 //  - afterDepth hook 'hiz' (order 20): the min device-depth pyramid (post/ssr/HiZ.ts) from the prepass depth.
-//  - afterOpaque hook 'ssr' (order 10): one ray per 2x2 block (half resolution) from every pixel whose G-buffer holds a
+//  - afterOpaque hook 'ssr' (order 10): one ray per 2x2 block (half the display resolution: 3x3 on ultra's 1.5x
+//    buffer, ssrStepFor) from every pixel whose G-buffer holds a
 //    replaceable specular (att1.a = Ws > 0) below the preset's ssrMaxRoughness: Hi-Z traversal for receding rays,
 //    a linear march for rays toward the camera (ssrGlsl.ts SSR_TRACE_GLSL), thickness and facing tests, a
 //    roughness cone into the colour pyramid with an anisotropic stretch along the screen-projected normal, and the
@@ -28,6 +29,10 @@ export const ssrSettingsOf = (q: QualityConfig): SsrSettings => ({
   maxRough: q.ssrMaxRoughness, steps: Math.max(1, Math.round(q.ssrSteps)), filter: q.ssrFilter,
 });
 
+/** Full-resolution pixels per trace texel: half the DISPLAY resolution, so ultra's 1.5x supersampled buffer traces
+ * one ray per 3 x 3 pixels (the same rays per display pixel as high; 2 x 2 cost 2.25x as much there). */
+export const ssrStepFor = (renderScale: number): number => (renderScale > 1.25 ? 3 : 2);
+
 export class ScreenSpaceReflections {
   readonly hiz = new HiZ();
   /** q.ssr !== 'off': the hooks do nothing otherwise */
@@ -41,11 +46,15 @@ export class ScreenSpaceReflections {
   private readonly full = new THREE.Vector2(1, 1);
   private readonly pyrSize = new THREE.Vector2(1, 1);
   private readonly aoP = new THREE.Vector2();
+  private readonly renderScale: () => number;
+  private step = 2;
   private attached: { sp: ScenePass; remove: (() => void)[] } | null = null;
   private readonly hizHook: FrameHook = { name: 'hiz', order: 20, run: (ctx) => this.runHiZ(ctx) };
   private readonly ssrHook: FrameHook = { name: 'ssr', order: 10, run: (ctx) => this.runTrace(ctx) };
 
-  constructor(q: QualityConfig) {
+  /** renderScale: the post stack's current render scale (the trace step follows it). */
+  constructor(q: QualityConfig, renderScale: () => number = () => 1) {
+    this.renderScale = renderScale;
     this.enabled = q.ssr !== 'off';
     this.settings = ssrSettingsOf(q);
     const opts = {
@@ -77,6 +86,7 @@ export class ScreenSpaceReflections {
       uHiZ: { value: this.hiz.texture }, uHiZInfo: { value: this.hiz.info },
       uProj: { value: new THREE.Matrix4() }, uProjInv: { value: new THREE.Matrix4() },
       uFull: { value: this.full }, uPyrSize: { value: this.pyrSize }, uMaxRough: { value: this.settings.maxRough },
+      uStep: { value: this.step },
     });
   }
 
@@ -125,7 +135,9 @@ export class ScreenSpaceReflections {
     if (!this.enabled || !sp || !mrt || !pyr || this.hiz.info.w < 0.5) return;
     const renderer = ctx.renderer;
     const cam = ctx.camera;
-    const hw = Math.max(1, Math.ceil(ctx.width / 2)), hh = Math.max(1, Math.ceil(ctx.height / 2));
+    const step = ssrStepFor(this.renderScale());
+    this.step = step;
+    const hw = Math.max(1, Math.ceil(ctx.width / step)), hh = Math.max(1, Math.ceil(ctx.height / step));
     if (this.ssrRT.width !== hw || this.ssrRT.height !== hh) {
       this.ssrRT.setSize(hw, hh);
       this.tmpRT.setSize(hw, hh);
@@ -137,6 +149,7 @@ export class ScreenSpaceReflections {
     const aoOn = g !== null && g.ssaoParams.value.x > 0.5;
     this.aoP.set(aoOn ? 1 : 0, aoOn ? Math.max(1, g.ssaoParams.value.w) : 1);
     const u = this.trace.uniforms;
+    u.uStep.value = step;
     u.tAo.value = aoOn ? g.ssaoTex.value : null;
     u.tDepth.value = ctx.depth;
     u.tSpec.value = mrt.textures[1];
@@ -153,7 +166,7 @@ export class ScreenSpaceReflections {
       this.quad.render(renderer, this.filter, this.tmpRT);
       result = this.tmpRT.texture;
     }
-    sp.composite.setReflection(result, this.ssrRT.textures[1], cam);
+    sp.composite.setReflection(result, this.ssrRT.textures[1], step, cam);
   }
 
   dispose(): void {
@@ -166,6 +179,6 @@ export class ScreenSpaceReflections {
   }
 }
 
-export function createScreenSpaceReflections(q: QualityConfig): ScreenSpaceReflections {
-  return new ScreenSpaceReflections(q);
+export function createScreenSpaceReflections(q: QualityConfig, renderScale?: () => number): ScreenSpaceReflections {
+  return new ScreenSpaceReflections(q, renderScale);
 }
