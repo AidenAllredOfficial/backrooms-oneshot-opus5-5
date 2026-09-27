@@ -83,6 +83,26 @@ describe('brContactShadow on a synthetic depth box', () => {
     expect(at(0.1)).toBeLessThan(at(0.2));
     expect(at(0.4)).toBe(1); // beyond the march
   });
+  it('casts a lighter shadow from an occluder thinner than a step (an area light swallows it), a full one from a solid', () => {
+    // light up and towards the camera; an overhang 0.3 m in front of the wall: a solid one above h = 0.1, or a bar
+    // only 1.5 cm tall there (a lounger axle)
+    const Lt: Vec3 = [0, 0.6, 0.8];
+    const y = (v: number): number => ((v * 2 - 1) / PROJ[1]) * 8;
+    const solid = (j: number): number => contactShadow([0, 0, -8], Ng, Lt, 1, 8, j, PROJ, (_u, v) => (y(v) > 0.1 ? 7.7 : 8.05));
+    const bar = (j: number): number => contactShadow([0, 0, -8], Ng, Lt, 1, 8, j, PROJ, (_u, v) => (y(v) > 0.1 && y(v) < 0.115 ? 7.7 : 8.05));
+    let hitsBar = 0;
+    for (let j = 0.05; j < 1; j += 0.1) {
+      const s = solid(j), b = bar(j);
+      expect(s).toBeLessThan(0.75);
+      expect(b).toBeGreaterThanOrEqual(s - 1e-9);
+      if (b < 1) {
+        hitsBar++;
+        // a dithered step that lands on the bar shadows at most a third as deep as the solid (the two samples past the hit miss)
+        expect(1 - b).toBeLessThanOrEqual((1 - s) / 3 + 0.05);
+      }
+    }
+    expect(hitsBar).toBeGreaterThan(0);
+  });
   it('ignores its own surface (depth bias) and occluders thicker than CS_THICK behind the ray', () => {
     // a flat wall: every sample is in front of the depth buffer
     expect(contactShadow([0.3, 0.3, -5], Ng, L, 1, 8, 0.5, PROJ, () => 5)).toBe(1);
