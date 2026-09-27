@@ -12,6 +12,7 @@ import type { FlickerMode, Settings } from './settings.ts';
 import type { GameBus } from './events.ts';
 import type { SpawnPoint } from './world.ts';
 import type { WorkerInit } from './worker.ts';
+import type { ReflView } from './debug.ts';
 
 // ---------------------------------------------------------------- textures (WP8 -> WP9)
 export interface TextureSet {
@@ -22,6 +23,8 @@ export interface TextureSet {
   grime: THREE.Texture; // 512^2 tileable RGBA8: r tide/stain rings, g speckle/mould, b scuff, a drip streaks
   waterNormals: THREE.Texture; // 512^2 tileable RG normal
   cookie: THREE.Texture; // 256^2 flashlight cookie
+  /** package B: LEAN detail-map array (sampler2DArray uBrDetail), generated only when QualityConfig.detailMaps */
+  detail?: THREE.Texture | null;
   dispose(): void;
 }
 
@@ -33,6 +36,8 @@ export interface ColorGrade {
   /** R2-post: sensor black pedestal in sRGB-encoded units, applied after the contrast curve (e = ped + (1 - ped) * e).
    * Optional (additive); absent = 0. */
   pedestal?: number;
+  /** package C: toe strength of the grade curve (e = mix(e, e*e*1.12/(e + .12), toe)). Optional; absent = 0. */
+  toe?: number;
 }
 export interface AtmosphereParams {
   hazeDensity: number; // 1/m, exponential
@@ -45,6 +50,12 @@ export interface AtmosphereParams {
   aoColor: [number, number, number];
   grain: number;
   grade: ColorGrade;
+  // package F (volumetrics / dust / mist / motes). Optional (additive); absent = the analytic defaults.
+  hazePhase?: number; // dual-HG forward-lobe weight of the haze
+  dustDensity?: number;
+  dustNoise?: number;
+  mistDensity?: number;
+  moteDensity?: number;
 }
 /** Blended per frame at the camera (1.5 s crossfade). */
 export interface AtmosphereState extends AtmosphereParams {
@@ -71,6 +82,50 @@ export interface MaterialGlobals {
   reflOn: { value: number };
   reflY: { value: number }; // world y of the plane currently mirrored by PlanarReflection (valid when reflOn = 1)
   floorReflOn: { value: number };
+  // ---- graphics-realism contract (A.0). Every field starts inert (MaterialSystem.createGlobals); the owning package
+  // writes .value only. Positions are camera-relative world metres unless stated otherwise.
+  // D: box-projected reflection probe (GGX-prefiltered cube)
+  probeTex: { value: THREE.Texture | null }; // samplerCube uBrProbe (null: three binds its empty cube)
+  probeOn: { value: number };
+  probeLod: { value: number }; // last prefiltered mip
+  probeMin: { value: THREE.Vector3 }; // box min - camera
+  probeMax: { value: THREE.Vector3 }; // box max - camera
+  probePos: { value: THREE.Vector3 }; // capture anchor - camera
+  // A/E: opaque colour pyramid of split frames (rgb = opaque HDR, a = linear view depth; mipmapped) + D's Hi-Z
+  sceneColor: { value: THREE.Texture | null };
+  sceneInvSize: { value: THREE.Vector2 }; // 1 / level-0 size
+  waterVolOn: { value: number }; // 1 during the opaque render of a split frame (water owns the submerged optics)
+  hiZ: { value: THREE.Texture | null }; // D: half-res R32F min device-depth pyramid
+  hiZInfo: { value: THREE.Vector4 };
+  // A: pre-shade SSAO (aoRT: r AO, g view Z, ba oct view normal) and contact shadows
+  ssaoTex: { value: THREE.Texture }; // 1x1 white until the SSAO hook publishes aoRT
+  ssaoParams: { value: THREE.Vector4 }; // x on, y pow, z plane, w step
+  ssaoProj: { value: THREE.Vector4 }; // (P00, P11, P20, P21)
+  ssaoSize: { value: THREE.Vector4 }; // (w, h, 1/w, 1/h) of the full-resolution target
+  csOn: { value: number }; // URL cs=0 -> 0
+  // F: froxel volume (integrated in-scatter rgb, transmittance a)
+  volTex: { value: THREE.Texture }; // 1x1 (0, 0, 0, 1) until the volumetrics hook publishes
+  volGrid: { value: THREE.Vector4 }; // (W, H, N, tiles per row)
+  volZ: { value: THREE.Vector4 }; // (zNear, zFar, slice scale, on)
+  volScreen: { value: THREE.Vector2 }; // 1 / target size
+  // F: flashlight bounce VPLs
+  fbOn: { value: number };
+  fbP: { value: THREE.Vector4[] }; // 8
+  fbN: { value: THREE.Vector4[] }; // 8
+  fbC: { value: THREE.Vector4[] }; // 8
+  fbBox: { value: THREE.Vector4[] }; // 8
+  // E: ripple simulation (world-anchored window), drips and in-water lights
+  ripple: { value: THREE.Texture | null };
+  rippleOrigin: { value: THREE.Vector2 }; // world xz of the texel-0 corner
+  rippleSpan: { value: number }; // metres
+  ripplePlane: { value: number }; // world y
+  rippleOn: { value: number };
+  drips: { value: THREE.Vector4[] }; // 8
+  nDrips: { value: number };
+  uwPos: { value: THREE.Vector4[] }; // 4
+  uwDir: { value: THREE.Vector4[] }; // 4
+  uwCol: { value: THREE.Vector4[] }; // 4
+  nUw: { value: number };
 }
 /** Every per-tile binding is a uniform object. WP9 puts THESE EXACT objects into shader.uniforms (in
  * onBeforeCompile); WP10/WP11 update them only by assigning `.value` (never by replacing the object). */
@@ -85,6 +140,7 @@ export interface TileBindings {
   flick: { value: Float32Array }; // 9 x vec3: DYN_SLOT_OFFSETS order; rgb = color/luma(color) * intensity(t)
   ownParity: { value: THREE.Vector2 }; // (gtx & 1, gtz & 1)
   fade: { value: number }; // 0..1 dithered fade-in
+  water: { value: number }; // package E: non-zero when the tile holds water (from the wall mask); 0 until E sets it
 }
 export interface TileMaterials {
   shell: THREE.MeshStandardMaterial;
@@ -156,10 +212,14 @@ export interface WorldQuery extends CollisionWorld {
   losClear(ax: number, ay: number, az: number, bx: number, by: number, bz: number): boolean;
   /** Distance to the first occluder along a horizontal ray at height y (capped at maxDist). */
   rayDistance(x: number, y: number, z: number, dx: number, dz: number, maxDist: number): number;
+  /** Package F (optional until implemented): 3D ray (unit direction) against the 2.5D world plus collision boxes;
+   * true on a hit within maxDist, with the distance, surface normal and albedo written to out. */
+  raycast?(x: number, y: number, z: number, dx: number, dy: number, dz: number, maxDist: number, out: RaycastHit): boolean;
   /** audio passability of the edge between global cells: 'x' = line x=gi between (gi-1,gj)|(gi,gj). 0..1 */
   edgeSound(axis: 'x' | 'z', gi: number, gj: number): number;
   cellWalkable(gi: number, gj: number): boolean;
 }
+export interface RaycastHit { t: number; nx: number; ny: number; nz: number; r: number; g: number; b: number }
 export interface StreamStats {
   chunksResident: number; chunksDesired: number; layoutsPending: number;
   tilesResident: number; tilesPreview: number; tilesFull: number; queued: number; inFlight: number;
@@ -239,7 +299,9 @@ export interface PostStack {
   setQuality(q: QualityConfig): void;
   setAtmosphere(a: AtmosphereState): void;
   setFilm(f: Settings['film'], brightnessEV: number): void;
-  setEnabled(p: Partial<Record<'ao' | 'bloom' | 'lens' | 'grain' | 'smaa' | 'exposure' | 'grade', boolean>>): void;
+  setEnabled(p: Partial<Record<'ao' | 'bloom' | 'lens' | 'grain' | 'smaa' | 'exposure' | 'grade' | 'ssr', boolean>>): void;
+  /** Package D (optional until implemented): SSR debug output ('ssr' = the reflection, 'conf' = confidence). */
+  setReflectionDebug?(mode: ReflView): void;
   setExposureLock(ev100: number | null): void;
   snapExposure(): void;
   glitch(seconds: number, strength: number): void;

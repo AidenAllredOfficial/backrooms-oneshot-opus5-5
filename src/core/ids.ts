@@ -193,12 +193,16 @@ export const DROP_LENS_AUX = 255;
 export const DROP_LENS_H = 0.004;
 
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)
+// 16-23 belong to the graphics-realism packages (B wetness/height, F volumetric/bounce, E water, D probe/specw,
+// A ssao); a view whose package has not landed renders black.
 export const DebugView = {
   FINAL: 0, ALBEDO: 1, NORMAL: 2, ROUGHNESS: 3, LIGHTMAP: 4, DIRECTIONALITY: 5, AO: 6, FLICKER: 7,
   MASK: 8, LAYER: 9, TEXEL: 10, ZONE: 11, ROOM: 12, UV: 13, EMISSION: 14, LIGHT_VOLUME: 15,
+  WETNESS: 16, HEIGHT: 17, VOLUMETRIC: 18, BOUNCE: 19, WATER: 20, PROBE: 21, SPECW: 22, SSAO: 23,
 } as const;
 export type DebugViewId = ValueOf<typeof DebugView>;
 export const DEBUG_VIEW_NAMES: readonly string[] = [
   'final', 'albedo', 'normal', 'roughness', 'lightmap', 'directionality', 'ao', 'flicker', 'mask', 'layer',
-  'texel', 'zone', 'room', 'uv', 'emission', 'lv',
+  'texel', 'zone', 'room', 'uv', 'emission', 'lv', 'wetness', 'height', 'volumetric', 'bounce', 'water', 'probe',
+  'specw', 'ssao',
 ];

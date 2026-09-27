@@ -36,6 +36,7 @@ import { landmarkTitle, placeTitle, storeyTitle } from '../ui/names.ts';
 import type { PauseInfo } from '../ui/pause.ts';
 import { createUI } from '../ui/ui.ts';
 import type { UI } from '../ui/ui.ts';
+import { LAYER_LATE } from '../materials/shared.ts';
 import type { AppCore, AppMode } from './appState.ts';
 import { applyQuality, bootSystems, buildQuality, filmOf, resolveSpawn, startEarlyPool, workerInitOf } from './boot.ts';
 import type { LoadPhase } from './boot.ts';
@@ -106,6 +107,7 @@ export function createApp(root: HTMLElement): App {
   scene.background = new THREE.Color(0x000000);
   const camera = new THREE.PerspectiveCamera(62, innerWidth / Math.max(1, innerHeight), 0.05, 400);
   camera.rotation.order = 'YXZ';
+  camera.layers.enable(LAYER_LATE); // water, sparks, motes: drawn after the opaque colour copy (post/ScenePass.ts)
 
   // §6.1 step 1: settings, params
   const local = storage('local');

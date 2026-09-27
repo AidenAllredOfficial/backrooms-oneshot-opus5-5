@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { HDR_CLAMP } from '../core/constants.ts';
 import { hash2, hash01 } from '../core/rng.ts';
+import { LAYER_LATE } from '../materials/shared.ts';
 
 export const SPARK_COUNT = 24;
 export const SPARK_FLASH_NITS = 20000;
@@ -129,6 +130,7 @@ export function createSparks(scene: THREE.Scene): Sparks {
   mesh.receiveShadow = false;
   mesh.frustumCulled = true;
   mesh.matrixAutoUpdate = true;
+  mesh.layers.set(LAYER_LATE); // drawn after the opaque colour copy (post/ScenePass.ts), like water
   scene.add(mesh);
 
   let endT = -1;

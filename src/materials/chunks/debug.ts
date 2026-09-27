@@ -1,11 +1,14 @@
 // src/materials/chunks/debug.ts — debug views (int uniform uDebugView, DEBUG_VIEW_NAMES order; no recompiles).
 // Each view writes a display value v in [0, 1] as v * BR_DEBUG_NITS nits, so it reads as v at the L0 reference
-// exposure (EV100 9.4) of the post stack. Runs instead of haze. Index 16 (not in DEBUG_VIEW_NAMES) is a
+// exposure (EV100 9.4) of the post stack. Runs instead of haze. Index 63 (not in DEBUG_VIEW_NAMES) is a
 // WP9-private view: the anti-tiling rotation class, used by the materials dev harness.
+// Views 16-23 belong to the graphics-realism packages; each owner replaces its stub line (black until then).
+// The shell's LIGHT_VOLUME view shows the light-volume coordinate instead of sampling uVolA: non-props programs must
+// not reference that sampler (surface sampler budget, tests/materials/samplerBudget.test.ts).
 
 import { DebugView } from '../../core/ids.ts';
 
-export const DEBUG_VIEW_ROTATION = 16;
+export const DEBUG_VIEW_ROTATION = 63;
 
 /** Inline block inside the fog_fragment replacement; sets `vec3 brDbg`. */
 export const FRAG_DEBUG_GLSL = /* glsl */ `
@@ -49,10 +52,20 @@ vec3 brDbg = vec3( 0.0 );
 #ifdef BR_LV
 		brDbg = brLmA.rgb / BR_DEBUG_LUX;
 #else
+		// the shell has no light volume (and must not reference uVolA): show the volume coordinate a prop would
+		// sample here, 0.3 m off the surface (u = x / tile, v = the non-uniform LV level, w = z / tile)
 		vec3 lp = vBrLocal + brNWg * 0.3;
-		brDbg = texture( uVolA, vec3( lp.x / BR_TILE, brLvV( lp.y ), lp.z / BR_TILE ) ).rgb / BR_DEBUG_LUX;
+		brDbg = vec3( lp.x / BR_TILE, brLvV( lp.y ), lp.z / BR_TILE );
 #endif
 	}
+	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( 0.0 ); // package B
+	else if ( dv == ${DebugView.HEIGHT} ) brDbg = vec3( 0.0 ); // package B
+	else if ( dv == ${DebugView.VOLUMETRIC} ) brDbg = vec3( 0.0 ); // package F
+	else if ( dv == ${DebugView.BOUNCE} ) brDbg = vec3( 0.0 ); // package F
+	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E
+	else if ( dv == ${DebugView.PROBE} ) brDbg = vec3( 0.0 ); // package D
+	else if ( dv == ${DebugView.SPECW} ) brDbg = vec3( 0.0 ); // package D
+	else if ( dv == ${DebugView.SSAO} ) brDbg = vec3( 0.0 ); // package A
 	else if ( dv == ${DEBUG_VIEW_ROTATION} ) brDbg = vec3( float( brRotIdx + 1 ) / 8.0 ); // 0 = not a rotated-tile layer
 }
 `;

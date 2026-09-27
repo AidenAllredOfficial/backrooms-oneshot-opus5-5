@@ -7,6 +7,7 @@ import { EMISSION, LV, NOISE_WRAP } from '../core/constants.ts';
 import { globalTileX, globalTileZ, mod, tileKeyStr, tileOriginX, tileOriginZ, type TileKey } from '../core/grid.ts';
 import type { LightmapData, MeshBuffers, TileMesh } from '../core/mesh.ts';
 import type { DynamicMeshHandle, MaterialSystem, TileBindings, TileMaterials } from '../core/runtime.ts';
+import { LAYER_LATE } from '../materials/shared.ts';
 import { meshBytes, releaseCpuArraysOnUpload, toBufferGeometry } from './geometry.ts';
 import { createTexturePoolEx, type TexturePoolEx } from './TexturePool.ts';
 
@@ -220,7 +221,11 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
       case 0: return addMesh(gpu, mesh.shell, mats.shell, true, 0, 'shell');
       case 1: return (gpu.props = addMesh(gpu, mesh.props, mats.props, true, 0, 'props'));
       case 2: return addMesh(gpu, mesh.decals, mats.decal, false, 1, 'decals');
-      default: return mesh.water ? addMesh(gpu, mesh.water, mats.water ?? mats.shell, false, 2, 'water') : null;
+      default: {
+        const w = mesh.water ? addMesh(gpu, mesh.water, mats.water ?? mats.shell, false, 2, 'water') : null;
+        w?.layers.set(LAYER_LATE); // drawn by ScenePass's late render, over the opaque colour copy
+        return w;
+      }
     }
   }
   const GEO_PARTS = 4;

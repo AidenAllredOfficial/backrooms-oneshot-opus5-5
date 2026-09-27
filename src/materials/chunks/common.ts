@@ -8,7 +8,9 @@
 import { CELL } from '../../core/constants.ts';
 import { f, glslConstants } from './params.ts';
 
-/** Uniforms shared by every surface / water material (MaterialGlobals + shared texture set + layer table). */
+/** Uniforms shared by every surface / water material (MaterialGlobals + shared texture set + layer table). Every
+ * uniform of the graphics-realism packages is declared here once (A.0); unused declarations cost nothing, and the
+ * surface sampler budget (16, tests/materials/samplerBudget.test.ts) counts only referenced samplers. */
 export const GLOBAL_UNIFORMS_GLSL = /* glsl */ `
 uniform float uTime;
 uniform int uDebugView;
@@ -24,6 +26,54 @@ uniform float uReflOn;
 uniform float uReflY;
 uniform float uFloorReflOn;
 uniform float uBrReflPass;
+uniform float uBrMrt;
+// D: box-projected reflection probe (camera-relative world metres)
+uniform samplerCube uBrProbe;
+uniform float uBrProbeOn;
+uniform float uBrProbeLod;
+uniform vec3 uBrProbeMin;
+uniform vec3 uBrProbeMax;
+uniform vec3 uBrProbePos;
+// A/E: opaque colour pyramid (rgb HDR, a linear view depth) of split frames; D: Hi-Z min-depth pyramid
+uniform sampler2D uSceneColor;
+uniform vec2 uSceneInvSize;
+uniform float uWaterVolOn;
+uniform sampler2D uHiZ;
+uniform vec4 uHiZInfo;
+// A: pre-shade SSAO (r AO, g view Z, ba oct normal; x on, y pow, z plane, w step) and contact shadows
+uniform sampler2D uSsaoTex;
+uniform vec4 uSsaoP;
+uniform vec4 uSsaoProj;
+uniform vec4 uSsaoSize;
+uniform float uCsOn;
+// F: froxel volume (rgb in-scatter, a transmittance)
+uniform sampler2D uVolTex;
+uniform vec4 uVolGrid;
+uniform vec4 uVolZ;
+uniform vec2 uVolScreen;
+// F: flashlight bounce VPLs
+uniform float uFbOn;
+uniform vec4 uFbP[ 8 ];
+uniform vec4 uFbN[ 8 ];
+uniform vec4 uFbC[ 8 ];
+uniform vec4 uFbBox[ 8 ];
+// E: ripple window, drips, in-water lights
+uniform sampler2D uRipple;
+uniform vec2 uRippleOrigin;
+uniform float uRippleSpan;
+uniform float uRipplePlane;
+uniform float uRippleOn;
+uniform vec4 uDrips[ 8 ];
+uniform int uNDrips;
+uniform vec4 uUwPos[ 4 ];
+uniform vec4 uUwDir[ 4 ];
+uniform vec4 uUwCol[ 4 ];
+uniform int uNUw;
+// B: SURFACE_PHYS layer tables and the detail-map array
+uniform vec4 uBrLayerC[ BR_MAT_COUNT ];
+uniform vec4 uBrLayerD[ BR_MAT_COUNT ];
+uniform vec4 uBrLayerE[ BR_MAT_COUNT ];
+uniform sampler2DArray uBrDetail;
 `;
 
 /** Per-tile uniforms (TileBindings). */
@@ -42,6 +92,7 @@ uniform sampler2D uVolMask;
 uniform vec3 uFlick[ 9 ];
 uniform vec2 uOwnParity;
 uniform float uFade;
+uniform float uTileWater;
 `;
 
 /** Pure helper functions (hashes, periodic noise, Voronoi caustics, dither, flicker-channel slots, LV mapping). */
@@ -369,6 +420,13 @@ void brHazeTerms( vec3 irrLocal, float d, out float fh, out vec3 insc, out float
 	fh = 1.0 - exp( - uHazeDensity * d );
 	insc = mix( uFarColor, irrLocal * uHazeAlbedo / BR_PI * uHazeTint, 0.5 );
 	fe = smoothstep( uEdgeFog.x, uEdgeFog.y, d );
+}
+// transmittance of the haze and edge fog between the camera and viewPos (the MRT specular write, water); package F
+// replaces the body with the froxel volume's when BR_VOLUMETRIC is on
+float brHazeT( vec3 viewPos ) {
+	float fh; vec3 insc; float fe;
+	brHazeTerms( vec3( 0.0 ), length( viewPos ), fh, insc, fe );
+	return ( 1.0 - fh ) * ( 1.0 - fe );
 }
 vec3 brHaze( vec3 col, vec3 irrLocal, vec3 viewPos ) {
 	float d = length( viewPos );

@@ -102,7 +102,8 @@ class HdrBloom extends BloomEffect {
   }
 }
 
-type Toggle = 'ao' | 'bloom' | 'lens' | 'grain' | 'smaa' | 'exposure' | 'grade';
+// ssr: read by ScenePass's MRT decision (package A frame graph); URL ssr=0 turns it off for A/B checks
+type Toggle = 'ao' | 'bloom' | 'lens' | 'grain' | 'smaa' | 'exposure' | 'grade' | 'ssr';
 
 export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, q: QualityConfig, s: Settings): PostStack {
   const P = POST_TUNING;
@@ -166,7 +167,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const cap = createDisplayCapture(dbs.x, dbs.y);
 
   // ---- state
-  const enabled: Record<Toggle, boolean> = { ao: true, bloom: true, lens: true, grain: true, smaa: true, exposure: true, grade: true };
+  const enabled: Record<Toggle, boolean> = { ao: true, bloom: true, lens: true, grain: true, smaa: true, exposure: true, grade: true, ssr: true };
   let film: Settings['film'] = { ...s.film };
   let brightnessEV = s.brightnessEV;
   let atm: AtmosphereState | null = null;

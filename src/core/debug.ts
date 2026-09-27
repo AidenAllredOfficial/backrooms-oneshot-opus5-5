@@ -7,6 +7,9 @@ import type { MoodId, StoreyId, ZoneId, LandmarkKindId } from './ids.ts';
 import type { SpawnPoint, TestSceneId } from './world.ts';
 import type { BakeTerm } from './worker.ts';
 
+/** SSR debug output (URL reflView=; package D): the reflection alone, or its confidence with misses in magenta. */
+export type ReflView = 'off' | 'ssr' | 'conf';
+
 /** Parsed URL params (WP14 app/urlParams.ts: pure, never throws; bad values -> warnings + defaults). */
 export interface LaunchParams {
   seedText: string; // 'seed' (default: settings.lastSeed || random 'NNNN-NNNN')
@@ -32,6 +35,10 @@ export interface LaunchParams {
   audio: boolean; // 'noaudio=1' => false
   post: boolean; // 'nopost=1' => false
   ao: boolean; bloom: boolean; grain: boolean; lens: boolean; // 'ao=0' etc.
+  // graphics-realism feature toggles ('ssr=0' etc.; default on): app/boot.ts applyLaunchToggles copies them into
+  // Systems.features, where the owning package reads them (ssr, probe: D; cs: A; bounce, vol: F)
+  ssr: boolean; probe: boolean; cs: boolean; bounce: boolean; vol: boolean;
+  reflView: ReflView;
   flicker: FlickerMode | null;
   lights: 'default' | 'on' | 'dead';
   // ready requires: 'full' = full bakes in radius 1 (default with autostart=1: automation / QA);

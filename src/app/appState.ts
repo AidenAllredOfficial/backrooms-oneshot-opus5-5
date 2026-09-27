@@ -2,7 +2,7 @@
 // the ready gate and the debug API (§7.2).
 
 import type * as THREE from 'three';
-import type { BackroomsDebugAPI, LaunchParams } from '../core/debug.ts';
+import type { BackroomsDebugAPI, LaunchParams, ReflView } from '../core/debug.ts';
 import type { GameBus } from '../core/events.ts';
 import type { PlayerInput, PlayerState } from '../core/player.ts';
 import type { QualityConfig } from '../core/quality.ts';
@@ -19,8 +19,22 @@ import type { SimClock } from './clock.ts';
 import type { FrameStats, GpuTimer } from './perf.ts';
 import type { SettingsStore } from './settingsStore.ts';
 
+/** Graphics-realism feature toggles (URL ssr= probe= cs= bounce= vol= reflView=; default on / 'off'), for A/B checks
+ * against the full-quality path. Each owning package reads its own entry: ssr and probe (D), cs (A), bounce and
+ * vol (F), reflView (D). */
+export interface FeatureToggles {
+  ssr: boolean;
+  probe: boolean;
+  cs: boolean;
+  bounce: boolean;
+  vol: boolean;
+  reflView: ReflView;
+}
+
 export interface Systems {
   q: QualityConfig;
+  /** set from the launch params by boot (bootSystems, applyLaunchToggles) */
+  features: FeatureToggles;
   textures: TextureSet;
   materials: MaterialSystem;
   lighting: LightingRuntime;

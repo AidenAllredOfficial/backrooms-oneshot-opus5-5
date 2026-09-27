@@ -20,10 +20,12 @@ import { atmosphereTarget, createAtmosphereBlender, newParams } from '../../src/
 import { createLightingRuntime, FAR_FRACTION, FAR_WARM, sampleLightVolume } from '../../src/lighting/LightingRuntime.ts';
 import { createAnomalyDirector, sparkBurstTime, lightDiesRoll } from '../../src/lighting/anomalyDirector.ts';
 import { FLASHLIGHT } from '../../src/lighting/Flashlight.ts';
+import { createGlobals } from '../../src/materials/MaterialSystem.ts';
 
 // ---------------------------------------------------------------- fakes
 function globals(): MaterialGlobals {
   return {
+    ...createGlobals(), // the graphics-realism fields (inert); the ones below keep this file's values
     time: { value: 0 }, debugView: { value: 0 }, hazeDensity: { value: 0 }, hazeTint: { value: new THREE.Color() },
     hazeAlbedo: { value: 0 }, edgeFog: { value: new THREE.Vector2() }, farColor: { value: new THREE.Color() },
     flickerMode: { value: 0 }, reflTex: { value: null }, reflMatrix: { value: new THREE.Matrix4() }, reflOn: { value: 0 },

@@ -2,7 +2,7 @@
 // Every recognised key is validated and clamped; clamped / rejected / unknown values are reported in `warnings`
 // (surfaced through stats().warnings, which headless QA requires to be empty).
 
-import type { LaunchParams } from '../core/debug.ts';
+import type { LaunchParams, ReflView } from '../core/debug.ts';
 import { DEBUG_VIEW_NAMES, LANDMARK_NAMES, MOOD_NAMES, VIGNETTE_NAMES, ZONE_NAMES } from '../core/ids.ts';
 import type { LandmarkKindId, MoodId, StoreyId, ZoneId } from '../core/ids.ts';
 import type { QualityName } from '../core/quality.ts';
@@ -17,7 +17,7 @@ export const LAUNCH_PARAM_KEYS: readonly string[] = [
   'seed', 'autostart', 's', 'x', 'y', 'z', 'yaw', 'pitch', 'yawDeg', 'pitchDeg', 'fov', 'goto', 'zone', 'forceZone',
   'forceMood', 'forceLandmark', 'testScene', 'quality', 'scale', 'radius', 'view', 'time', 'freeze', 'exposure',
   'flashlight', 'fly', 'noaudio', 'nopost', 'ao', 'bloom', 'grain', 'lens', 'flicker', 'lights', 'bake', 'bakeTerm',
-  'camcorder', 'hud', 'debug', 'noprime',
+  'camcorder', 'hud', 'debug', 'noprime', 'ssr', 'probe', 'cs', 'bounce', 'vol', 'reflView',
 ];
 
 /** Simple goto targets (no NAME part). */
@@ -38,6 +38,7 @@ const QUALITY_VALUES: readonly (QualityName | 'auto')[] = ['low', 'medium', 'hig
 const FLICKER_VALUES: readonly FlickerMode[] = ['standard', 'reduced', 'off'];
 const LIGHTS_VALUES: readonly LaunchParams['lights'][] = ['default', 'on', 'dead'];
 const BAKE_TERMS: readonly BakeTerm[] = ['all', 'direct', 'indirect'];
+const REFL_VIEWS: readonly ReflView[] = ['off', 'ssr', 'conf'];
 const TRUE_WORDS = ['1', 'true', 'yes', 'on', ''];
 const FALSE_WORDS = ['0', 'false', 'no', 'off'];
 
@@ -85,7 +86,8 @@ function defaults(seedText: string): LaunchParams {
     forceZone: null, forceMood: null, forceLandmark: null, testScene: null, quality: null, scale: null, radius: null,
     view: 'final', time: null, freeze: false, exposure: 'auto', flashlight: false, fly: false, audio: true, post: true,
     ao: true, bloom: true, grain: true, lens: true, flicker: null, lights: 'default', bake: 'full', bakeTerm: 'all',
-    camcorder: false, hud: true, debug: false, prime: true, warnings: [],
+    camcorder: false, hud: true, debug: false, prime: true, ssr: true, probe: true, cs: true, bounce: true, vol: true,
+    reflView: 'off', warnings: [],
   };
 }
 
@@ -273,6 +275,13 @@ export function parseLaunchParams(search: string, settings: Settings, randomSeed
   out.hud = bool('hud', true);
   out.debug = bool('debug', false);
   out.prime = !bool('noprime', false);
+  // graphics-realism feature toggles (A/B checks against the full-quality path)
+  out.ssr = bool('ssr', true);
+  out.probe = bool('probe', true);
+  out.cs = bool('cs', true);
+  out.bounce = bool('bounce', true);
+  out.vol = bool('vol', true);
+  out.reflView = oneOf('reflView', REFL_VIEWS) ?? 'off';
   return out;
 }
 

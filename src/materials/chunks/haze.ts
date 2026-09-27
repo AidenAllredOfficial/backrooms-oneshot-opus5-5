@@ -1,7 +1,8 @@
 // src/materials/chunks/haze.ts — the fog_fragment replacement (it runs after colorspace_fragment in r186; every
 // target we render into is linear): debug views, submerged optics (the water body's absorption and in-scatter
 // live on the submerged surfaces, not on the transparent water mesh), per-fragment haze + edge fog + airlight
-// (HAZE_FUNCS_GLSL in chunks/common.ts), decal premultiply and the HDR clamp.
+// (HAZE_FUNCS_GLSL in chunks/common.ts), decal premultiply and the HDR clamp; then, under BR_SSR, the specular
+// G-buffer write (MRT attachments 1 and 2, chunks/gbuffer.ts).
 
 import { FRAG_DEBUG_GLSL } from './debug.ts';
 
@@ -46,4 +47,24 @@ ${FRAG_DEBUG_GLSL}
 gl_FragColor.rgb *= gl_FragColor.a; // premultiplied soft alpha (CustomBlending One, OneMinusSrcAlpha)
 #endif
 gl_FragColor.rgb = min( max( gl_FragColor.rgb, vec3( 0.0 ) ), vec3( BR_HDR_CLAMP ) );
+#ifdef BR_SSR
+{
+	// specular G-buffer (package D fills the split in chunks/lighting.ts): att1 = fallback specular x haze
+	// transmittance and Ws x T, att2 = oct view normal + lobe roughness. Decals blend att1 with (Zero,
+	// OneMinusSrcAlpha) on alpha, which attenuates the surface's specular weight under them by their coverage; att2
+	// keeps the surface below (src alpha 0).
+	vec4 brO1 = vec4( 0.0 ), brO2 = vec4( 0.0 );
+#ifndef BR_DECAL
+	if ( uDebugView == 0 && brMrtSpec ) {
+		float brT = brHazeT( - vViewPosition );
+		brO1 = vec4( min( brFbSpec * brT, vec3( BR_HDR_CLAMP ) ), brWs * brT );
+		brO2 = vec4( brOctEnc( normalize( normal ) ), brMrtRough, 1.0 );
+	}
+#else
+	brO1 = vec4( 0.0, 0.0, 0.0, gl_FragColor.a );
+#endif
+	brOut1 = brO1;
+	brOut2 = brO2;
+}
+#endif
 `;

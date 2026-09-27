@@ -11,11 +11,15 @@ import { applySurfaceDefines, createSurfaceMaterial } from './SurfaceMaterial.ts
 import type { SurfaceVariant } from './SurfaceMaterial.ts';
 import { applyWaterDefines, createWaterMaterial } from './WaterMaterial.ts';
 import { createDepthMaterial } from './DepthMaterial.ts';
-import { createSharedUniforms, qualityDefinesOf } from './shared.ts';
+import { createSharedUniforms, definesKey, qualityDefinesOf } from './shared.ts';
 import type { QualityDefines } from './shared.ts';
-import { createZeroTextures } from './zeroTextures.ts';
+import { createInertSsaoTexture, createInertVolumeTexture, createZeroTextures } from './zeroTextures.ts';
 import { runWarmup } from './warmup.ts';
 
+const vec4s = (n: number): THREE.Vector4[] => Array.from({ length: n }, () => new THREE.Vector4());
+
+/** Every global starts inert: the features they drive (probe, pyramid, SSAO, froxels, bounce, ripples, in-water
+ * lights) read as off until their pass publishes real values. */
 export function createGlobals(): MaterialGlobals {
   return {
     time: { value: 0 },
@@ -31,6 +35,42 @@ export function createGlobals(): MaterialGlobals {
     reflOn: { value: 0 },
     reflY: { value: 0 },
     floorReflOn: { value: 0 },
+    probeTex: { value: null },
+    probeOn: { value: 0 },
+    probeLod: { value: 0 },
+    probeMin: { value: new THREE.Vector3() },
+    probeMax: { value: new THREE.Vector3() },
+    probePos: { value: new THREE.Vector3() },
+    sceneColor: { value: null },
+    sceneInvSize: { value: new THREE.Vector2(1, 1) },
+    waterVolOn: { value: 0 },
+    hiZ: { value: null },
+    hiZInfo: { value: new THREE.Vector4() },
+    ssaoTex: { value: createInertSsaoTexture() },
+    ssaoParams: { value: new THREE.Vector4(0, 1, 1, 1) }, // x = 0: surfaces never read uSsaoTex
+    ssaoProj: { value: new THREE.Vector4(1, 1, 0, 0) },
+    ssaoSize: { value: new THREE.Vector4(1, 1, 1, 1) },
+    csOn: { value: 1 },
+    volTex: { value: createInertVolumeTexture() },
+    volGrid: { value: new THREE.Vector4(1, 1, 1, 1) },
+    volZ: { value: new THREE.Vector4(0, 1, 1, 0) }, // w = 0: the analytic haze
+    volScreen: { value: new THREE.Vector2(1, 1) },
+    fbOn: { value: 0 },
+    fbP: { value: vec4s(8) },
+    fbN: { value: vec4s(8) },
+    fbC: { value: vec4s(8) },
+    fbBox: { value: vec4s(8) },
+    ripple: { value: null },
+    rippleOrigin: { value: new THREE.Vector2() },
+    rippleSpan: { value: 1 },
+    ripplePlane: { value: 0 },
+    rippleOn: { value: 0 },
+    drips: { value: vec4s(8) },
+    nDrips: { value: 0 },
+    uwPos: { value: vec4s(4) },
+    uwDir: { value: vec4s(4) },
+    uwCol: { value: vec4s(4) },
+    nUw: { value: 0 },
   };
 }
 
@@ -59,6 +99,7 @@ export function createMaterialSystem(renderer: THREE.WebGLRenderer, textures: Te
       flick: { value: new Float32Array(27) },
       ownParity: { value: new THREE.Vector2() },
       fade: { value: 1 },
+      water: { value: 0 },
     };
   }
 
@@ -102,7 +143,8 @@ export function createMaterialSystem(renderer: THREE.WebGLRenderer, textures: Te
     setQuality(nq: QualityConfig): void {
       globals.floorReflOn.value = nq.floorReflections ? 1 : 0;
       const nd = qualityDefinesOf(nq);
-      if (nd.floorRefl === defs.floorRefl && nd.airlight === defs.airlight) return;
+      // the full canonical key: any define change (not only floorRefl / airlight) re-defines every live material
+      if (definesKey(nd) === definesKey(defs)) return;
       defs = nd;
       for (const m of live) {
         const variant = m.userData.brVariant as SurfaceVariant | 'water';

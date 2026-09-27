@@ -19,6 +19,8 @@ export const SURFACE_INJECTIONS: readonly ShaderAnchor[] = [
   { stage: 'fragment', include: 'metalnessmap_fragment', mode: 'replace' },
   { stage: 'fragment', include: 'normal_fragment_maps', mode: 'replace' },
   { stage: 'fragment', include: 'emissivemap_fragment', mode: 'replace' },
+  // after three fills `material` and before lights_fragment_begin computes material.dfg (chunks/materialPost.ts)
+  { stage: 'fragment', include: 'lights_physical_fragment', mode: 'after' },
   { stage: 'fragment', include: 'lights_fragment_maps', mode: 'replace' },
   { stage: 'fragment', include: 'aomap_fragment', mode: 'replace' },
   { stage: 'fragment', include: 'fog_fragment', mode: 'replace' },

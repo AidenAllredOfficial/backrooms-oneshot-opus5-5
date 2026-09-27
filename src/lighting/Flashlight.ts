@@ -8,6 +8,7 @@ import type { GameBus } from '../core/events.ts';
 import type { PlayerState } from '../core/player.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import type { Flashlight } from '../core/runtime.ts';
+import { LAYER_LATE } from '../materials/shared.ts';
 
 export const FLASHLIGHT = {
   COLOR: 0xfff4e0,
@@ -45,6 +46,9 @@ export function createFlashlight(scene: THREE.Scene, cookie: THREE.Texture | nul
   const F = FLASHLIGHT;
   const light = new THREE.SpotLight(F.COLOR, 0, F.DISTANCE, F.ANGLE, F.PENUMBRA, F.DECAY);
   light.name = 'flashlight';
+  // three filters lights by the camera's layers on every render: the late render (LAYER_LATE only) must still see
+  // the torch, or water and sparks programs compile with NUM_SPOT_LIGHTS 0
+  light.layers.enable(LAYER_LATE);
   light.map = cookie;
   light.castShadow = true;
   light.shadow.mapSize.set(q.flashlightShadow, q.flashlightShadow);

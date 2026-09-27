@@ -31,7 +31,7 @@ import { createPlayerSystem } from '../player/PlayerSystem.ts';
 import type { TraversalHost } from '../player/PlayerSystem.ts';
 import { createInput } from '../player/input.ts';
 import { createAudioSystem } from '../audio/AudioEngine.ts';
-import type { AppCore, Systems } from './appState.ts';
+import type { AppCore, FeatureToggles, Systems } from './appState.ts';
 import { isResolutionOnlyChange } from './qualityAuto.ts';
 import { pixelRatioFor } from './renderer.ts';
 import { gotoStoreyOrder } from './urlParams.ts';
@@ -75,6 +75,11 @@ export function bootPoolSize(q: QualityConfig): number {
   return bootPoolSizeFor(q, m.hc, m.mem);
 }
 
+/** The graphics-realism feature toggles of a launch (Systems.features). */
+export function featuresOf(p: LaunchParams): FeatureToggles {
+  return { ssr: p.ssr, probe: p.probe, cs: p.cs, bounce: p.bounce, vol: p.vol, reflView: p.reflView };
+}
+
 /** §6.1 step 7.2-7.4: time/freeze, exposure lock, view / flashlight / post toggles. Applied once, at the boot gate. */
 export function applyLaunchToggles(core: AppCore): void {
   const s = core.sys;
@@ -91,6 +96,12 @@ export function applyLaunchToggles(core: AppCore): void {
   } else if (!p.ao || !p.bloom || !p.grain || !p.lens) {
     s.post.setEnabled({ ao: p.ao, bloom: p.bloom, grain: p.grain, lens: p.lens });
   }
+  // graphics-realism feature toggles: the owning packages read s.features; the post stack gets ssr and the SSR
+  // debug view, the materials the contact-shadow switch
+  Object.assign(s.features, featuresOf(p));
+  if (!p.ssr) s.post.setEnabled({ ssr: false });
+  if (p.reflView !== 'off') s.post.setReflectionDebug?.(p.reflView);
+  s.materials.globals.csOn.value = p.cs ? 1 : 0;
 }
 
 /** The two one-shot world queries the spawn resolution needs (the streamer's, or the bare pool's during boot). */
@@ -305,8 +316,9 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
   startup.clear();
   return {
-    q, textures, materials, lighting, post, reflection, anomaly, dynRes, pool, poolTarget: poolSize(q), streamer, player,
-    audio, input, init, spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
+    q, features: featuresOf(p), textures, materials, lighting, post, reflection, anomaly, dynRes, pool,
+    poolTarget: poolSize(q), streamer, player, audio, input, init,
+    spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
   };
 }
 

@@ -2,14 +2,71 @@
 // tile (never Material.clone()), onBeforeCompile binds the SHARED global objects and the EXACT TileBindings objects
 // by reference, one constant program cache key per (variant, quality defines), variant render state, quality
 // defines applied only in setQuality, debug view as an int uniform.
+// The expected program keys and defines are derived from qualityDefinesOf(QUALITY[name]) through FLAGS (an
+// independent table of every QualityDefines field: key token and define), never from literals.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { ShaderLib } from 'three';
-import { QUALITY } from '../../src/core/quality.ts';
-import type { MaterialSystem, TextureSet, TileMaterials } from '../../src/core/runtime.ts';
-import { createMaterialSystem } from '../../src/materials/MaterialSystem.ts';
-import { CACHE_KEY_PREFIX } from '../../src/materials/SurfaceMaterial.ts';
+import { bakeQualityOf, QUALITY, QUALITY_NAMES } from '../../src/core/quality.ts';
+import type { QualityConfig } from '../../src/core/quality.ts';
+import type { MaterialGlobals, MaterialSystem, TextureSet, TileMaterials } from '../../src/core/runtime.ts';
+import { createGlobals, createMaterialSystem } from '../../src/materials/MaterialSystem.ts';
+import { applySurfaceDefines, buildSurfaceFragment, buildSurfaceVertex, CACHE_KEY_PREFIX, SURFACE_VARIANTS } from '../../src/materials/SurfaceMaterial.ts';
+import type { SurfaceVariant } from '../../src/materials/SurfaceMaterial.ts';
+import { waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
+import { definesKey, MRT_PASS, qualityDefinesOf, REFL_PASS } from '../../src/materials/shared.ts';
+import type { QualityDefines } from '../../src/materials/shared.ts';
+
+/** Every QualityDefines field: its program-key token (null: part of the R?A?L? prefix) and its surface define
+ * (null: water-only, package E's applyWaterDefines); `only` restricts the define to one variant. */
+const FLAGS: readonly { f: keyof QualityDefines; short: string | null; define: string | null; only?: SurfaceVariant }[] = [
+  { f: 'floorRefl', short: null, define: 'BR_FLOOR_REFL' },
+  { f: 'airlight', short: null, define: 'BR_AIRLIGHT' },
+  { f: 'lite', short: null, define: 'BR_LITE' },
+  { f: 'ssr', short: 'ssr', define: 'BR_SSR' },
+  { f: 'probe', short: 'prb', define: 'BR_PROBE' },
+  { f: 'ssao', short: 'ao', define: 'BR_SSAO' },
+  { f: 'cs', short: 'cs', define: 'BR_CS_STEPS' },
+  { f: 'puddles', short: 'pud', define: 'BR_PUDDLES' },
+  { f: 'detail', short: 'det', define: 'BR_DETAIL_MAPS' },
+  { f: 'pom', short: 'pom', define: 'BR_POM', only: 'shell' },
+  { f: 'sheen', short: 'sh', define: 'USE_SHEEN' },
+  { f: 'coat', short: 'cc', define: 'USE_CLEARCOAT', only: 'props' },
+  { f: 'specAA', short: 'saa', define: 'BR_SPEC_AA' },
+  { f: 'waterRefract', short: 'wr', define: 'BR_WATER_VOL' },
+  { f: 'waterWaves', short: 'ww', define: null },
+  { f: 'waterRipple', short: 'wp', define: null },
+  { f: 'waterDebris', short: 'wd', define: 'BR_WATER_WETBAND' },
+  { f: 'causticsFull', short: 'wc', define: 'BR_CAUSTICS_FULL' },
+  { f: 'waterVolLight', short: 'wv', define: null },
+  { f: 'volumetric', short: 'vol', define: 'BR_VOLUMETRIC' },
+  { f: 'bounce', short: 'fb', define: 'BR_BOUNCE_N' },
+];
+const isOn = (v: boolean | number): boolean => v !== false && v !== 0;
+function expectedKey(d: QualityDefines): string {
+  let k = `R${d.floorRefl ? 1 : 0}A${d.airlight ? 1 : 0}L${d.lite ? 1 : 0}`;
+  for (const { f, short } of FLAGS) if (short !== null && isOn(d[f])) k += `.${short}${d[f] === true ? 1 : d[f]}`;
+  return k;
+}
+function expectedDefines(v: SurfaceVariant, d: QualityDefines): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (v === 'shell') out.BR_SHELL = '';
+  if (v === 'props') { out.BR_PROPS = ''; out.BR_LV = ''; }
+  if (v === 'decal') out.BR_DECAL = '';
+  for (const { f, define, only } of FLAGS) {
+    if (define !== null && isOn(d[f]) && (only === undefined || only === v)) out[define] = typeof d[f] === 'number' ? String(d[f]) : '';
+  }
+  return out;
+}
+const keyFor = (name: keyof typeof QUALITY): string => expectedKey(qualityDefinesOf(QUALITY[name]));
+/** Every define on (numbers at their largest planned values). */
+const ALL_ON: QualityDefines = {
+  floorRefl: true, airlight: true, lite: false, ssr: true, probe: true, ssao: true, cs: 8, puddles: true, detail: true, pom: 2,
+  sheen: true, coat: true, specAA: true, waterRefract: true, waterWaves: 8, waterRipple: true, waterDebris: true,
+  causticsFull: true, waterVolLight: 4, volumetric: true, bounce: 8,
+};
 
 function fakeTextures(): TextureSet {
   const t = (name: string): THREE.Texture => { const x = new THREE.Texture(); x.name = name; return x; };
@@ -132,9 +189,10 @@ describe('WP9 material factory', () => {
     expect([...keys.keys()].sort()).toEqual(['decal', 'props', 'shell', 'water']);
     for (const [v, s] of keys) expect(s.size, v).toBe(1);
     expect(progKeys.size).toBe(4);
-    expect([...keys.get('shell')!][0]).toBe(`${CACHE_KEY_PREFIX}|shell|R1A1L0`);
-    expect([...keys.get('props')!][0]).toBe(`${CACHE_KEY_PREFIX}|props|R1A1L0`);
-    expect([...keys.get('decal')!][0]).toBe(`${CACHE_KEY_PREFIX}|decal|R1A1L0`);
+    expect([...keys.get('shell')!][0]).toBe(`${CACHE_KEY_PREFIX}|shell|${keyFor('high')}`);
+    expect([...keys.get('props')!][0]).toBe(`${CACHE_KEY_PREFIX}|props|${keyFor('high')}`);
+    expect([...keys.get('decal')!][0]).toBe(`${CACHE_KEY_PREFIX}|decal|${keyFor('high')}`);
+    expect([...keys.get('water')!][0]).toBe(`br-water-v1|${keyFor('high')}`);
   });
 
   it('compiled shader text is identical for every tile of a variant', () => {
@@ -189,7 +247,7 @@ describe('WP9 material factory', () => {
     expect(t.shell.defines).not.toHaveProperty('BR_FLOOR_REFL');
     expect(t.shell.defines).not.toHaveProperty('BR_AIRLIGHT');
     expect(t.shell.defines).toHaveProperty('BR_LITE'); // low: lite surface detail
-    expect(keyOf(t.shell)).toBe(`${CACHE_KEY_PREFIX}|shell|R0A0L1`);
+    expect(keyOf(t.shell)).toBe(`${CACHE_KEY_PREFIX}|shell|${keyFor('low')}`);
     expect(sys.globals.floorReflOn.value).toBe(0);
     const v0 = t.shell.version;
     sys.setQuality(QUALITY.low); // no change -> no recompile
@@ -199,20 +257,20 @@ describe('WP9 material factory', () => {
       expect(m.defines).toHaveProperty('BR_FLOOR_REFL');
       expect(m.defines).toHaveProperty('BR_AIRLIGHT');
       expect(m.defines).not.toHaveProperty('BR_LITE');
-      expect(keyOf(m)).toMatch(/\|R1A1L0$/);
+      expect(keyOf(m)).toBe(`${CACHE_KEY_PREFIX}|${m.userData.brVariant as string}|${keyFor('ultra')}`);
     }
     expect(t.shell.version).toBeGreaterThan(v0);
     expect((t.water as THREE.ShaderMaterial).defines).toHaveProperty('BR_AIRLIGHT');
     expect(sys.globals.floorReflOn.value).toBe(1);
     // tiles created afterwards use the new defines too
     const t2 = sys.createTileMaterials(false);
-    expect(keyOf(t2.props)).toBe(`${CACHE_KEY_PREFIX}|props|R1A1L0`);
+    expect(keyOf(t2.props)).toBe(`${CACHE_KEY_PREFIX}|props|${keyFor('ultra')}`);
     // disposed tiles are no longer touched by setQuality
     t2.dispose();
     const v2 = t2.props.version;
     sys.setQuality(QUALITY.low);
     expect(t2.props.version).toBe(v2);
-    expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|R0A0L1`);
+    expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|${keyFor('low')}`);
   });
 
   it('setDebugView writes the int uniform only (no recompiles)', () => {
@@ -240,5 +298,173 @@ describe('WP9 material factory', () => {
     for (const s of spies) expect(s).toHaveBeenCalledTimes(1);
     expect(texSpy).not.toHaveBeenCalled();
     expect(zeroSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('A.0 contract: quality defines, program keys, globals', () => {
+  it('the FLAGS table covers every QualityDefines field', () => {
+    expect(FLAGS.map((x) => x.f).sort()).toEqual(Object.keys(qualityDefinesOf(QUALITY.high)).sort());
+  });
+
+  it('every preset x variant: defines and program key follow the table', () => {
+    for (const name of QUALITY_NAMES) {
+      const d = qualityDefinesOf(QUALITY[name]);
+      sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY[name]);
+      const t = sys.createTileMaterials(true);
+      for (const v of SURFACE_VARIANTS) {
+        expect(t[v].defines, `${name}/${v}`).toEqual(expectedDefines(v, d));
+        expect(keyOf(t[v]), `${name}/${v}`).toBe(`${CACHE_KEY_PREFIX}|${v}|${expectedKey(d)}`);
+      }
+      expect(keyOf(t.water!)).toBe(`br-water-v1|${expectedKey(d)}`);
+      expect(definesKey(d)).toBe(expectedKey(d));
+    }
+  });
+
+  it('every define on: the full mapping (POM on the shell only, clearcoat on props only)', () => {
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.ultra);
+    const t = sys.createTileMaterials(false);
+    for (const v of SURFACE_VARIANTS) {
+      applySurfaceDefines(t[v], v, ALL_ON);
+      expect(t[v].defines, v).toEqual(expectedDefines(v, ALL_ON));
+      expect(keyOf(t[v])).toBe(`${CACHE_KEY_PREFIX}|${v}|${expectedKey(ALL_ON)}`);
+    }
+    expect(t.shell.defines).toMatchObject({ BR_POM: '2', BR_CS_STEPS: '8', BR_BOUNCE_N: '8', USE_SHEEN: '' });
+    expect(t.props.defines).toHaveProperty('USE_CLEARCOAT');
+    expect(t.shell.defines).not.toHaveProperty('USE_CLEARCOAT');
+    expect(t.props.defines).not.toHaveProperty('BR_POM');
+    // lite never gets the clearcoat or detail programs
+    expect(qualityDefinesOf(QUALITY.low)).toMatchObject({ coat: false, detail: false });
+    expect(qualityDefinesOf({ ...QUALITY.low, detailMaps: true }).detail).toBe(false);
+  });
+
+  it('decals blend the SSR attachment alpha with (Zero, OneMinusSrcAlpha) only when SSR is on', () => {
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.high);
+    const d = sys.createTileMaterials(false).decal;
+    expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([null, null, null]);
+    applySurfaceDefines(d, 'decal', ALL_ON);
+    expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([THREE.ZeroFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
+    expect([d.blendSrc, d.blendDst, d.blendEquation]).toEqual([THREE.OneFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
+    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.high));
+    expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([null, null, null]);
+  });
+
+  it('program keys differ for every single-field change (no token collisions)', () => {
+    const base = qualityDefinesOf(QUALITY.medium);
+    const keys = new Set([definesKey(base)]);
+    for (const { f } of FLAGS) {
+      const v = base[f];
+      keys.add(definesKey({ ...base, [f]: typeof v === 'boolean' ? !v : v === 0 ? 3 : 0 } as QualityDefines));
+    }
+    expect(keys.size).toBe(FLAGS.length + 1);
+    // numbers keep their value in the key
+    expect(definesKey({ ...base, cs: 8 })).not.toBe(definesKey({ ...base, cs: 12 }));
+    expect(definesKey({ ...base, pom: 1 })).toContain('.pom1');
+  });
+
+  it('setQuality compares the full key: a change of any define recompiles, an identical preset does not', () => {
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.high);
+    const t = sys.createTileMaterials(true);
+    const v0 = t.shell.version;
+    sys.setQuality({ ...QUALITY.high });
+    expect(t.shell.version).toBe(v0);
+    // floorRefl and airlight unchanged: the old early return skipped this
+    const q: QualityConfig = { ...QUALITY.high, detailMaps: true, flashlightBounce: 4 };
+    sys.setQuality(q);
+    expect(t.shell.version).toBeGreaterThan(v0);
+    expect(t.shell.defines).toMatchObject({ BR_DETAIL_MAPS: '', BR_BOUNCE_N: '4' });
+    expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|${expectedKey(qualityDefinesOf(q))}`);
+    expect(keyOf(t.water!)).toBe(`br-water-v1|${expectedKey(qualityDefinesOf(q))}`);
+  });
+
+  it('new globals start inert and every MaterialGlobals / TileBindings field is bound by reference', () => {
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.ultra);
+    const g = sys.globals;
+    expect(g.probeTex.value).toBeNull();
+    expect(g.sceneColor.value).toBeNull();
+    expect(g.hiZ.value).toBeNull();
+    expect(g.ripple.value).toBeNull();
+    for (const k of ['probeOn', 'waterVolOn', 'fbOn', 'rippleOn', 'nDrips', 'nUw'] as const) expect(g[k].value, k).toBe(0);
+    expect(g.csOn.value).toBe(1);
+    expect(g.ssaoParams.value.x).toBe(0); // the surfaces never read uSsaoTex
+    expect(g.volZ.value.w).toBe(0); // the analytic haze
+    const half = (t: THREE.Texture): number[] => [...((t as THREE.DataTexture).image.data as Uint16Array)].map((h) => THREE.DataUtils.fromHalfFloat(h));
+    expect(g.ssaoTex.value.type).toBe(THREE.HalfFloatType);
+    expect(half(g.ssaoTex.value)).toEqual([1, 1, 1, 1]);
+    expect(half(g.volTex.value)).toEqual([0, 0, 0, 1]);
+    for (const [k, n] of [['fbP', 8], ['fbN', 8], ['fbC', 8], ['fbBox', 8], ['drips', 8], ['uwPos', 4], ['uwDir', 4], ['uwCol', 4]] as const) {
+      expect(g[k].value.length, k).toBe(n);
+      expect(new Set(g[k].value).size, k).toBe(n);
+    }
+    const t = sys.createTileMaterials(true);
+    expect(t.bindings.water.value).toBe(0);
+    for (const m of [...surfaces(t), t.water!]) {
+      const u = m instanceof THREE.ShaderMaterial ? m.uniforms : compile(m).uniforms;
+      const bound = new Set<unknown>(Object.values(u));
+      for (const k of Object.keys(g) as (keyof MaterialGlobals)[]) expect(bound.has(g[k]), `globals.${k}`).toBe(true);
+      for (const k of Object.keys(t.bindings) as (keyof typeof t.bindings)[]) expect(bound.has(t.bindings[k]), `bindings.${k}`).toBe(true);
+      expect(u.uBrMrt).toBe(MRT_PASS);
+      expect(u.uBrReflPass).toBe(REFL_PASS);
+      expect(u.uTileWater).toBe(t.bindings.water);
+      expect(u.uSsaoP).toBe(g.ssaoParams);
+      expect(u.uBrProbe).toBe(g.probeTex);
+    }
+    // the shared layer tables C/D/E (package B fills them) and the detail array: one object for every tile
+    const a = compile(sys.createTileMaterials(false).shell).uniforms;
+    const b = compile(sys.createTileMaterials(false).props).uniforms;
+    for (const n of ['uBrLayerC', 'uBrLayerD', 'uBrLayerE', 'uBrDetail']) expect(a[n], n).toBe(b[n]);
+    expect((a.uBrLayerC.value as Float32Array).length).toBe(28 * 4);
+    expect(a.uBrDetail.value).toBeNull();
+    expect(createGlobals().ssaoTex.value).not.toBe(g.ssaoTex.value); // per system, never shared module state
+  });
+
+  it('every bound uniform is declared exactly once, with matching array sizes and int counters', () => {
+    const texts = {
+      vertex: buildSurfaceVertex(ShaderLib.physical.vertexShader),
+      fragment: buildSurfaceFragment(ShaderLib.physical.fragmentShader),
+      water: waterFragmentGlsl(),
+    };
+    const decls = (s: string, n: string): RegExpMatchArray[] => [...s.matchAll(new RegExp(`\\buniform\\s+(\\w+)\\s+${n}\\s*(\\[[^\\]]*\\])?\\s*;`, 'g'))];
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.high);
+    const u = compile(sys.createTileMaterials(true).shell).uniforms;
+    for (const n of Object.keys(u)) {
+      const counts = Object.values(texts).map((s) => decls(s, n).length);
+      expect(Math.max(...counts), `${n} declared twice`).toBeLessThanOrEqual(1);
+      expect(counts.some((c) => c === 1), `${n} declared nowhere`).toBe(true);
+    }
+    const arr = (n: string): string => decls(texts.fragment, n)[0][2].replace(/[[\]\s]/g, '');
+    for (const [n, len] of [['uFbP', 8], ['uFbN', 8], ['uFbC', 8], ['uFbBox', 8], ['uDrips', 8], ['uUwPos', 4], ['uUwDir', 4], ['uUwCol', 4]] as const) {
+      expect(arr(n), n).toBe(String(len));
+      expect((u[n].value as unknown[]).length, n).toBe(len);
+    }
+    expect(decls(texts.fragment, 'uNDrips')[0][1]).toBe('int');
+    expect(decls(texts.fragment, 'uNUw')[0][1]).toBe('int');
+    expect(decls(texts.fragment, 'uBrProbe')[0][1]).toBe('samplerCube');
+    expect(decls(texts.fragment, 'uBrDetail')[0][1]).toBe('sampler2DArray');
+  });
+});
+
+describe('A.0 contract: quality presets', () => {
+  const NEW_FIELDS = [
+    'ssr', 'ssrMaxRoughness', 'ssrSteps', 'ssrFilter', 'reflectionProbe', 'colorPyramidScale', 'contactShadowSteps', 'wetPuddles',
+    'detailMaps', 'pom', 'clothSheen', 'specularAA', 'motionBlurTaps', 'glareStreaks', 'glareGhosts', 'waterRefractionSteps',
+    'waterWaves', 'waterRippleRes', 'waterRippleTexel', 'waterDebris', 'waterCaustics', 'waterVolumetrics', 'volumetrics',
+    'dustMotes', 'flashlightBounce', 'bakeNearRays',
+  ] as const;
+
+  it('every graphics-realism field sits on its own line in every preset (one-line flips per owner)', () => {
+    const src = readFileSync(new URL('../../src/core/quality.ts', import.meta.url), 'utf8');
+    for (const f of NEW_FIELDS) {
+      expect(src.match(new RegExp(`^ {4}${f}: [^,\\n]+,$`, 'gm'))?.length ?? 0, f).toBe(4);
+      for (const n of QUALITY_NAMES) expect(QUALITY[n], `${n}.${f}`).toHaveProperty(f);
+    }
+  });
+
+  it('bakeQualityOf sends nearRays only when > 0 (worker inputs of presets without it stay byte-identical)', () => {
+    for (const n of QUALITY_NAMES) {
+      const b = bakeQualityOf(QUALITY[n]);
+      if (QUALITY[n].bakeNearRays > 0) expect(b.nearRays).toBe(QUALITY[n].bakeNearRays);
+      else expect(Object.keys(b)).toEqual(['tpc', 'shadowSamples', 'probeRays']);
+    }
+    expect(bakeQualityOf({ ...QUALITY.high, bakeNearRays: 16 }).nearRays).toBe(16);
   });
 });

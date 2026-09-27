@@ -213,6 +213,8 @@ invalid values never break the page. They are listed in the F3 overlay's warning
 | `exposure` | EV100 or `auto` | Lock the exposure. |
 | `noaudio` | `1` | No audio. |
 | `nopost`, `ao`, `bloom`, `grain`, `lens` | `1` / `0` | Turn the post stack off, or individual effects off. |
+| `ssr`, `probe`, `cs`, `bounce`, `vol` | `0` | Turn a graphics-realism feature off for A/B checks: screen-space reflections, reflection probe, contact shadows, flashlight bounce, volumetric haze. |
+| `reflView` | `ssr`, `conf` | Screen-space reflection debug output: the reflection alone, or its confidence. |
 | `view` | `final`, `albedo`, `normal`, `lightmap`, `ao`, `zone`, ... | Debug view. |
 | `fly` | `1` | Noclip flight (Space ascends). |
 | `hud`, `debug` | `0`, `1` | Hide all overlays; open the F3 overlay at start. |

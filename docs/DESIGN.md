@@ -676,14 +676,18 @@ export const VFlag = {
 } as const;
 
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)
+// 16-23 belong to the graphics-realism packages (black until their package lands); the materials harness's private
+// anti-tiling rotation view is index 63
 export const DebugView = {
   FINAL: 0, ALBEDO: 1, NORMAL: 2, ROUGHNESS: 3, LIGHTMAP: 4, DIRECTIONALITY: 5, AO: 6, FLICKER: 7,
   MASK: 8, LAYER: 9, TEXEL: 10, ZONE: 11, ROOM: 12, UV: 13, EMISSION: 14, LIGHT_VOLUME: 15,
+  WETNESS: 16, HEIGHT: 17, VOLUMETRIC: 18, BOUNCE: 19, WATER: 20, PROBE: 21, SPECW: 22, SSAO: 23,
 } as const;
 export type DebugViewId = ValueOf<typeof DebugView>;
 export const DEBUG_VIEW_NAMES: readonly string[] = [
   'final', 'albedo', 'normal', 'roughness', 'lightmap', 'directionality', 'ao', 'flicker', 'mask', 'layer',
-  'texel', 'zone', 'room', 'uv', 'emission', 'lv',
+  'texel', 'zone', 'room', 'uv', 'emission', 'lv', 'wetness', 'height', 'volumetric', 'bounce', 'water', 'probe',
+  'specw', 'ssao',
 ];
 ```
 
@@ -4134,7 +4138,8 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
 **Material construction.**
 - `new MeshStandardMaterial()` per call, built from a factory. **Never `.clone()`**: `Material.copy` does not copy `onBeforeCompile`.
 - `onBeforeCompile(shader)` assigns the **shared** global uniform objects (`globals.*`) and **the exact per-tile uniform objects** of `TileBindings` (each is `{ value }`, fresh per tile) into `shader.uniforms`. Nothing is copied by value, so later `.value` assignments by WP10/WP11 always take effect.
-- `customProgramCacheKey = () => 'br-surface-v1|' + variant + '|' + definesKey`. Variants are `shell`, `props` and `decal`. Quality defines: `BR_FLOOR_REFL`, `BR_AIRLIGHT`, `BR_LV` (props).
+- `customProgramCacheKey = () => 'br-surface-v1|' + variant + '|' + definesKey`. Variants are `shell`, `props` and `decal`. Quality defines: `BR_FLOOR_REFL`, `BR_AIRLIGHT`, `BR_LV` (props), plus the graphics-realism defines (section 6.4).
+- Water, sparks and motes live on `LAYER_LATE` (layer 1; the main camera and the flashlight enable it) so the frame graph can draw them after the opaque colour copy.
 - Do not set `map`, `normalMap`, `lightMap` or `aoMap`; three's `USE_*` paths stay off. `defines.USE_UV` is not needed, because the `uv` attribute is always declared in r186.
 - `side = FrontSide`; `transparent = false`.
 - **Decal variant:** shell lighting code; output premultiplied (`rgb·a, a`) with `blending = CustomBlending`, `blendSrc = OneFactor`, `blendDst = OneMinusSrcAlphaFactor`, `transparent = false` (three still blends non-NormalBlending opaque materials), `depthWrite = false`, `polygonOffset = true, factor −1, units −4`; meshes `renderOrder = 1`, `castShadow = false`. SIGNAGE and CHALK_ARROW layers use hard alpha (discard < 0.5, then a = 1).
@@ -5011,6 +5016,28 @@ storey switch:  prefetch(target) = layout jobs (target storey's query data) + bu
 - **textureSize:** requires a reload (UI notice).
 - **AO, AA, bloom, reflection:** applied live. `MaterialSystem.setQuality` changes defines, then warmup runs again.
 
+**Graphics-realism flags (A.0 contract).** `QualityConfig` also carries one field per upgrade, one line per preset
+object so each owning package flips only its own lines; until the owner lands a flag stays off. Owners and final
+values (low / medium / high / ultra): D `ssr` off/off/half/half, `ssrMaxRoughness`, `ssrSteps`, `ssrFilter`,
+`reflectionProbe` 0/0/128/256; A `colorPyramidScale` 0/0/1/0.67, `contactShadowSteps` 0/0/8/8; B `wetPuddles`,
+`detailMaps`, `pom` 0/0/1/2, `clothSheen`, `specularAA`; C `motionBlurTaps`, `glareStreaks`, `glareGhosts`; E
+`waterRefractionSteps`, `waterWaves`, `waterRippleRes`, `waterRippleTexel`, `waterDebris`, `waterCaustics`,
+`waterVolumetrics`; F `volumetrics`, `dustMotes`, `flashlightBounce`, `bakeNearRays` (sent as `BakeQuality.nearRays`
+only when > 0, so other presets' worker inputs stay byte-identical). None of them is a resolution-only key.
+`materials/shared.ts qualityDefinesOf` turns them into `QualityDefines` (ssr, probe, ssao = ao != off, cs, puddles,
+detail, pom, sheen, coat = !lite, specAA, the water fields, volumetric, bounce), `applySurfaceDefines` maps each to one
+define (`BR_SSR`, `BR_PROBE`, `BR_SSAO`, `BR_CS_STEPS=n`, `BR_PUDDLES`, `BR_DETAIL_MAPS`, `BR_POM=n` shell only,
+`USE_SHEEN`, `USE_CLEARCOAT` props only, `BR_SPEC_AA`, `BR_WATER_VOL`, `BR_WATER_WETBAND`, `BR_CAUSTICS_FULL`,
+`BR_VOLUMETRIC`, `BR_BOUNCE_N=n`), and `definesKey` keeps the `R?A?L?` prefix and appends `.` + short + value for every
+field that is not false / 0 (`ssr prb ao cs pud det pom sh cc saa wr ww wp wd wc wv vol fb`). `setQuality` compares the
+full key. Every surface / water uniform is declared once in `chunks/common.ts`, every `MaterialGlobals` field starts
+inert and is bound by reference, and each package plugs in through a stub chunk file it owns (screenspace, gbuffer: A;
+detail, pom, materialPost: B; emitters: C; probe: D; water: E; volumetric, bounce: F). Surface programs may use at
+most 16 texture units (`tests/materials/samplerBudget.test.ts`; dev builds also check the linked programs in
+`materials/warmup.ts`): at high / ultra the shell's final set is albedo, normal, ormh, grime, lmIrr, lmDir, lmMask,
+lmFlick, emission, volMask, the flashlight shadow map and cookie, probe, SSAO, froxel volume and detail array, so
+`uReflTex` is compiled out under `BR_SSR` and `uVolA` is referenced by the props program only.
+
 
 ---
 
@@ -5037,7 +5064,7 @@ storey switch:  prefetch(target) = layout jobs (target storey's query data) + bu
 | `quality` | low, medium, high, ultra, auto | Preset |
 | `scale` | 0.5–2 | Render scale override (disables dynamic resolution) |
 | `radius` | 1–4 | Stream radius override |
-| `view` | final, albedo, normal, roughness, lightmap, directionality, ao, flicker, mask, layer, texel, zone, room, uv, emission, lv | Debug view (int uniform, no recompile) |
+| `view` | final, albedo, normal, roughness, lightmap, directionality, ao, flicker, mask, layer, texel, zone, room, uv, emission, lv, wetness, height, volumetric, bounce, water, probe, specw, ssao | Debug view (int uniform, no recompile) |
 | `time` | seconds | Freeze the simulation clock at t (flicker, grain, water, bob) and snap exposure |
 | `freeze` | 1 | Freeze the clock at its value when ready |
 | `exposure` | EV100 or `auto` | Lock exposure |
@@ -5046,6 +5073,8 @@ storey switch:  prefetch(target) = layout jobs (target storey's query data) + bu
 | `noaudio` | 1 | No AudioContext |
 | `nopost` | 1 | RenderPass only (tone mapping still via a minimal AgX pass so colours stay sane) |
 | `ao`, `bloom`, `grain`, `lens` | 0 | Disable that effect |
+| `ssr`, `probe`, `cs`, `bounce`, `vol` | 0 | Disable a graphics-realism feature for A/B checks (`Systems.features`; the owning package reads it) |
+| `reflView` | off, ssr, conf | SSR debug output: the reflection alone, or its confidence |
 | `flicker` | standard, reduced, off | Photosensitivity mode |
 | `lights` | default, on, dead | Fixture-state override |
 | `bake` | preview, full | Bake level required for ready (default full) |

@@ -19,6 +19,7 @@ describe('parseLaunchParams: defaults', () => {
       radius: null, view: 'final', time: null, freeze: false, exposure: 'auto', flashlight: false, fly: false, audio: true,
       post: true, ao: true, bloom: true, grain: true, lens: true, flicker: null, lights: 'default', bake: 'interactive',
       bakeTerm: 'all', camcorder: false, hud: true, debug: false, prime: true,
+      ssr: true, probe: true, cs: true, bounce: true, vol: true, reflView: 'off',
     });
   });
   it('bake: full for automation (autostart=1), interactive for a player, explicit values win', () => {
@@ -102,7 +103,17 @@ describe('every parameter parses', () => {
   it('exposure=auto keeps auto; every debug view name parses', () => {
     expect(parse('exposure=auto').exposure).toBe('auto');
     for (const v of ['final', 'albedo', 'normal', 'roughness', 'lightmap', 'directionality', 'ao', 'flicker', 'mask', 'layer',
-      'texel', 'zone', 'room', 'uv', 'emission', 'lv']) expect(parse(`view=${v}`).view).toBe(v);
+      'texel', 'zone', 'room', 'uv', 'emission', 'lv', 'wetness', 'height', 'volumetric', 'bounce', 'water', 'probe', 'specw',
+      'ssao']) expect(parse(`view=${v}`).view).toBe(v);
+  });
+  it('graphics-realism feature toggles: ssr / probe / cs / bounce / vol (0|1) and reflView', () => {
+    const p = parse('ssr=0&probe=0&cs=0&bounce=0&vol=0&reflView=conf');
+    expect(p).toMatchObject({ ssr: false, probe: false, cs: false, bounce: false, vol: false, reflView: 'conf' });
+    expect(p.warnings).toEqual([]);
+    expect(parse('ssr=1&reflView=ssr')).toMatchObject({ ssr: true, reflView: 'ssr' });
+    const bad = parse('reflView=mirror&cs=maybe');
+    expect(bad).toMatchObject({ reflView: 'off', cs: true });
+    expect(bad.warnings).toHaveLength(2);
   });
   it('boolean spellings', () => {
     expect(parse('fly=true').fly).toBe(true);

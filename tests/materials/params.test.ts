@@ -164,7 +164,10 @@ describe('WP9 parameters', () => {
   });
 
   it('every BR_ token in the surface and water shaders is defined (or is a variant / quality define)', () => {
-    const switches = new Set(['BR_SHELL', 'BR_PROPS', 'BR_DECAL', 'BR_LV', 'BR_FLOOR_REFL', 'BR_AIRLIGHT', 'BR_WATER', 'BR_LITE']);
+    // variant + quality defines: SurfaceMaterial.applySurfaceDefines / WaterMaterial.applyWaterDefines (every A.0 flag)
+    const switches = new Set(['BR_SHELL', 'BR_PROPS', 'BR_DECAL', 'BR_LV', 'BR_FLOOR_REFL', 'BR_AIRLIGHT', 'BR_WATER', 'BR_LITE',
+      'BR_SSR', 'BR_PROBE', 'BR_SSAO', 'BR_CS_STEPS', 'BR_PUDDLES', 'BR_DETAIL_MAPS', 'BR_POM', 'BR_SPEC_AA', 'BR_WATER_VOL',
+      'BR_WATER_WETBAND', 'BR_CAUSTICS_FULL', 'BR_VOLUMETRIC', 'BR_BOUNCE_N']);
     for (const src of [buildSurfaceFragment(ShaderLib.physical.fragmentShader), waterFragmentGlsl()]) {
       const used = new Set(src.match(/\bBR_[A-Z0-9_]+\b/g) ?? []);
       const defined = new Set([...(src.match(/#define (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.slice(8)),

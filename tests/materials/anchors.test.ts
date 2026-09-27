@@ -8,6 +8,7 @@ import { injectAt, SHADER_ANCHORS, SURFACE_INJECTIONS } from '../../src/material
 import { buildSurfaceFragment, buildSurfaceVertex } from '../../src/materials/SurfaceMaterial.ts';
 import { WATER_VERTEX_GLSL, waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
 import { LENS_SHIMMER_GLSL } from '../../src/core/flicker.ts';
+import { FRAG_FOG_GLSL } from '../../src/materials/chunks/haze.ts';
 
 const physical = ShaderLib.physical;
 const srcOf = (stage: 'vertex' | 'fragment'): string => (stage === 'vertex' ? physical.vertexShader : physical.fragmentShader);
@@ -63,7 +64,7 @@ describe('WP9 shader anchors (three r186)', () => {
 
   it('covers every chunk the spec requires', () => {
     const need = ['map_fragment', 'roughnessmap_fragment', 'metalnessmap_fragment', 'normal_fragment_maps', 'emissivemap_fragment',
-      'lights_fragment_maps', 'aomap_fragment', 'fog_fragment'];
+      'lights_physical_fragment', 'lights_fragment_maps', 'aomap_fragment', 'fog_fragment'];
     const frag = new Set(SHADER_ANCHORS.filter((a) => a.stage === 'fragment').map((a) => a.include));
     for (const n of need) expect(frag.has(n), n).toBe(true);
     const vert = new Set(SHADER_ANCHORS.filter((a) => a.stage === 'vertex').map((a) => a.include));
@@ -77,6 +78,9 @@ describe('WP9 shader anchors (three r186)', () => {
     expect(at('map_fragment')).toBeLessThan(at('roughnessmap_fragment'));
     expect(at('roughnessmap_fragment')).toBeLessThan(at('normal_fragment_maps'));
     expect(at('normal_fragment_maps')).toBeLessThan(at('emissivemap_fragment'));
+    // the material-post anchor: after three fills `material`, before lights_fragment_begin computes material.dfg
+    expect(at('emissivemap_fragment')).toBeLessThan(at('lights_physical_fragment'));
+    expect(at('lights_physical_fragment')).toBeLessThan(at('lights_fragment_begin'));
     expect(at('lights_fragment_begin')).toBeLessThan(at('lights_fragment_maps'));
     expect(at('lights_fragment_maps')).toBeLessThan(at('lights_fragment_end'));
     expect(at('lights_fragment_end')).toBeLessThan(at('aomap_fragment'));
@@ -134,8 +138,41 @@ describe('WP9 shader anchors (three r186)', () => {
     expect(v).not.toMatch(/varying vec3 vBrWorld/);
     // the fade dither runs at main start (before any sampling)
     expect(f.indexOf('brBayer4( gl_FragCoord.xy ) >= uFade')).toBeLessThan(f.indexOf('==== WP9 surface sampling'));
-    // HDR clamp is the last thing the fog replacement does (after haze)
+    // HDR clamp is the last thing the fog replacement does (after haze); only the G-buffer outputs follow it
     expect(f.lastIndexOf('BR_HDR_CLAMP')).toBeGreaterThan(f.indexOf('brHaze('));
+    const clamp = FRAG_FOG_GLSL.indexOf('gl_FragColor.rgb = min( max( gl_FragColor.rgb');
+    expect(clamp).toBeGreaterThan(FRAG_FOG_GLSL.indexOf('brHaze('));
+    expect(FRAG_FOG_GLSL.slice(clamp + 1)).not.toMatch(/gl_FragColor(\.\w+)?\s*[*+-]?=[^=]/);
+  });
+
+  it('A.0 extension points: stub chunks in owner order, lighting / haze hooks in place', () => {
+    const f = buildSurfaceFragment(physical.fragmentShader);
+    // 'fragment:common' appends A (screenspace, gbuffer), B (detail, pom), C (emitters), D (probe), E (water), F
+    // (volumetric, bounce), after the WP9 declarations
+    const marks = ['uniform float uBrMrt;', 'float brSsao(', 'out highp vec4 brOut1;', '// ---- detail maps (package B)',
+      '// ---- parallax occlusion mapping (package B)', '// ---- emitter profiles (package C)', 'float brProbeWeight(',
+      'float brWaterWetBand(', 'vec4 brVolLookup(', '// ---- flashlight bounce (package F)', '#include <clipping_planes_pars_fragment>'];
+    const at = marks.map((m) => f.indexOf(m));
+    for (let i = 0; i < marks.length; i++) {
+      expect(at[i], marks[i]).toBeGreaterThan(0);
+      if (i > 0) expect(at[i], `${marks[i - 1]} before ${marks[i]}`).toBeGreaterThan(at[i - 1]);
+    }
+    // the material-post anchor sits between three's material setup and the DFG in lights_fragment_begin
+    expect(f.indexOf('#include <lights_physical_fragment>')).toBeLessThan(f.indexOf('#include <lights_fragment_begin>'));
+    // lighting: SSAO factors after the flicker loop, the split variables, brDirVis inside the directional block before
+    // RE_Direct, the bounce inline after the ambient lines, the planar floor path compiled out under BR_SSR
+    const i = (s: string): number => { const k = f.indexOf(s); expect(k, s).toBeGreaterThan(0); return k; };
+    expect(i('float brSs = 1.0, brSsK = 1.0;')).toBeGreaterThan(i('brEf += max( brFl[ k ], 0.0 )'));
+    expect(i('bool brMrtSpec = false;')).toBeLessThan(i('if ( brW > 0.0 ) {'));
+    expect(i('float brDirVis = 1.0;')).toBeGreaterThan(i('if ( brW > 0.0 ) {'));
+    expect(i('brDL.color = brW * brE / brNgL * brDirVis;')).toBeLessThan(i('RE_Direct( brDL'));
+    expect(i('iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC );')).toBeLessThan(i('vec3 brIrrLocal'));
+    expect(i('computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav')).toBeGreaterThan(0);
+    expect(f.indexOf('uReflTex, brRuv')).toBeGreaterThan(f.indexOf('#ifndef BR_SSR'));
+    expect(f.match(/\( brAO \* brSsK \)/g)?.length).toBe(2);
+    // haze: brHazeT next to brHazeTerms; the MRT write after the clamp
+    expect(i('float brHazeT( vec3 viewPos )')).toBeGreaterThan(i('void brHazeTerms('));
+    expect(i('brOut1 = brO1;')).toBeGreaterThan(i('gl_FragColor.rgb = min( max( gl_FragColor.rgb'));
   });
 
   it('the water shader is structurally balanced, premultiplied and clamped', () => {

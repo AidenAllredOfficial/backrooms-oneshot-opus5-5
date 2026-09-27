@@ -6,6 +6,18 @@
 // `irradiance` into diffuse. The non-directional part of the baked irradiance is therefore added to
 // iblIrradiance only (adding it to `irradiance` too would double the ambient diffuse); `radiance` receives the
 // same part as a uniform environment (1-w)E/PI so metals, glossy tile, CRT glass and car paint get highlights.
+//
+// Graphics-realism extension points (A.0; each block names its owner):
+//  - brSs / brSsK / brSsC: pre-shade SSAO (A) on the indirect terms only; brSsK is the occlusion the bake has not
+//    already applied. With SSAO off they are an exact 1.0, and each factor sits next to brE / brAO so the other
+//    operands are rounded exactly as before (the preset images stay bit-identical).
+//  - brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brMrtRough: the specular G-buffer split (D fills them; chunks/haze.ts
+//    writes them to MRT attachments 1 and 2 under BR_SSR).
+//  - brDirVis: visibility of the baked directional light (A's contact shadow, then B's FRAG_DIRVIS_GLSL).
+//  - FRAG_BOUNCE_GLSL (F) after the ambient lines.
+
+import { FRAG_BOUNCE_GLSL } from './bounce.ts';
+import { FRAG_DIRVIS_GLSL } from './pom.ts';
 
 /** Replaces `#include <lights_fragment_maps>`. */
 export const FRAG_LIGHTS_GLSL = /* glsl */ `
@@ -43,14 +55,35 @@ float brW = clamp( brLmB.a, 0.0, 1.0 );
 vec3 brLw = brDecodeDir( brLmB.xyz, brW );
 vec3 brEf = vec3( 0.0 );
 for ( int k = 0; k < 4; k ++ ) brEf += max( brFl[ k ], 0.0 ) * uFlick[ brChannelSlot( k, vBrLocal.xz, uOwnParity ) ];
+// ---- pre-shade SSAO (package A): brSs = screen-space AO, brSsK = its part the bake has not applied, brSsC = the
+// albedo multi-bounce of brSsK
+float brSs = 1.0, brSsK = 1.0;
+vec3 brSsC = vec3( 1.0 );
+#ifdef BR_SSAO
+if ( uSsaoP.x > 0.5 && uBrReflPass < 0.5 ) {
+	brSs = pow( brSsao( geometryPosition, brNg ), uSsaoP.y );
+	brSsK = min( 1.0, brSs / max( brAO, 0.05 ) );
+	brSsC = brAoMultiBounce( brSsK, diffuseColor.rgb );
+}
+#endif
+// ---- specular G-buffer split (package D fills these; chunks/haze.ts writes them under BR_SSR)
+bool brMrtSpec = false;
+vec3 brFbDir = vec3( 0.0 ), brFbEnv = vec3( 0.0 ), brFbSpec = vec3( 0.0 );
+float brWs = 0.0, brMrtRough = 1.0;
 // r186 only initialises this when punctual lights exist; set it exactly as lights_fragment_begin does
 material.multiScatteringCompensation = 1.0 + material.specularColorBlended * ( 1.0 / ( material.dfg.x + material.dfg.y ) - 1.0 );
 if ( brW > 0.0 ) {
 	// directional part through RE_Direct: dividing by the unperturbed cosine lets the normal map re-shade it
 	vec3 brLv = normalize( ( viewMatrix * vec4( brLw, 0.0 ) ).xyz );
 	float brNgL = max( dot( brNg, brLv ), BR_NG_MIN );
+	// visibility of the baked directional light: contact shadow (package A), then package B's block
+	float brDirVis = 1.0;
+#ifdef BR_CS_STEPS
+	if ( uSsaoP.x > 0.5 && uCsOn > 0.5 && uBrReflPass < 0.5 ) brDirVis *= brContactShadow( geometryPosition, brNg, brLv, brW );
+#endif
+${FRAG_DIRVIS_GLSL}
 	IncidentLight brDL;
-	brDL.color = brW * brE / brNgL;
+	brDL.color = brW * brE / brNgL * brDirVis;
 	brDL.direction = brLv;
 	brDL.visible = true;
 	float brR0 = material.roughness;
@@ -58,9 +91,10 @@ if ( brW > 0.0 ) {
 	RE_Direct( brDL, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
 	material.roughness = brR0;
 }
-irradiance += brEf; // flicker channels: diffuse irradiance
-iblIrradiance += ( 1.0 - brW ) * brE; // ambient part (diffuse + multiscatter specular in RE_IndirectSpecular)
-radiance += ( 1.0 - brW ) * brE * RECIPROCAL_PI; // ambient part as a uniform environment (indirect specular)
+irradiance += brEf * mix( vec3( 1.0 ), brSsC, 0.5 ); // flicker channels: diffuse irradiance
+iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC ); // ambient part (diffuse + multiscatter specular in RE_IndirectSpecular)
+radiance += ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI; // ambient part as a uniform environment (indirect specular)
+${FRAG_BOUNCE_GLSL}
 vec3 brIrrLocal = brE + brEf; // haze inscatter + water in-scatter
 // ---- submerged caustics (up-facing, below the water plane): redistributes the local irradiance. The water body
 // kind rides in tint.a of submerged floors (mesh/floors.ts): 0 pool (full), 1 flooded room (weak, large, slow),
@@ -90,7 +124,7 @@ float brDotNV = saturate( dot( geometryNormal, geometryViewDir ) );
 // the indirect diffuse, so only the micro occlusion multiplies it
 float brCav = clamp( brOrmh.r, 0.0, 1.0 );
 reflectedLight.indirectDiffuse *= brCav;
-reflectedLight.indirectSpecular *= computeSpecularOcclusion( brDotNV, brAO * brCav, material.roughness );
+reflectedLight.indirectSpecular *= computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav, material.roughness );
 vec3 brNWp = normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz );
 vec3 brRefl = vec3( 0.0 );
 #ifndef BR_DECAL
@@ -98,13 +132,16 @@ vec3 brRefl = vec3( 0.0 );
 	float brFres = F_Schlick( 0.04, 1.0, brDotNV );
 	float brGloss = pow2( 1.0 - material.roughness );
 	bool brPlanar = false;
-	// planar reflection: only the plane currently mirrored by PlanarReflection (uReflY)
+#ifndef BR_SSR
+	// planar reflection: only the plane currently mirrored by PlanarReflection (uReflY). SSR supersedes it on floors
+	// (and frees uReflTex from the surface sampler budget); the water material keeps the planar path.
 	if ( uReflOn > 0.5 && ( brF & BR_F_REFLECTIVE ) != 0 && brNWg.y > 0.9 && abs( vBrLocal.y + uTileOrigin.y - uReflY ) < BR_PLANE_EPS ) {
 		vec4 brRc = uReflMatrix * vec4( - vViewPosition, 1.0 );
 		vec2 brRuv = brRc.xy / brRc.w + brNWp.xz * BR_REFL_DISTORT;
-		brRefl = textureLod( uReflTex, brRuv, material.roughness * BR_REFL_LOD ).rgb * brFres * brGloss * brAO;
+		brRefl = textureLod( uReflTex, brRuv, material.roughness * BR_REFL_LOD ).rgb * brFres * brGloss * ( brAO * brSsK );
 		brPlanar = true;
 	}
+#endif
 #ifdef BR_FLOOR_REFL
 	// emission-map reflection: intersect the reflected ray with the emitter plane in TILE-LOCAL space
 	// roughness gate: full below BR_EM_ROUGH_CUT (the spec's 0.5), soft tail to BR_EM_ROUGH_END so per-pixel roughness
@@ -127,7 +164,7 @@ vec3 brRefl = vec3( 0.0 );
 			float brRk = brFloorR ? brAuxB.y + 256.0 * brAuxB.z : - 1.0;
 			float brFade;
 			vec3 brEc = brEmissionRefl( vBrLocal, brRw, brPlaneY, brRk, material.roughness, brFade );
-			brRefl = brEc * brFres * brGloss * brAO * brFade * brRGate;
+			brRefl = brEc * brFres * brGloss * ( brAO * brSsK ) * brFade * brRGate;
 			// submerged: the tile/water interface reflects ~10x less than tile/air (F0 0.004 vs 0.04)
 			if ( ( brF & BR_F_UNDERWATER ) != 0 && brAuxB.w * 0.05 - 3.2 > vBrLocal.y ) brRefl *= BR_UNDERWATER_REFL;
 		}

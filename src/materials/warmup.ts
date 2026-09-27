@@ -5,9 +5,37 @@
 // castShadow = true and shadow.needsUpdate = true so the spot-shadow depth program is built too. The warmup
 // materials stay pinned for the app's lifetime (releaseProgram would destroy a program when its last user —
 // e.g. the last water tile — is disposed).
+// Dev / QA builds then check each variant's linked program against the 16-unit surface sampler budget (the
+// static twin is tests/materials/samplerBudget.test.ts): an overrun is a console error, which fails headless QA.
 
 import * as THREE from 'three';
 import type { TileMaterials } from '../core/runtime.ts';
+
+/** Texture units one surface / water program may use: the WebGL2 minimum MAX_TEXTURE_IMAGE_UNITS, and exactly what
+ * ANGLE on D3D11 and Metal expose. A new surface sampler requires removing one. */
+export const SURFACE_SAMPLER_BUDGET = 16;
+
+const SAMPLER_TYPES = new Set<number>([
+  0x8b5e, 0x8b5f, 0x8b60, 0x8b62, // SAMPLER_2D, SAMPLER_3D, SAMPLER_CUBE, SAMPLER_2D_SHADOW
+  0x8dc1, 0x8dc4, 0x8dc5, // SAMPLER_2D_ARRAY, SAMPLER_2D_ARRAY_SHADOW, SAMPLER_CUBE_SHADOW
+  0x8dca, 0x8dcb, 0x8dcc, 0x8dcf, // INT_SAMPLER_2D, _3D, _CUBE, _2D_ARRAY
+  0x8dd2, 0x8dd3, 0x8dd4, 0x8dd7, // UNSIGNED_INT_SAMPLER_2D, _3D, _CUBE, _2D_ARRAY
+]);
+
+/** Texture units used by the linked program three built for `m` (active sampler uniforms, array elements counted
+ * one by one); -1 before the material has a program. */
+export function activeSamplerUnits(renderer: THREE.WebGLRenderer, m: THREE.Material): number {
+  const prog = (renderer.properties.get(m) as { currentProgram?: { program?: WebGLProgram } }).currentProgram?.program;
+  if (!prog) return -1;
+  const gl = renderer.getContext();
+  const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) as number;
+  let units = 0;
+  for (let i = 0; i < n; i++) {
+    const u = gl.getActiveUniform(prog, i);
+    if (u && SAMPLER_TYPES.has(u.type)) units += u.size;
+  }
+  return units;
+}
 
 /** One triangle carrying every attribute the surface/water shaders declare (types as in stream/geometry.ts). */
 export function createWarmupGeometry(): THREE.BufferGeometry {
@@ -71,6 +99,12 @@ export async function runWarmup(renderer: THREE.WebGLRenderer, camera: THREE.Cam
     await renderer.compileAsync(scene, camera);
     renderer.setRenderTarget(rt);
     renderer.render(scene, camera);
+    if (import.meta.env.DEV) {
+      for (const m of mats) {
+        const n = activeSamplerUnits(renderer, m);
+        if (n > SURFACE_SAMPLER_BUDGET) console.error(`surface sampler budget: ${m.name} uses ${n} texture units (max ${SURFACE_SAMPLER_BUDGET})`);
+      }
+    }
   } finally {
     renderer.setRenderTarget(prevRT);
     scene.remove(group);
