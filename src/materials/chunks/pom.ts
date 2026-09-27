@@ -15,16 +15,24 @@ export const POM_PARS_GLSL = /* glsl */ `
 #define BR_POM_MAX BR_POM_MAX_1
 #define BR_POM_STEP_PX BR_POM_PX_PER_STEP
 #endif
-// texture height (normal.a) at uv through the rotated-tile transform of physical tiles (brRotUv, per lookup: a march
-// or shadow ray that crosses a cell edge reads the neighbour tile as the shading will, so tile corners never catch false
-// shadows), at an explicit isotropic LOD (the footprint's area): trilinear, never anisotropic, which is what makes 5-20
-// lookups per pixel affordable; the smoother height only softens the parallax at grazing angles
-float brPomH( vec2 uv, vec2 cells, uint salt, float lf, float lod ) {
+// texture height (normal.a) at uv through the rotated-tile transform of physical tiles (brRotUv), at an explicit
+// isotropic LOD (the footprint's area): trilinear, never anisotropic, which is what makes 5-20 lookups per pixel
+// affordable; the smoother height only softens the parallax at grazing angles. A ray that crosses a cell edge reads the
+// neighbour tile as the shading will (tile corners never catch false shadows), but the cell's hashed transform is cached
+// in (cell, M, b) and only re-derived when the ray enters another cell: texel uv = ( b + M ( uv cells - cell - 0.5 ) ) /
+// cells. Start with cell = vec2( -1e9 ).
+float brPomH( vec2 uv, vec2 cells, uint salt, float lf, float lod, inout vec2 cell, inout mat2 M, inout vec2 b ) {
 	vec2 t = uv;
 	if ( cells.x > 0.0 ) {
-		mat2 M;
-		int ri;
-		t = brRotUv( uv, cells, salt, M, ri );
+		vec2 cu = uv * cells;
+		vec2 c = floor( cu );
+		if ( c != cell ) {
+			int ri;
+			vec2 r = brRotUv( uv, cells, salt, M, ri );
+			b = r * cells - M * ( cu - c - 0.5 );
+			cell = c;
+		}
+		t = ( b + M * ( cu - c - 0.5 ) ) / cells;
 	}
 	return textureLod( uBrNormal, vec3( t, lf ), lod ).a;
 }
@@ -47,10 +55,12 @@ export const FRAG_DIRVIS_GLSL = /* glsl */ `
 			vec2 brDuL = vec2( dot( brLv, brPomT ), dot( brLv, brPomB ) ) / brPomRep * ( brPomDepth * brPomK * ( 1.0 - brPomHitN ) / brPl );
 			float brPTop = uBrLayerC[ brL ].y;
 			float brOcc = 0.0;
+			vec2 brSc = vec2( - 1e9 ), brSb = vec2( 0.0 );
+			mat2 brSm = mat2( 1.0 );
 			for ( int i = 1; i <= BR_POM_SH_STEPS; i ++ ) {
 				float brT = float( i ) / float( BR_POM_SH_STEPS );
 				float brRay = mix( brPomHitN, 1.0, brT );
-				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brPomLod ) / brPTop;
+				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brPomLod, brSc, brSm, brSb ) / brPTop;
 				brOcc = max( brOcc, ( brHs - brRay ) * BR_POM_SH_K * ( 1.0 - 0.5 * brT ) );
 			}
 			brDirVis *= 1.0 - clamp( brOcc, 0.0, 1.0 ) * brPomK * brW;

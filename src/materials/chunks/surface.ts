@@ -142,7 +142,9 @@ float brPomLod = 0.0; // their isotropic LOD
 			float brStep = 1.0 / float( brSteps );
 			vec2 brUvP = brUv;
 			float brRayP = 1.0;
-			float brHP = brPomH( brUv, brLA.xy, brPomSalt, brLayerF, brPomLod ) / brTop;
+			vec2 brPc = vec2( - 1e9 ), brPb = vec2( 0.0 ); // cached rotated-tile cell of the lookups
+			mat2 brPm = mat2( 1.0 );
+			float brHP = brPomH( brUv, brLA.xy, brPomSalt, brLayerF, brPomLod, brPc, brPm, brPb ) / brTop;
 			vec2 brUvHit = brUv;
 			float brHitN = 1.0;
 			if ( brHP < 1.0 ) {
@@ -150,7 +152,7 @@ float brPomLod = 0.0; // their isotropic LOD
 					if ( i > brSteps ) break;
 					float brRay = 1.0 - float( i ) * brStep;
 					vec2 brUvC = brUv + brDUv * ( 1.0 - brRay );
-					float brHC = brPomH( brUvC, brLA.xy, brPomSalt, brLayerF, brPomLod ) / brTop;
+					float brHC = brPomH( brUvC, brLA.xy, brPomSalt, brLayerF, brPomLod, brPc, brPm, brPb ) / brTop;
 					if ( brHC >= brRay ) {
 						// secant between the last sample above the surface and the first below it
 						float brSa = brRayP - brHP;
