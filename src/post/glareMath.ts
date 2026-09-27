@@ -56,9 +56,12 @@ export const FLARE = {
   OMEGA: 0.93,
   /** the last pass samples R and B at scaled offsets: diffraction length grows with wavelength (rainbow tips) */
   STAR_CHROMA: [1.08, 0.92] as readonly [number, number],
-  STAR_GAIN: 0.006,
+  /** 0.004 (the design value): at 0.006 an extended hot source near the camera (a PARKING tube strip in the frame
+   * corner, a near highbay) threw a broad X over a quarter of the frame that read as a stain on the ceiling */
+  STAR_GAIN: 0.004,
   GHOST_GAIN: 0.001,
-  /** ghost image scales about the frame centre (negative = mirrored through it) */
+  /** ghost sampling scales about the frame centre: the ghost of a source at uv lands at .5 + (uv - .5) / s (negative =
+   * mirrored through the centre; |s| < 1 magnified, |s| > 1 shrunk) */
   GHOST_SCALES: [-0.62, -1.35, 0.42, -0.28, 1.8] as readonly number[],
   /** coating tints (muted): green, amber, violet, cyan, warm */
   GHOST_TINTS: [
@@ -141,9 +144,10 @@ export function streakWeights(step: number): number[] {
   return w.map((v) => v / s);
 }
 
-/** Where ghost j of a source at uv lands: .5 + (uv - .5) * s_j (the GPU pass inverts it per output texel). */
+/** Where ghost j of a source at uv lands: .5 + (uv - .5) / s_j. The GPU pass samples the source at .5 + (out - .5) * s_j
+ * for every output texel (the inverse map), so |s| < 1 is a magnified ghost and |s| > 1 a shrunk one. */
 export function ghostUv(uv: readonly [number, number], scale: number): [number, number] {
-  return [0.5 + (uv[0] - 0.5) * scale, 0.5 + (uv[1] - 0.5) * scale];
+  return [0.5 + (uv[0] - 0.5) / scale, 0.5 + (uv[1] - 0.5) / scale];
 }
 
 /** Hot (overexposed) fraction the star / ghosts extract from a texel of exposed luma y*e. */
