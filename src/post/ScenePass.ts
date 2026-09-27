@@ -14,9 +14,9 @@
 //   it.
 // - Split frame: q.colorPyramidScale > 0, no debug view other than WATER, and an MRT frame or a LAYER_LATE mesh in view
 //   (recorded by the prepass). The opaque render leaves LAYER_LATE out; the pyramid (rgb opaque HDR, a = linear depth)
-//   is built from it; then LAYER_LATE draws alone (shadow auto-update off, no clears, depth writes locked as in the
-//   shading render), in the same order as the single render would. MaterialGlobals.waterVolOn is 1 from the depth
-//   hooks to the end of the late render.
+//   is built from it; then LAYER_LATE draws alone (shadow auto-update off, no clears; depth writes per material: the
+//   opaque split-frame water writes its surface, so late sparks and motes behind it are hidden), in the same order as
+//   the single render would. MaterialGlobals.waterVolOn is 1 from the depth hooks to the end of the late render.
 // - Low and medium have neither: one prepass + shading render, exactly as before the frame graph.
 // Hooks see FrameContext; they bind their own targets and size them from ctx.width / ctx.height. Hooks read the
 // target's own depth texture (ctx.depth) while it is not bound: the composer's stable depth copy is only filled
@@ -223,8 +223,7 @@ export class ScenePass extends RenderPass {
     renderer.autoClearColor = false;
     renderer.autoClearDepth = false;
     renderer.autoClearStencil = false;
-    depthBuf.setMask(false);
-    depthBuf.setLocked(true);
+    depthBuf.setLocked(false); // package E: each material's depthWrite (the refracting water writes its surface)
     cam.layers.set(LAYER_LATE);
     try {
       renderer.render(this.scene, cam);

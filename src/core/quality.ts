@@ -183,13 +183,13 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     motionBlurTaps: 8,
     glareStreaks: true,
     glareGhosts: false,
-    waterRefractionSteps: 0,
+    waterRefractionSteps: 8,
     waterWaves: 6,
     waterRippleRes: 256,
     waterRippleTexel: 0.04,
     waterDebris: true,
     waterCaustics: 'full',
-    waterVolumetrics: 0,
+    waterVolumetrics: 2,
     volumetrics: 'high',
     dustMotes: 3000,
     flashlightBounce: 4,
@@ -197,9 +197,10 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
   },
   ultra: {
     name: 'ultra', streamRadius: 3, lmTpc: 12, bakeShadowSamples: 6, probeRays: 128, bakeWorkers: 6, textureSize: 1024,
-    // reflection 0.67 of the 1.5x supersampled buffer = about the display resolution (1.0 cost 2.25x as much for a
-    // mirror image that roughness mips and ripples blur anyway)
-    anisotropy: 16, ao: 'High', aoHalfRes: true, aa: 'smaa', smaaPreset: 'ULTRA', bloomLevels: 9, planarReflectionScale: 0.67,
+    // reflection 0.5 of the 1.5x supersampled buffer = 0.75 of the display resolution (package E: the water magnifies
+    // it with a cubic B-spline and blurs it by its roughness and ripples; the refraction pays for itself with the
+    // ~1 ms this saves on water frames; 1.0 cost 4x as much)
+    anisotropy: 16, ao: 'High', aoHalfRes: true, aa: 'smaa', smaaPreset: 'ULTRA', bloomLevels: 9, planarReflectionScale: 0.5,
     // ultra spends the GPU headroom on pixels: 1.5x supersampling (2.25x samples: clean wallpaper stripes, carpet and
     // tile grout at distance) under the load-driven dynamic resolution (R2 B9)
     floorReflections: true, flashlightShadow: 2048, renderScale: 1.5, dynamicResolution: true, maxDpr: 2,
@@ -219,13 +220,13 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     motionBlurTaps: 10,
     glareStreaks: true,
     glareGhosts: true,
-    waterRefractionSteps: 0,
+    waterRefractionSteps: 10,
     waterWaves: 8,
     waterRippleRes: 512,
     waterRippleTexel: 0.03,
     waterDebris: true,
     waterCaustics: 'full',
-    waterVolumetrics: 0,
+    waterVolumetrics: 4,
     volumetrics: 'ultra',
     dustMotes: 6000,
     flashlightBounce: 8,

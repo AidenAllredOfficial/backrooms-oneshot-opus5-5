@@ -1,6 +1,6 @@
 // src/lighting/sparks.ts (WP11) — the SPARKING anomaly's particle burst: ONE permanent mesh added at construction
 // (so warmup compiles its program), drawRange 0 while idle, 24 camera-facing streak quads, transparent = false,
-// AdditiveBlending, depthWrite = false, renderOrder = 2, HDR clamp. Particles are ~20,000 nits for the first
+// AdditiveBlending, depthWrite = false, renderOrder = 3, HDR clamp. Particles are ~20,000 nits for the first
 // 60 ms (they bloom into a brief flash) and then cool from white-yellow to orange while falling.
 // The motion is evaluated in the vertex shader from per-particle attributes and uTime (simulation time), so a
 // burst costs one attribute upload and no per-frame CPU work.
@@ -125,7 +125,7 @@ export function createSparks(scene: THREE.Scene): Sparks {
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = 'sparks';
-  mesh.renderOrder = 2;
+  mesh.renderOrder = 3; // after the water (2): on split frames the opaque water writes depth first (post/ScenePass.ts)
   mesh.castShadow = false;
   mesh.receiveShadow = false;
   mesh.frustumCulled = true;

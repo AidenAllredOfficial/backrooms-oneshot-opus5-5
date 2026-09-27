@@ -18,6 +18,7 @@ export const RIPPLE = {
   FOAM_TAU: 3, // s
   MASK_W: 16, // cells per side of the mask texture (window span / CELL + 2 <= 16)
   NEAR_M: 6, // m, the simulated plane must come this close to the eye (xz)
+  FILM_PENALTY: 100, // m: any pool / flooded plane in range wins over a film
   SCAN_FRAMES: 6,
   // impulses: amplitude (m of height) and gaussian radius (m); a foot entering the water displaces ~0.3 l
   FOOT_A: 0.012, FOOT_R: 0.1,
@@ -95,11 +96,16 @@ export function wakeImpulses(x: number, z: number, yaw: number, vx: number, vz: 
   return 4;
 }
 
+/** Film water (WaterRect kind 2: 1-2 cm over a deck or carpet) is at most this deep (m). */
+export const FILM_MAX_DEPTH = 0.035;
+
 /** The plane to simulate: the water the player stands in (feet y + depth, snapped to the layout's whole cm: y + depth
  * is not bit-stable while the feet move over steps and slopes, and the window's cell mask is rebuilt whenever the
- * plane value changes), else the scanned nearest plane (null: none). */
-export const simulatedPlane = (y: number, waterDepth: number, scanY: number | null): number | null =>
-  waterDepth > 0.001 ? Math.round((y + waterDepth) * 100) / 100 : scanY;
+ * plane value changes), else the scanned nearest plane (null: none). A player on a film-covered deck next to a pool
+ * simulates the pool (scanKind != 2): a 2 cm film shows no rings worth a window. */
+export const simulatedPlane = (y: number, waterDepth: number, scanY: number | null, scanKind = 2): number | null =>
+  waterDepth > 0.001 && !(waterDepth <= FILM_MAX_DEPTH && scanY !== null && scanKind !== 2)
+    ? Math.round((y + waterDepth) * 100) / 100 : scanY;
 
 /** Idle sway while standing in water: true when a sway pulse falls in (t0, t1]. */
 export const swayDue = (t0: number, t1: number): boolean => Math.floor(t1 / RIPPLE.SWAY_PERIOD) > Math.floor(t0 / RIPPLE.SWAY_PERIOD);
@@ -172,11 +178,13 @@ export interface WaterPlane { y: number; kind: number; dist: number }
 /**
  * Nearest water plane below the eye (at most 8 m below, within maxDist of it, not behind the camera) over the 3x3
  * chunks around the eye: WaterRect y, kind and distance, or null. The app loop uses it (40 m) for the planar
- * reflection, the ripple window (6 m) for the simulated plane.
+ * reflection, the ripple window (6 m) for the simulated plane. Film rects (kind 2) rank filmPenalty m farther: the
+ * film on a pool deck under the player must not take the mirror or the ripple window from the pool beside it.
  */
-export function nearestWaterPlane(world: RippleWorld, ex: number, ey: number, ez: number, fx: number, fz: number, maxDist: number): WaterPlane | null {
+export function nearestWaterPlane(world: RippleWorld, ex: number, ey: number, ez: number, fx: number, fz: number, maxDist: number, filmPenalty = 0): WaterPlane | null {
   const pcx = worldToChunk(ex), pcz = worldToChunk(ez);
   let best: WaterPlane | null = null;
+  let bestRank = Infinity;
   for (let dz = -1; dz <= 1; dz++) {
     for (let dx = -1; dx <= 1; dx++) {
       const l = world.layoutAt(pcx + dx, pcz + dz);
@@ -190,10 +198,12 @@ export function nearestWaterPlane(world: RippleWorld, ex: number, ey: number, ez
         const cz = Math.min(Math.max(ez, oz + Math.min(w.z0, w.z1)), oz + Math.max(w.z0, w.z1));
         const ddx = cx - ex, ddz = cz - ez;
         const d = Math.sqrt(ddx * ddx + ddz * ddz + (ey - w.y) * (ey - w.y));
-        if (d > maxDist || (best && d >= best.dist)) continue;
+        const rank = d + (w.kind === 2 ? filmPenalty : 0);
+        if (d > maxDist || rank >= bestRank) continue;
         const h = Math.sqrt(ddx * ddx + ddz * ddz);
         if (h > 2 && (ddx * fx + ddz * fz) / h < -0.35) continue; // behind the camera
         best = { y: w.y, kind: w.kind, dist: d };
+        bestRank = rank;
       }
     }
   }

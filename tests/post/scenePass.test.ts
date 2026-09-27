@@ -111,7 +111,8 @@ describe('ScenePass frame graph', () => {
     expect(ev('shade')).toMatchObject({ target: 'input', mask: 1, volOn: 1, shadow: false, locked: true });
     expect(ev('hook:ssao').volOn).toBe(1);
     expect(ev('quad:br-pyramid-full').target).toBe('Frame.ColorPyramid');
-    expect(ev('late')).toMatchObject({ target: 'input', mask: 1 << LAYER_LATE, volOn: 1, shadow: false, locked: true, clearColor: false });
+    // depth writes per material in the late render (package E: the refracting water writes its surface)
+    expect(ev('late')).toMatchObject({ target: 'input', mask: 1 << LAYER_LATE, volOn: 1, shadow: false, locked: false, clearColor: false });
     expect(t.pass.lastFrame).toEqual({ mrt: false, split: true });
     expect(t.globals.sceneColor.value).toBe(t.pass.pyramid.texture);
     expect(t.globals.sceneInvSize.value.toArray()).toEqual([1 / 64, 1 / 32]);

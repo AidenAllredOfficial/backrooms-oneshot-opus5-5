@@ -195,7 +195,7 @@ export function applySurfaceDefines(m: THREE.Material, variant: SurfaceVariant, 
   if (d.sheen) defs.USE_SHEEN = '';
   if (d.coat && variant === 'props') defs.USE_CLEARCOAT = '';
   if (d.specAA) defs.BR_SPEC_AA = '';
-  if (d.waterRefract) defs.BR_WATER_VOL = '';
+  if (d.waterRefract > 0) defs.BR_WATER_VOL = String(d.waterRefract);
   if (d.waterDebris) defs.BR_WATER_WETBAND = '';
   if (d.causticsFull) defs.BR_CAUSTICS_FULL = '';
   if (d.volumetric) defs.BR_VOLUMETRIC = '';

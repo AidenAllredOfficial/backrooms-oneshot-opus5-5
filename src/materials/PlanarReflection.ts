@@ -128,6 +128,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
       colorSpace: THREE.NoColorSpace,
     });
     target.texture.name = 'br-planar-reflection';
+    target.texture.anisotropy = 8; // package E: the water's glossy streaks (textureGrad along the view plane)
     return target;
   }
 

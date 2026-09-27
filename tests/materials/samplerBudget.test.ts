@@ -42,7 +42,7 @@ const FINAL: Record<QualityName, Partial<QualityConfig>> = {
 
 const ALL_ON: QualityDefines = {
   floorRefl: true, airlight: true, lite: false, ssr: true, probe: true, ssao: true, cs: 8, puddles: true, detail: true, pom: 2,
-  sheen: true, coat: true, specAA: true, waterRefract: true, waterWaves: 8, waterRipple: true, waterDebris: true,
+  sheen: true, coat: true, specAA: true, waterRefract: 10, waterWaves: 8, waterRipple: true, waterDebris: true,
   causticsFull: true, waterVolLight: 4, volumetric: true, bounce: 8,
 };
 
@@ -259,11 +259,12 @@ describe('surface sampler budget (16 texture units)', () => {
 
   it('high / ultra swap the emission map for the reflection probe (lead decision); medium keeps it, water keeps it', () => {
     // under BR_SSR || BR_PROBE the surface programs compile out brEmissionRefl and the EMISSION view's fetch, and
-    // the probe cube takes the unit (package D)
+    // the probe cube takes the unit (package D); the water shader keeps the emission map and also reads the probe
+    // as the environment of surfaces off the mirrored plane (package E brWaterEnv)
     for (const n of ['high', 'ultra', 'high (final flags)', 'ultra (final flags)', 'every define on']) {
       for (const b of CASES.find(([c]) => c === n)![1]) {
         expect(b.samplers.has('uEmission'), `${n} ${b.variant}`).toBe(b.variant === 'water');
-        expect(b.samplers.has('uBrProbe'), `${n} ${b.variant}`).toBe(b.variant !== 'water');
+        expect(b.samplers.has('uBrProbe'), `${n} ${b.variant}`).toBe(true);
       }
     }
     for (const n of ['low', 'medium']) {
