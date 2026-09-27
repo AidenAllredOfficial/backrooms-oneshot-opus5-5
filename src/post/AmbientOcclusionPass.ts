@@ -19,8 +19,13 @@
 //     Edge-stopping as N8AO's denoise (tangent-plane distance and normal agreement).
 //  3. The composite multiplies the scene colour in place (blend ZERO, SRC_COLOR; needsSwap = false), upsampling
 //     from the 2x2 nearest AO texels weighted by bilinear weight x the distance of the full-resolution pixel to
-//     each texel's tangent plane. It samples the composer's stable depth copy, never the input buffer's own
-//     depth attachment, so there is no feedback loop.
+//     each texel's tangent plane x the agreement of the pixel's own normal (from full-resolution depth) with the
+//     texel's. Plane distance alone lets the two faces of a crease borrow each other's AO (each face passes
+//     within a centimetre of the other's plane there), which drew the AO edge along the side of every ceiling
+//     grid bar in 2-pixel steps. A pixel with no texel of its own surface in the 2x2 (a face narrower than two
+//     pixels) uses that surface's texels in the surrounding 4x4, and failing that is left unoccluded (a cable).
+//     It samples the composer's stable depth copy, never the input buffer's own depth attachment, so there is
+//     no feedback loop.
 
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
@@ -63,6 +68,20 @@ vec3 brOctDec( vec2 e ) {
 	if ( n.z < 0.0 ) n.xy = ( 1.0 - abs( n.yx ) ) * vec2( n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0 );
 	return normalize( n );
 }
+// view-space normal of full-resolution pixel p from depth (N8AO's 9-tap best-side derivative)
+vec3 brNormal( ivec2 p, float c0, vec3 ce ) {
+	float l2 = brDepth( p - ivec2( 2, 0 ) ), l1 = brDepth( p - ivec2( 1, 0 ) );
+	float r1 = brDepth( p + ivec2( 1, 0 ) ), r2 = brDepth( p + ivec2( 2, 0 ) );
+	float b2 = brDepth( p - ivec2( 0, 2 ) ), b1 = brDepth( p - ivec2( 0, 1 ) );
+	float t1 = brDepth( p + ivec2( 0, 1 ) ), t2 = brDepth( p + ivec2( 0, 2 ) );
+	float dl = abs( ( 2.0 * l1 - l2 ) - c0 ), dr = abs( ( 2.0 * r1 - r2 ) - c0 );
+	float db = abs( ( 2.0 * b1 - b2 ) - c0 ), dt = abs( ( 2.0 * t1 - t2 ) - c0 );
+	vec2 px = 1.0 / uFull;
+	vec2 uv = ( vec2( p ) + 0.5 ) * px;
+	vec3 dpdx = dl < dr ? ce - brViewPos( l1, uv - vec2( px.x, 0.0 ) ) : brViewPos( r1, uv + vec2( px.x, 0.0 ) ) - ce;
+	vec3 dpdy = db < dt ? ce - brViewPos( b1, uv - vec2( 0.0, px.y ) ) : brViewPos( t1, uv + vec2( 0.0, px.y ) ) - ce;
+	return normalize( cross( dpdx, dpdy ) );
+}
 // view position of the full-resolution pixel an AO texel represents, from its stored view depth
 vec3 brTexelPos( ivec2 t, float viewZ ) {
 	vec2 uv = ( vec2( t * BR_AO_STEP ) + 0.5 ) / uFull;
@@ -94,19 +113,6 @@ uniform float uRadius;
 uniform float uFalloff;
 layout( location = 0 ) out highp vec4 outAo;
 const float BAYER[ 16 ] = float[ 16 ]( 0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0 );
-vec3 brNormal( ivec2 p, float c0, vec3 ce ) {
-	float l2 = brDepth( p - ivec2( 2, 0 ) ), l1 = brDepth( p - ivec2( 1, 0 ) );
-	float r1 = brDepth( p + ivec2( 1, 0 ) ), r2 = brDepth( p + ivec2( 2, 0 ) );
-	float b2 = brDepth( p - ivec2( 0, 2 ) ), b1 = brDepth( p - ivec2( 0, 1 ) );
-	float t1 = brDepth( p + ivec2( 0, 1 ) ), t2 = brDepth( p + ivec2( 0, 2 ) );
-	float dl = abs( ( 2.0 * l1 - l2 ) - c0 ), dr = abs( ( 2.0 * r1 - r2 ) - c0 );
-	float db = abs( ( 2.0 * b1 - b2 ) - c0 ), dt = abs( ( 2.0 * t1 - t2 ) - c0 );
-	vec2 px = 1.0 / uFull;
-	vec2 uv = ( vec2( p ) + 0.5 ) * px;
-	vec3 dpdx = dl < dr ? ce - brViewPos( l1, uv - vec2( px.x, 0.0 ) ) : brViewPos( r1, uv + vec2( px.x, 0.0 ) ) - ce;
-	vec3 dpdy = db < dt ? ce - brViewPos( b1, uv - vec2( 0.0, px.y ) ) : brViewPos( t1, uv + vec2( 0.0, px.y ) ) - ce;
-	return normalize( cross( dpdx, dpdy ) );
-}
 void main() {
 	ivec2 t = ivec2( gl_FragCoord.xy );
 	ivec2 p = min( t * BR_AO_STEP, ivec2( uFull ) - 1 );
@@ -187,6 +193,15 @@ uniform float uPlane;
 uniform float uIntensity;
 uniform vec3 uColor; // linear
 layout( location = 0 ) out highp vec4 outColor;
+// how well AO texel q (value s) describes the surface at P with normal N: distance of P to the texel's tangent
+// plane, and normal agreement (the two faces of a crease are within a centimetre of each other's planes there)
+float brSameSurface( vec4 s, ivec2 q, vec3 P, vec3 N ) {
+	if ( s.g >= 1e4 ) return 0.0;
+	vec3 Ns = brOctDec( s.ba );
+	float nd = max( dot( N, Ns ), 0.0 );
+	nd *= nd; nd *= nd; nd *= nd;
+	return exp( - abs( dot( P - brTexelPos( q, s.g ), Ns ) ) / uPlane ) * nd;
+}
 void main() {
 	ivec2 x = ivec2( gl_FragCoord.xy );
 	float d = texelFetch( tDepth, x, 0 ).x;
@@ -196,27 +211,41 @@ void main() {
 	ao = texelFetch( tAo, x, 0 ).r;
 #else
 	vec3 P = brViewPos( d, ( vec2( x ) + 0.5 ) / uFull );
+	vec3 N = brNormal( x, d, P );
 	ivec2 sz = textureSize( tAo, 0 );
 	vec2 fc = vec2( x ) * 0.5;
 	ivec2 b = ivec2( floor( fc ) );
 	vec2 f = fc - vec2( b );
-	float inv = 1.0 / uPlane;
-	float sum = 0.0, wsum = 0.0, nearest = 1.0, best = 1e9;
+	float sum = 0.0, wsum = 0.0, gmax = 0.0;
 	for ( int j = 0; j < 2; j ++ ) {
 		for ( int i = 0; i < 2; i ++ ) {
 			ivec2 q = min( b + ivec2( i, j ), sz - 1 );
 			vec4 s = texelFetch( tAo, q, 0 );
-			if ( s.g >= 1e4 ) continue;
-			vec3 Ps = brTexelPos( q, s.g );
-			float pd = abs( dot( P - Ps, brOctDec( s.ba ) ) );
-			float bw = ( i == 0 ? 1.0 - f.x : f.x ) * ( j == 0 ? 1.0 - f.y : f.y );
-			float w = ( bw + 1e-3 ) * exp( - pd * inv );
+			float g = brSameSurface( s, q, P, N );
+			float w = ( ( i == 0 ? 1.0 - f.x : f.x ) * ( j == 0 ? 1.0 - f.y : f.y ) + 1e-3 ) * g;
 			sum += s.r * w;
 			wsum += w;
-			if ( pd < best ) { best = pd; nearest = s.r; }
+			gmax = max( gmax, g );
 		}
 	}
-	ao = wsum > 1e-3 ? sum / wsum : nearest;
+	if ( gmax < 0.1 ) {
+		// no AO texel of the 2x2 lies on this pixel's surface (a face or sliver narrower than two pixels, such as
+		// the side of a ceiling grid bar at a glancing angle): the texels of that surface in the surrounding 4x4
+		sum = wsum = 0.0;
+		for ( int j = -1; j <= 2; j ++ ) {
+			for ( int i = -1; i <= 2; i ++ ) {
+				ivec2 q = clamp( b + ivec2( i, j ), ivec2( 0 ), sz - 1 );
+				vec4 s = texelFetch( tAo, q, 0 );
+				vec2 dq = vec2( q * 2 - x );
+				float w = exp( - 0.125 * dot( dq, dq ) ) * brSameSurface( s, q, P, N );
+				sum += s.r * w;
+				wsum += w;
+			}
+		}
+	}
+	// nothing of this surface within 4 pixels (a wire thinner than a pixel): unoccluded, rather than the AO of
+	// whatever lies behind it
+	ao = wsum > 1e-4 ? sum / wsum : 1.0;
 #endif
 	float a = pow( clamp( ao, 0.0, 1.0 ), uIntensity );
 	// N8AO: mix( scene, color * scene, 1 - ao ) = scene * mix( color, 1, ao ), applied by the blend (dst * src)

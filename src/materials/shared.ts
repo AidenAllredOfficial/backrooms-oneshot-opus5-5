@@ -1,6 +1,7 @@
 // src/materials/shared.ts — uniform objects shared by every material of one MaterialSystem (texture set, layer
 // table) plus the module-private reflection-pass flag (set only by PlanarReflection while it renders the mirrored
-// view; props beyond 20 m and water surfaces are skipped in that pass).
+// view; props beyond 20 m and water surfaces are skipped in that pass) and the pixel size for thin props tubes
+// (set by whoever renders the scene: ScenePass, PlanarReflection).
 
 import type * as THREE from 'three';
 import type { QualityConfig } from '../core/quality.ts';
@@ -16,10 +17,18 @@ export interface SharedUniforms {
   layerA: { value: Float32Array };
   layerB: { value: Float32Array };
   reflPass: { value: number };
+  wirePx: { value: number };
 }
 
 /** 1 while PlanarReflection renders the mirrored view (module singleton: one reflection pass at a time). */
 export const REFL_PASS: { value: number } = { value: 0 };
+/** World size of one pixel at unit view depth for the render in progress (chunks/vertex.ts WIRE_GLSL). */
+export const WIRE_PX: { value: number } = { value: 0 };
+
+/** Set WIRE_PX for rendering with `camera` into a target `heightPx` pixels high. */
+export function setWirePixel(camera: THREE.Camera, heightPx: number): void {
+  WIRE_PX.value = 2 / (camera.projectionMatrix.elements[5] * Math.max(1, heightPx));
+}
 
 export function createSharedUniforms(textures: TextureSet): SharedUniforms {
   const t = buildLayerTable();
@@ -32,6 +41,7 @@ export function createSharedUniforms(textures: TextureSet): SharedUniforms {
     layerA: { value: t.a },
     layerB: { value: t.b },
     reflPass: REFL_PASS,
+    wirePx: WIRE_PX,
   };
 }
 

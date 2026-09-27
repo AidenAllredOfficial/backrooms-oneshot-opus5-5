@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import type { MaterialGlobals } from '../core/runtime.ts';
 import type { QualityConfig } from '../core/quality.ts';
-import { REFL_PASS } from './shared.ts';
+import { REFL_PASS, setWirePixel } from './shared.ts';
 import { TUNE } from './chunks/params.ts';
 import { renderWithPrepass } from './prepass.ts';
 
@@ -164,6 +164,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
         renderer.setRenderTarget(rt);
         renderer.state.buffers.depth.setMask(true);
         renderer.clear();
+        setWirePixel(reflCam, h);
         renderWithPrepass(renderer, scene, reflCam);
       } finally {
         for (const object of hidden) object.visible = true;

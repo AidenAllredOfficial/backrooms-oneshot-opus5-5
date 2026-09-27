@@ -3814,6 +3814,7 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
   - `bits & 1`: the prop is tower-periodic (anchor cell is a TOWER cell): the shader wraps y for its light-volume lookup;
   - `ceilByte = clamp(ceilCm/5, 0, 255)` of the anchor cell (the cell containing the prop origin): the ceiling plane for emission-map reflections on glossy props;
   - wall clamping is per fragment from the tile's `wallMask` texture (WP7), so no per-prop mask is needed.
+  - `aux.y` (0 = none): thin tubes (fixture cables, cords and drop rods, pipe hanger rods; `PartBuilder.wire(r)`) store their radius in 0.1 mm. The surface and depth-prepass vertex shaders push those vertices out along their radial normal until the tube is at least 0.75 px in radius on screen, so a distant cable stays a continuous 1-pixel line instead of breaking into dashes.
 - `PropFlag.CEILING`: emit the prop mirrored in y about its base (winding reversed) with the base at `p.y`.
 - **UVs:** part-local metres / `LAYER_DEFS[layer].repeat`.
 - **Bevels:** 1–2 cm chamfers on box primitives, which catch highlights.
@@ -4485,7 +4486,7 @@ AO colour for all zones: warm dark (0.12, 0.09, 0.04). Every grade has gain (1, 
 1. `ScenePass(scene, camera)` (R4, `post/ScenePass.ts` + `materials/prepass.ts`): a depth prepass with the tiles' depth materials (position only, same fade dither / alpha test / reflection props cull, `invariant gl_Position` in both programs), then the shading render with depth writes locked off. Identical output; each visible pixel is shaded once. The water reflection renders the same way.
 2. **`AmbientOcclusionPass`** (R4, `post/AmbientOcclusionPass.ts`; replaces `N8AOPostPass`, see docs/contract-changes/R4-render-perf.md).
    - N8AO's estimator and composite: `radius = 0.7`, `distanceFalloff = 0.6` (R2-post), `intensity = atmosphere.aoIntensity`, linear `color = aoColor`; `scene × mix(color, 1, ao^intensity)`.
-   - Half resolution (`q.aoHalfRes`), 8 / 10 / 12 / 16 samples for `q.ao` Performance / Low / Medium / High, 4 × 4 interleaved rotations, a separable 5-tap bilateral denoise, one depth-aware upsample blended into the scene buffer (no swap, no copies). Never renders the scene.
+   - Half resolution (`q.aoHalfRes`), 8 / 10 / 12 / 16 samples for `q.ao` Performance / Low / Medium / High, 4 × 4 interleaved rotations, a separable 5-tap bilateral denoise, one depth- and normal-aware upsample blended into the scene buffer (no swap, no copies). Never renders the scene.
    - `enabled = q.ao !== 'off'`.
    - A quality change that alters `q.ao` or `q.aoHalfRes` builds a new pass and disposes the old one including its quad materials (R2-post), so the program count does not ratchet across preset cycles.
 3. **`AutoExposurePass`** (custom `Pass`, `needsSwap = false`):

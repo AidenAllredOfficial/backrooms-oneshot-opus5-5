@@ -2,7 +2,8 @@
 // It must write exactly the depth the surface program will test with LEQUAL, and discard exactly the fragments the
 // surface program discards:
 //  - position: both vertex shaders declare `invariant gl_Position` and compute it with three's project_vertex
-//    expressions from the same attribute and matrices (VERT_INVARIANT_GLSL is injected into the surface program);
+//    expressions from the same attribute and matrices (VERT_INVARIANT_GLSL is injected into the surface program),
+//    after the same thin-tube widening (WIRE_GLSL);
 //  - tile fade: the same ordered dither against the tile's own fade uniform object;
 //  - alpha test (VFlag.DECAL on shell/props): alb.a < 0.5 on the plain textureGrad path. The layers that carry the
 //    flag (METAL_GRATE, SIGNAGE, DECAL_ATLAS) have no rotated-tile or stochastic sampling
@@ -16,6 +17,7 @@ import { VFlag } from '../core/ids.ts';
 import { TUNE } from './chunks/params.ts';
 import type { TileBindings } from '../core/runtime.ts';
 import type { SharedUniforms } from './shared.ts';
+import { WIRE_GLSL } from './chunks/vertex.ts';
 
 export const DEPTH_CACHE_KEY = 'br-depth-v1';
 
@@ -26,6 +28,8 @@ const VERT = /* glsl */ `
 invariant gl_Position;
 in float brLayer;
 in float brFlags;
+in vec4 brAux;
+${WIRE_GLSL}
 out vec2 vBrUv;
 flat out float vBrLayer;
 flat out float vBrFlags;
@@ -36,6 +40,7 @@ void main() {
 	vBrFlags = brFlags;
 	// three's project_vertex, expression for expression
 	vec3 transformed = vec3( position );
+	transformed = brWire( transformed, normal, brFlags, brAux.y );
 	vec4 mvPosition = vec4( transformed, 1.0 );
 	mvPosition = modelViewMatrix * mvPosition;
 	gl_Position = projectionMatrix * mvPosition;
@@ -78,7 +83,7 @@ export function createDepthMaterial(s: SharedUniforms, b: TileBindings, props: b
     glslVersion: THREE.GLSL3,
     vertexShader: VERT,
     fragmentShader: FRAG,
-    uniforms: { uBrAlbedo: s.albedo, uFade: b.fade, uBrReflPass: s.reflPass, uPropCull: { value: props ? 1 : 0 } },
+    uniforms: { uBrAlbedo: s.albedo, uFade: b.fade, uBrReflPass: s.reflPass, uBrWirePx: s.wirePx, uPropCull: { value: props ? 1 : 0 } },
     side: THREE.FrontSide,
     colorWrite: false,
     depthWrite: true,

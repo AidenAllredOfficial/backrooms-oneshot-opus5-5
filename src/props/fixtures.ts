@@ -95,6 +95,7 @@ function tubeStrip(f: Fixture, md: number): void {
     for (const s of [-1, 1]) {
       B.push();
       B.translate(s * (L / 2 - 0.1), 0, 0);
+      B.wire(0.004);
       cylinder(B, 0.004, 0.004, top + bh, md, 4, 0);
       B.pop();
     }
@@ -147,7 +148,9 @@ function highbay(f: Fixture, md: number): void {
   // drop rod to the joist
   const rodTop = Math.max(md, bellH + 0.25);
   housing(0.3, 0.3, 0.3, 0.4);
+  B.wire(0.01);
   cylinder(B, 0.01, 0.01, bellH + 0.16, rodTop, 6, 0);
+  housing(0.3, 0.3, 0.3, 0.4);
   B.push();
   B.translate(0, bellH + 0.19, 0);
   B.rotX(Math.PI / 2);
@@ -171,6 +174,7 @@ function pendantLinear(f: Fixture, md: number): void {
     B.push();
     B.translate(s * Math.max(0.05, hx - 0.12), 0, 0);
     housing(0.35, 0.35, 0.35, 0.3);
+    B.wire(0.0025);
     cylinder(B, 0.0025, 0.0025, 0.075, top - 0.012, 4, 0);
     housing(0.5, 0.5, 0.49, 0.3);
     cylinder(B, 0.03, 0.03, top - 0.012, top, 10, 1);
@@ -290,8 +294,9 @@ function redBulb(f: Fixture, md: number): void {
   B.mat(Mat.PLASTIC, 0.03, 0.03, 0.03, 0, 0.35);
   cylinder(B, r * 0.45, r * 0.5, r * 0.8, r + 0.06, 8, 2);
   const top = Math.max(md, r + 0.1);
-  cylinder(B, 0.004, 0.004, r + 0.06, top - 0.015, 4, 0);
   cylinder(B, 0.03, 0.03, top - 0.015, top, 8, 1);
+  B.wire(0.004);
+  cylinder(B, 0.004, 0.004, r + 0.06, top - 0.015, 4, 0);
 }
 
 // ------------------------------------------------------------------------------------------ entry

@@ -9,6 +9,7 @@ export interface ShaderAnchor { stage: 'vertex' | 'fragment'; include: string; m
 export const SURFACE_INJECTIONS: readonly ShaderAnchor[] = [
   { stage: 'vertex', include: 'common', mode: 'after' },
   { stage: 'vertex', include: 'uv_vertex', mode: 'after' },
+  { stage: 'vertex', include: 'begin_vertex', mode: 'after' },
   { stage: 'vertex', include: 'worldpos_vertex', mode: 'after' },
   { stage: 'fragment', include: 'common', mode: 'after' },
   { stage: 'fragment', include: 'clipping_planes_pars_fragment', mode: 'after' },

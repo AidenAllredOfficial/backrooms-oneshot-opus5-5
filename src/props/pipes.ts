@@ -312,8 +312,9 @@ export function emitPipeInto(
       B.pop();
       B.push();
       B.translate(hx, 0, hz);
-      cylinder(B, 0.006, 0.006, topY - 0.004, ceil - 0.006, 3, 0, 0); // threaded rod
       cylinder(B, 0.024, 0.024, ceil - 0.006, ceil, 4, 1, 0); // ceiling plate
+      B.wire(0.006);
+      cylinder(B, 0.006, 0.006, topY - 0.004, ceil - 0.006, 3, 0, 0); // threaded rod
       B.pop();
       setPipeMaterial(p, decay);
     }

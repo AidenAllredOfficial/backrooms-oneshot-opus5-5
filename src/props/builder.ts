@@ -8,7 +8,7 @@
 // - automatic triangle orientation: every triangle is wound counter-clockwise as seen from the side its vertex
 //   normals point to, so primitives only have to supply correct (outward) normals;
 // - material state per part: layer, tint (desired linear albedo / layer albedoMean), VFlag.PROP_AUX and
-//   aux = (roughnessOverride, 0, bits, ceilByte); emissive parts with DYN_EMIT / SHIMMER metadata;
+//   aux = (roughnessOverride, wire radius, bits, ceilByte); emissive parts with DYN_EMIT / SHIMMER metadata;
 // - UVs in part-local metres / LAYER_DEFS[layer].repeat (or raw atlas UVs);
 // - a counting mode (no writer) used by propTris(), which runs the identical code path.
 
@@ -39,6 +39,11 @@ export class PartBuilder {
   private seedByte = 0;
   private jitter = 1;
   private layer = 0;
+  // writer state of the current part (re-issued by wire())
+  private stFlags = 0;
+  private stTint = 0;
+  private stEmit = 0;
+  private stAux = 0;
 
   /** Start a prop / fixture / pipe. `w` null => counting mode. `seed` drives tint jitter only. */
   begin(w: GeometryWriter | null, mirror: boolean, auxBits: number, ceilByte: number, seed: number): void {
@@ -74,7 +79,7 @@ export class PartBuilder {
     }
     const tint = packRGBA(byte(tr), byte(tg), byte(tb), this.seedByte);
     const aux = packRGBA(rough > 0 ? Math.max(1, byte(rough)) : 0, 0, this.auxBits, this.ceilByte);
-    this.w?.setState(layer, VFlag.PROP_AUX | extraFlags, tint, 0, aux);
+    this.state(VFlag.PROP_AUX | extraFlags, tint, 0, aux);
   }
 
   /** Emissive part: tint = emitter colour (max component 1), `emit` nits. DYN_EMIT/SHIMMER parts store
@@ -86,7 +91,21 @@ export class PartBuilder {
     const dyn = (flags & (VFlag.DYN_EMIT | VFlag.SHIMMER)) !== 0;
     const tint = packRGBA(byte(r), byte(g), byte(b), dyn ? fixtureSeed & 255 : this.seedByte);
     const aux = packRGBA(0, 0, this.auxBits, dyn ? state & 255 : this.ceilByte);
-    this.w?.setState(layer, VFlag.PROP_AUX | VFlag.NO_GRIME | flags, tint, emit, aux);
+    this.state(VFlag.PROP_AUX | VFlag.NO_GRIME | flags, tint, emit, aux);
+  }
+
+  /** The following parts of the current material are thin tubes of radius `r` (m, 0.1 mm steps up to 25.5 mm):
+   * cylinder / sweep sides with radial normals and no caps, straight from the builder (no scaled transform). The
+   * vertex shaders widen them to at least WIRE_MIN_PX on screen (aux.y, materials/chunks/vertex.ts WIRE_GLSL), so a
+   * distant cable stays a continuous line instead of breaking into dashes. Cleared by the next mat() / emissive(). */
+  wire(r: number): void {
+    const rb = Math.max(1, Math.min(255, Math.round(r * 1e4)));
+    this.state(this.stFlags, this.stTint, this.stEmit, ((this.stAux & ~0xff00) | (rb << 8)) >>> 0);
+  }
+
+  private state(flags: number, tint: number, emit: number, aux: number): void {
+    this.stFlags = flags; this.stTint = tint; this.stEmit = emit; this.stAux = aux;
+    this.w?.setState(this.layer, flags, tint, emit, aux);
   }
 
   /** Subsequent UVs are passed through unscaled (atlas slots: SIGNAGE, DECAL_ATLAS). */

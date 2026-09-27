@@ -49,7 +49,8 @@ intensities and colours still apply. It reorganises the work:
   than 16 texels read a half-size copy (as in scalable AO): the kernel halved at 3840 × 2160, where a 0.7 m radius
   spans hundreds of texels;
 - a separable bilateral denoise whose 5-tap weights cancel the 4 × 4 pattern exactly;
-- one depth-aware upsample that multiplies the scene colour in place (blending), with no extra copies.
+- one depth- and normal-aware upsample that multiplies the scene colour in place (blending), with no extra copies
+  (the normal test, added later, costs about 0.15 ms at ultra: see `src/post/AmbientOcclusionPass.ts`).
 
 AO now costs 0.20 ms at 1920 × 1080 (high) and 0.91 ms at 3840 × 2160 (ultra). Side-by-side captures against N8AO
 showed identical mean luminance and no visible difference; the per-pixel differences sit on thin edges.

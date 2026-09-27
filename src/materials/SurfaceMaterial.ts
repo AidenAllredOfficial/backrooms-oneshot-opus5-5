@@ -16,7 +16,7 @@ import {
   FRAG_EMISSIVE_GLSL, FRAG_MAIN_START_GLSL, FRAG_MAP_GLSL, FRAG_METALNESS_GLSL, FRAG_NORMAL_GLSL, FRAG_ROUGHNESS_GLSL,
   SURFACE_PARS_GLSL,
 } from './chunks/surface.ts';
-import { FRAG_VARYINGS_GLSL, VERT_PARS_GLSL, VERT_UV_GLSL, VERT_WORLDPOS_GLSL } from './chunks/vertex.ts';
+import { FRAG_VARYINGS_GLSL, VERT_BEGIN_GLSL, VERT_PARS_GLSL, VERT_UV_GLSL, VERT_WORLDPOS_GLSL, WIRE_GLSL } from './chunks/vertex.ts';
 import { definesKey } from './shared.ts';
 import type { QualityDefines, SharedUniforms } from './shared.ts';
 
@@ -27,8 +27,9 @@ export const CACHE_KEY_PREFIX = 'br-surface-v1';
 /** Code per injection point (keyed `${stage}:${include}`), exactly the SURFACE_INJECTIONS plan. */
 function injectionCode(): Record<string, string> {
   return {
-    'vertex:common': VERT_INVARIANT_GLSL + VERT_PARS_GLSL,
+    'vertex:common': VERT_INVARIANT_GLSL + VERT_PARS_GLSL + WIRE_GLSL,
     'vertex:uv_vertex': VERT_UV_GLSL,
+    'vertex:begin_vertex': VERT_BEGIN_GLSL,
     'vertex:worldpos_vertex': VERT_WORLDPOS_GLSL,
     'fragment:common': fragmentCommon() + SURFACE_PARS_GLSL + FRAG_VARYINGS_GLSL,
     'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL,
@@ -88,6 +89,7 @@ export function bindUniforms(u: Record<string, THREE.IUniform>, g: MaterialGloba
   u.uReflY = g.reflY;
   u.uFloorReflOn = g.floorReflOn;
   u.uBrReflPass = s.reflPass;
+  u.uBrWirePx = s.wirePx;
   u.uBrAlbedo = s.albedo;
   u.uBrNormal = s.normal;
   u.uBrOrmh = s.ormh;

@@ -184,7 +184,7 @@ export const VFlag = {
   REFLECTIVE: 16, // eligible for floor-emission / planar reflection
   DECAL: 32, // shell/props variant: alpha-tested against albedo.a (grates, sign faces); decal variant: soft alpha
   FLOOR_AUX: 64, // brAux = (reflPlaneHeightAboveFloor/5cm, regionKey & 255, regionKey >> 8, water byte or 0)
-  PROP_AUX: 128, // brAux = (roughness override byte (0 = none, else roughness = x / 255), 0, bits: 1 = tower-periodic (wrap y for LV lookup), ceilCm/5 of the anchor cell)
+  PROP_AUX: 128, // brAux = (roughness override byte (0 = none, else roughness = x / 255), thin-tube radius in 0.1 mm (0 = none; widened to >= 1 px on screen), bits: 1 = tower-periodic (wrap y for LV lookup), ceilCm/5 of the anchor cell)
 } as const;
 
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)

@@ -5,6 +5,28 @@
 // three vertices of every triangle (tests/materials/depthPrepass.test.ts), so they are flat: no per-triangle
 // interpolation setup, and each fragment reads the exact value.
 
+import { VFlag } from '../../core/ids.ts';
+
+/** Radius (px) below which thin props tubes are widened. A 4-sided tube of this radius is at least 1.06 px wide
+ * (3-sided: 1.1 px), so every row / column it crosses has a covered pixel centre. */
+export const WIRE_MIN_PX = 0.75;
+
+/** Screen-space minimum width of thin props tubes (cables, cords, hanger rods: PartBuilder.wire, aux.y = radius in
+ * 0.1 mm on PROP_AUX vertices). Their normals are radial and caps are never tagged, so the axis is p - n * r; the
+ * vertex moves out along n until the tube's radius spans WIRE_MIN_PX at the axis' view depth. Shared verbatim by
+ * the surface and depth-prepass programs (both invariant gl_Position). uBrWirePx: world size of one pixel at unit
+ * view depth (2 / (P[1][1] * target height), materials/shared.ts setWirePixel). */
+export const WIRE_GLSL = /* glsl */ `
+uniform float uBrWirePx;
+vec3 brWire( vec3 p, vec3 n, float flags, float auxY ) {
+	float r = auxY * 0.0255; // normalized u8 x 255 x 0.1 mm
+	if ( r <= 0.0 || ( int( flags + 0.5 ) & ${VFlag.PROP_AUX} ) == 0 ) return p;
+	n = normalize( n );
+	float depth = - ( modelViewMatrix * vec4( p - n * r, 1.0 ) ).z;
+	return p + n * max( 0.0, ${WIRE_MIN_PX.toFixed(2)} * uBrWirePx * depth - r );
+}
+`;
+
 /** After `#include <common>`. */
 export const VERT_PARS_GLSL = /* glsl */ `
 attribute vec2 brLmUv;
@@ -34,6 +56,11 @@ vBrTint = brTint;
 vBrEmit = brEmit;
 vBrAux4 = brAux;
 vBrNrmW = normal;
+`;
+
+/** After `#include <begin_vertex>` (before project_vertex). */
+export const VERT_BEGIN_GLSL = /* glsl */ `
+transformed = brWire( transformed, normal, brFlags, brAux.y );
 `;
 
 /** After `#include <worldpos_vertex>`. */
