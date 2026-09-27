@@ -178,11 +178,11 @@ export function createFlashlight(scene: THREE.Scene, cookie: THREE.Texture | nul
     },
     setQuality(nq) {
       if (light.shadow.mapSize.x !== nq.flashlightShadow) {
+        // three (r186) resizes the existing map at its next shadow render (WebGLShadowMap: map.setSize when mapSize
+        // differs) and fills it in the same call. Disposing it here left the lit draws before that render (the planar
+        // reflection, the next frame's first passes) with no depth texture behind the shadow sampler: a burst of
+        // GL_INVALID_OPERATION on every quality switch that changes the map size (e.g. high <-> ultra).
         light.shadow.mapSize.set(nq.flashlightShadow, nq.flashlightShadow);
-        if (light.shadow.map) {
-          light.shadow.map.dispose();
-          (light.shadow as { map: THREE.WebGLRenderTarget | null }).map = null;
-        }
         light.shadow.needsUpdate = true;
       }
     },
