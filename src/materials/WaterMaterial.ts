@@ -167,7 +167,7 @@ void main() {
 #ifdef BR_WATER_REFRACT
 	if ( volMode ) {
 		vec3 nAway;
-		float eD = brWContact( P, V, D, upV, brWProj( P ), nAway );
+		float eD = brWContact( P, D, upV, brWProj( P ), nAway );
 		if ( eD < eC ) {
 			eC = eD;
 			vec2 nh = ( vec4( nAway, 0.0 ) * viewMatrix ).xz;
@@ -307,7 +307,7 @@ void main() {
 		vec3 Tv = refract( - V, nV, ${(1 / 1.333).toFixed(6)} );
 		float cosT = max( - dot( Tv, upV ), 0.05 );
 		vec2 uvH;
-		L = brWRefract( P, Tv, D / cosT, upV, uvH, hit );
+		L = brWRefract( P, Tv, D / cosT, upV, vBrLocal.xz, waterY, uvH, hit );
 		vec3 st;
 		vec3 trans = brWVolume( uvH, L, cosT, kind, irr, st );
 	#ifdef BR_WATER_VOLLIGHT

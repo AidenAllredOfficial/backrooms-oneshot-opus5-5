@@ -59,6 +59,11 @@ describe('underwater lamp picker', () => {
     expect(pickUnderwaterLights(worldOf(l), 1.0, 1.6, 4 * CELL, -1, 0, 4, out)).toBe(1);
     expect(out[0].id).toBe(west.id);
     expect(pickUnderwaterLights(worldOf(l), 1.0, 1.6, 4 * CELL, 1, 0, 0, out)).toBe(0);
+    // a round lens (shape 1: `luminance` is the intensity, fixtureRadiance spreads it over the disc): I = luminance
+    const disc = poolLayout();
+    disc.fixtures.push(lamp(2 * CELL + 0.02, 4 * CELL, 1, 0, LightState.ON, { shape: 1, w: 0.3, h: 0.3, luminance: 90 }));
+    expect(pickUnderwaterLights(worldOf(disc), 1.0, 1.6, 4 * CELL, 1, 0, 4, out)).toBe(1);
+    expect(out[0].b).toBeCloseTo(90, 6);
   });
 
   it('state scale: ON / BUZZ full, DYING at its mean, OFF / flicker states none; beyond RANGE nothing', () => {

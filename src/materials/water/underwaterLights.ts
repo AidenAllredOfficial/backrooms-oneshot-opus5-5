@@ -67,7 +67,8 @@ export function pickUnderwaterLights(world: RippleWorld, ex: number, ey: number,
         const nx = f.nx / nl, ny = f.ny / nl, nz = f.nz / nl;
         const wy = waterAtCell(world, x + nx * CELL * 0.25, z + nz * CELL * 0.25);
         if (wy === null || wy <= y) continue;
-        const I = fixtureRadiance(f) * f.w * (f.shape === 0 ? f.h : f.w) * k;
+        // luminance x the lens area (rect w x h; disc of diameter w)
+        const I = fixtureRadiance(f) * (f.shape === 0 ? f.w * f.h : Math.PI * 0.25 * f.w * f.w) * k;
         cand.push({ x, y, z, nx, ny, nz, r: I * f.color[0], g: I * f.color[1], b: I * f.color[2], radius: 0.5 * Math.max(f.w, f.h), dist, id: f.id });
       }
     }

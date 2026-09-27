@@ -358,67 +358,138 @@ vec3 brWViewPos( vec2 uv, float z ) {
 	vec2 n = uv * 2.0 - 1.0;
 	return vec3( ( n + vec2( projectionMatrix[ 2 ][ 0 ], projectionMatrix[ 2 ][ 1 ] ) ) * z / vec2( projectionMatrix[ 0 ][ 0 ], projectionMatrix[ 1 ][ 1 ] ), - z );
 }
+// the opaque scene's surface point (view space) in the level-0 texel nearest uv: the texel centre's ray at the
+// texel's depth. Tests against surfaces use it rather than (uv, depth): at grazing angles one texel spans more depth
+// than a film is deep (the 0.67 pyramid of ultra puts the texel centre up to half a texel off the pixel's ray)
+vec3 brWScenePos( vec2 uv ) {
+	ivec2 s = textureSize( uSceneColor, 0 );
+	ivec2 t = clamp( ivec2( uv * vec2( s ) ), ivec2( 0 ), s - 1 );
+	return brWViewPos( ( vec2( t ) + 0.5 ) / vec2( s ), texelFetch( uSceneColor, t, 0 ).a );
+}
 bool brWOnScreen( vec2 uv ) { return all( greaterThanEqual( uv, vec2( 0.0 ) ) ) && all( lessThanEqual( uv, vec2( 1.0 ) ) ); }
 
+// The water's edge between p (tile-local xz, on the surface wy) and the eye: the wall-mask cells are walked along
+// dir (unit xz toward the eye) for up to 4 cells. Returns the world axis the first edge runs along (1 x, 2 z; a wall
+// or a cell without this water beyond it), 0 when there is none in reach. Pool rims lie on the cell grid, so this is
+// the lip that hides refracted rays next to the near side of a pool.
+int brWEdgeAxis( vec2 p, vec2 dir, float wy ) {
+	ivec2 c = ivec2( floor( p / BR_CELL ) );
+	ivec2 st = ivec2( dir.x > 0.0 ? 1 : - 1, dir.y > 0.0 ? 1 : - 1 );
+	vec2 inv = 1.0 / max( abs( dir ), vec2( 1e-4 ) );
+	vec2 tM = abs( ( vec2( c ) + vec2( greaterThan( dir, vec2( 0.0 ) ) ) ) * BR_CELL - p ) * inv; // to the next x / z line
+	for ( int k = 0; k < 4; k ++ ) {
+		bool xs = tM.x < tM.y;
+		ivec2 d = xs ? ivec2( st.x, 0 ) : ivec2( 0, st.y );
+		ivec2 cn = c + d;
+		if ( cn.x < - 1 || cn.y < - 1 || cn.x > 16 || cn.y > 16 ) return 0;
+		int side = d.x > 0 ? 2 : d.x < 0 ? 8 : d.y > 0 ? 4 : 1; // N1 (-z) E2 (+x) S4 (+z) W8 (-x)
+		float wyn;
+		int kn;
+		if ( ( brWallBits( c ) & side ) != 0 || ! brWaterCell( cn, wyn, kn ) || abs( wyn - wy ) > 0.03 ) return xs ? 2 : 1;
+		c = cn;
+		if ( xs ) tM.x += BR_CELL * inv.x; else tM.y += BR_CELL * inv.y;
+	}
+	return 0;
+}
+
 // The refracted view ray from P (view space, on the surface) along Tv (unit); Lf = the path to the rect's flat floor
-// (D / cos theta_t; rects are single-depth), upV = world up in view space. Returns the path length L in the water to
-// what the ray reaches and its pyramid uv (uvH); hit = 0 when the ray left the screen or passed behind something
-// above the water (the deck lip, a lounger: no data behind it; the floor under a near rim is only visible through
-// the refraction), then uvH morphs toward the straight-through view and L is the flat-floor path.
-float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, out vec2 uvH, out float hit ) {
-	// fast path: the flat floor, unless something in front of it covers that point
+// (D / cos theta_t; rects are single-depth), upV = world up in view space, pl / wy = the fragment's tile-local xz and
+// surface height. Returns the path length L in the water to what the ray reaches and its pyramid uv (uvH); hit = 0 when
+// the ray left the screen or passed behind something above the water (the deck lip, a lounger: no data behind it; the
+// floor under a near rim is only visible through the refraction): then L is the flat-floor path and uvH the target
+// reflected back across the line it disappeared behind (see below).
+float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out vec2 uvH, out float hit ) {
+	// fast path: the flat floor, unless something in front of it covers that point (the texel there shows a surface
+	// point off the floor plane)
 	vec3 Xf = P + Tv * Lf;
 	vec2 uvf = brWProj( Xf );
-	if ( brWOnScreen( uvf ) && abs( brWSceneZ( uvf ) + Xf.z ) < 0.01 - 0.012 * Xf.z ) { uvH = uvf; hit = 1.0; return Lf; }
-	// linear march (1.2 Lf: floors lower than the rect's own under steps and ladders), 2 bisections, then the secant
-	float tA = 0.0, dA = 1.0, tB = - 1.0, dB = 0.0, tH = - 1.0;
-	uvH = brWProj( P );
+	if ( brWOnScreen( uvf ) && abs( dot( brWScenePos( uvf ) - Xf, upV ) ) < 0.01 - 0.004 * Xf.z ) { uvH = uvf; hit = 1.0; return Lf; }
+	// linear march (1.2 Lf: floors lower than the rect's own under steps and ladders) to the first sample behind the
+	// scene, 3 bisections to the crossing, then: behind something above the water (hidden) or on what the ray reaches
+	// under the water (the secant). Classifying the coarse step instead stair-stepped the underwater walls beside
+	// above-water ones (a step past the wall projects onto its part above the water)
+	float tA = 0.0, dA = 1.0, tB = - 1.0, dB = 0.0;
+	vec2 uvA = brWProj( P ), uvX = uvA;
+	bool off = false;
 	hit = 0.0;
 	for ( int i = 1; i <= BR_WATER_REFRACT; i ++ ) {
 		float t = 1.2 * Lf * float( i ) / float( BR_WATER_REFRACT );
 		vec3 X = P + Tv * t;
 		vec2 uv = brWProj( X );
-		if ( ! brWOnScreen( uv ) ) { tH = t; break; }
-		float zs = brWSceneZ( uv );
-		float d = zs + X.z; // > 0: the ray is still in front of the scene
-		if ( d <= 0.0 ) {
-			// hidden behind something above the water?
-			if ( dot( brWViewPos( uv, zs ) - P, upV ) > 0.01 ) { tH = t; break; }
-			tB = t;
-			dB = d;
-			break;
-		}
+		if ( ! brWOnScreen( uv ) ) { off = true; break; }
+		float d = brWSceneZ( uv ) + X.z; // > 0: the ray is still in front of the scene
+		if ( d <= 0.0 ) { tB = t; dB = d; uvX = uv; break; }
 		tA = t;
 		dA = d;
-		uvH = uv;
+		uvA = uv;
 	}
-	if ( tB < 0.0 ) {
-		// hidden (or off screen) after a fraction f of the path (2 bisections find where): morph from the
-		// straight-through view (f = 0, next to the rim) to the last visible sample (f -> 1): continuous with the
-		// refracted neighbours, no smear toward one boundary line
-		if ( tH > 0.0 ) {
-			for ( int k = 0; k < 2; k ++ ) {
-				float tm = 0.5 * ( tA + tH );
-				vec3 X = P + Tv * tm;
-				vec2 uv = brWProj( X );
-				float zs = brWSceneZ( uv );
-				if ( brWOnScreen( uv ) && zs + X.z > 0.0 ) { tA = tm; uvH = uv; } else tH = tm;
+	bool hidden = off || tB < 0.0;
+	if ( ! hidden ) {
+		for ( int k = 0; k < 3; k ++ ) {
+			float tm = 0.5 * ( tA + tB );
+			vec3 X = P + Tv * tm;
+			vec2 uv = brWProj( X );
+			float d = brWSceneZ( uv ) + X.z;
+			if ( d <= 0.0 ) { tB = tm; dB = d; uvX = uv; } else { tA = tm; dA = d; uvA = uv; }
+		}
+		hidden = dot( brWScenePos( uvX ) - P, upV ) > 0.01;
+	}
+	if ( ! hidden ) {
+		float t = tA + ( tB - tA ) * dA / max( dA - dB, 1e-5 );
+		uvH = brWProj( P + Tv * t );
+		hit = 1.0;
+		return t;
+	}
+	// The target is not in the pyramid. Stand-in: the target reflected back across the line it disappeared behind,
+	// i.e. the floor as far in front of that line as the target lies behind it. A reflection keeps the waves' lensing
+	// at its true strength and is continuous where the target reappears (points on the line map to themselves).
+	// Off screen the line is the screen's edge. Behind the lip of a pool's near side (the rim's axis from brWEdgeAxis)
+	// the flat-floor target is mirrored ON THE FLOOR across the lip's shadow line (the lip point at the crossing,
+	// bisected down to a texel, projected from the eye onto the floor plane): floor maps to floor at its true
+	// perspective, so a deep pool's wide hidden band shows the visible floor beyond the shadow, not pool content from
+	// across the screen; where that lands on nothing under the water, the lip's image line in screen space is the
+	// mirror. Anything else (no rim in reach: a float, a lounger, a ladder) mirrors the target about the crossing point.
+	vec2 uvM = 1.0 - abs( 1.0 - abs( uvf ) ); // folded back into the screen
+	if ( ! off && tB > 0.0 ) {
+		vec2 ps = vec2( textureSize( uSceneColor, 0 ) );
+		float tH = tB;
+		for ( int k = 0; k < 8; k ++ ) {
+			vec2 gap = ( uvX - uvA ) * ps;
+			if ( dot( gap, gap ) < 1.0 ) break;
+			float tm = 0.5 * ( tA + tH );
+			vec3 X = P + Tv * tm;
+			vec2 uv = brWProj( X );
+			if ( brWOnScreen( uv ) && brWSceneZ( uv ) + X.z > 0.0 ) { tA = tm; uvA = uv; } else { tH = tm; uvX = uv; }
+		}
+		vec2 qB = 0.5 * ( uvA + uvX ) * ps, qf = uvf * ps;
+		vec2 q = 2.0 * qB - qf; // point mirror
+		vec2 eye = ( vec4( - P, 0.0 ) * viewMatrix ).xz; // horizontal, toward the eye
+		int ax = brWEdgeAxis( pl, eye / max( length( eye ), 1e-5 ), wy );
+		if ( ax != 0 ) {
+			vec3 aV = ( viewMatrix * vec4( ax == 1 ? 1.0 : 0.0, 0.0, ax == 2 ? 1.0 : 0.0, 0.0 ) ).xyz;
+			vec4 c = projectionMatrix * vec4( aV, 0.0 );
+			vec2 tl = ( c.xy - ( 2.0 * qB / ps - 1.0 ) * c.w ) * ps; // the lip's image direction at qB (pixels)
+			if ( dot( tl, tl ) > 1e-8 ) {
+				vec2 n = normalize( vec2( - tl.y, tl.x ) );
+				q = qf - 2.0 * dot( qf - qB, n ) * n; // reflected across the line
+			}
+			// the floor mirror: heights relative to the eye (view origin) of the lip point and the floor plane
+			vec3 Lp = brWScenePos( uvX );
+			float lh = dot( Lp, upV ), fh = dot( Xf, upV );
+			if ( lh < 0.0 && fh < lh ) {
+				vec3 Xs = Lp * ( fh / lh ); // on the lip's shadow line
+				vec3 nH = cross( upV, aV );
+				nH *= dot( nH, Xs ) < 0.0 ? - 1.0 : 1.0; // horizontal, away from the eye across the rim
+				vec3 Xm = Xf - 2.0 * min( dot( Xf - Xs, nH ), 0.0 ) * nH;
+				vec2 uvW = brWProj( Xm );
+				if ( brWOnScreen( uvW ) && dot( brWScenePos( uvW ) - P, upV ) < 0.0 ) q = uvW * ps;
 			}
 		}
-		float f = clamp( tA / Lf, 0.0, 1.0 );
-		uvH = mix( brWProj( P ), uvH, f );
-		return Lf;
+		uvM = clamp( q / ps, vec2( 0.0 ), vec2( 1.0 ) );
 	}
-	for ( int k = 0; k < 2; k ++ ) {
-		float tm = 0.5 * ( tA + tB );
-		vec3 X = P + Tv * tm;
-		float d = brWSceneZ( brWProj( X ) ) + X.z;
-		if ( d <= 0.0 ) { tB = tm; dB = d; } else { tA = tm; dA = d; }
-	}
-	float t = tA + ( tB - tA ) * dA / max( dA - dB, 1e-5 );
-	uvH = brWProj( P + Tv * t );
-	hit = 1.0;
-	return t;
+	// keep the last visible sample where the stand-in lands on something above the water (a pool narrower than the band)
+	uvH = dot( brWScenePos( uvM ) - P, upV ) < 0.0 ? uvM : uvA;
+	return Lf;
 }
 
 // Radiance leaving the water body toward the surface (before the interface): the scene at uvH through the medium of
@@ -450,19 +521,23 @@ vec3 brWVolume( vec2 uvH, float L, float cosT, int kind, vec3 irr, out vec3 st )
 	return cs.rgb * Tu + Cb * Tf + Lin;
 }
 
-// Contact from the pyramid depth at the own pixel (uv0): the straight view ray (V toward the eye) meets something
-// standing in the water (a wall, a pillar, a chair leg) much sooner than the floor, D / cos below the surface: its
-// horizontal distance (m) from the fragment, and nAway = the view-space horizontal direction from it to the fragment.
-float brWContact( vec3 P, vec3 V, float D, vec3 upV, vec2 uv0, out vec3 nAway ) {
-	vec3 S0 = brWViewPos( uv0, brWSceneZ( uv0 ) );
-	vec3 dv = S0 - P;
-	float tau = max( dot( dv, - V ), 0.0 );
+// Contact from the pyramid depth at the own pixel (uv0): the straight view ray meets something standing in the water
+// (a wall, a pillar, a chair leg) at a depth h0 much shallower than the floor (h0 < D / 2): its horizontal distance
+// (m) from the fragment, and nAway = the view-space horizontal direction from it to the fragment. The texel's own
+// surface point (brWScenePos) keeps the depth test exact at grazing angles (a film's floor is no contact), and a
+// texel of something above the water (a silhouette in the 0.67 pyramid of ultra) is none either. From 0.2 D the
+// distance is pushed out smoothly, by 0.3 m (past every contact effect) at the cutoff: seen steeply the cutoff falls
+// inside the flooded scum band (e = D / (2 tan) is 7 cm at 60 deg, the band 11 cm) and cut it off in a hard ring
+// around chair legs and pillars.
+float brWContact( vec3 P, float D, vec3 upV, vec2 uv0, out vec3 nAway ) {
+	vec3 dv = brWScenePos( uv0 ) - P;
+	float h0 = - dot( dv, upV ); // depth below the surface
 	nAway = vec3( 0.0 );
-	if ( tau > 0.5 * D / max( dot( V, upV ), 0.05 ) ) return 1e3;
-	float h0 = max( - dot( dv, upV ), 0.0 );
-	vec3 hz = - dv + upV * dot( dv, upV ); // horizontal, from the contact to the fragment
-	nAway = hz / max( length( hz ), 1e-5 );
-	return sqrt( max( tau * tau - h0 * h0, 0.0 ) );
+	if ( h0 > 0.5 * D || h0 < - 0.01 ) return 1e3;
+	vec3 hz = - dv - upV * h0; // horizontal, from the contact to the fragment
+	float e = length( hz );
+	nAway = hz / max( e, 1e-5 );
+	return e + 0.3 * smoothstep( 0.2 * D, 0.5 * D, h0 );
 }
 
 #ifdef BR_WATER_VOLLIGHT
