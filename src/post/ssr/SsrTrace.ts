@@ -1,8 +1,8 @@
 // src/post/ssr/SsrTrace.ts — package D: screen-space reflections on the frame graph (post/ScenePass.ts).
 //  - afterDepth hook 'hiz' (order 20): the min device-depth pyramid (post/ssr/HiZ.ts) from the prepass depth.
 //  - afterOpaque hook 'ssr' (order 10): one ray per 2x2 block (half the display resolution: 3x3 on ultra's 1.5x
-//    buffer, ssrStepFor) from every pixel whose G-buffer holds a
-//    replaceable specular (att1.a = Ws > 0) below the preset's ssrMaxRoughness: Hi-Z traversal for receding rays,
+//    buffer, ssrStepFor) whose top-left pixel holds a replaceable specular in the G-buffer (att1.a = Ws > 0) below
+//    the preset's ssrMaxRoughness, with the block's averaged lobe: Hi-Z traversal for receding rays,
 //    a linear march for rays toward the camera (ssrGlsl.ts SSR_TRACE_GLSL), thickness and facing tests, a
 //    roughness cone into the colour pyramid with an anisotropic stretch along the screen-projected normal, and the
 //    confidence fades (screen border, roughness cut-off, ray length, rays toward the camera, thickness). Ultra adds
@@ -76,7 +76,7 @@ export class ScreenSpaceReflections {
     return [...this.hiz.materials, this.trace, this.filter];
   }
 
-  /** The half-resolution result of the last traced frame (premultiplied rgb, a = confidence). */
+  /** The trace-resolution result of the last traced frame (premultiplied rgb, a = confidence). */
   get texture(): THREE.Texture { return this.settings.filter ? this.tmpRT.texture : this.ssrRT.textures[0]; }
 
   private makeTrace(steps: number): THREE.ShaderMaterial {
