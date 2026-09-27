@@ -152,7 +152,10 @@ float brPomLod = 0.0; // their isotropic LOD
 			if ( brHP < 1.0 ) {
 				for ( int i = 1; i <= BR_POM_MAX; i ++ ) {
 					if ( i > brSteps ) break;
-					float brRay = 1.0 - float( i ) * brStep;
+					// the last step is exactly the bottom (height 0), so it always hits: 1 - n * ( 1 / n ) can round
+					// above 0 (an approximate reciprocal), and a flat floor at height 0 (deck rib bottoms, tie-hole
+					// tips) would then miss and fall back to the unshifted uv
+					float brRay = i == brSteps ? 0.0 : 1.0 - float( i ) * brStep;
 					vec2 brUvC = brUv + brDUv * ( 1.0 - brRay );
 					float brHC = brPomH( brUvC, brLA.xy, brPomSalt, brLayerF, brPomLod, brPc, brPm, brPb ) / brTop;
 					if ( brHC >= brRay ) {

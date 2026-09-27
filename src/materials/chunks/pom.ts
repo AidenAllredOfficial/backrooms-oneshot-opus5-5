@@ -62,7 +62,9 @@ export const FRAG_DIRVIS_GLSL = /* glsl */ `
 			int brSn = clamp( int( ceil( brLen / BR_POM_STEP_PX ) ), 1, BR_POM_SH_STEPS );
 			for ( int i = 1; i <= BR_POM_SH_STEPS; i ++ ) {
 				if ( i > brSn ) break;
-				float brT = float( i ) / float( brSn );
+				// step midpoints: the end point is the relief top, where nothing below pomTop can occlude, so sampling
+				// it wastes a lookup (and a 1-step shadow would never shade anything)
+				float brT = ( float( i ) - 0.5 ) / float( brSn );
 				float brRay = mix( brPomHitN, 1.0, brT );
 				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brPomLod, brSc, brSm, brSb ) / brPTop;
 				brOcc = max( brOcc, ( brHs - brRay ) * BR_POM_SH_K * ( 1.0 - 0.5 * brT ) );
