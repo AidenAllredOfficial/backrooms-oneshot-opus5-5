@@ -38,7 +38,7 @@ export const halfLevel: LandmarkGenerator = {
     // the deck and the ramp up to it
     cells(lm, 0, H.deckV, W, L, { floorCm: H.deckCm });
     const [ru0, ru1, rv0] = H.ramp;
-    ramp(lm, ru0 * CELL, rv0 * CELL, ru1 * CELL, H.deckV * CELL, 0, 1, 0, dy, 0, Mat.CONCRETE_FLOOR);
+    ramp(lm, ru0 * CELL, rv0 * CELL, ru1 * CELL, H.deckV * CELL, 0, 1, 0, dy, 0, Mat.CONCRETE_FLOOR, true);
     floorDecal(lm, (ru0 + 1) * CELL, (rv0 - 0.8) * CELL, 0, { kind: SignKind.ARROW_UP, sign: true, rot: lm.f.yaw(0, 1), w: 0.9, h: 1.4, alpha: 0.7 });
     // parapet along the deck edge (except over the ramp) with a steel rail; kerbs beside the ramp
     const dv = H.deckV * CELL;

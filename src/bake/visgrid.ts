@@ -282,7 +282,7 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
         const x0 = hx(Math.min(s.x0, s.x1)), x1 = hx(Math.max(s.x0, s.x1));
         const z0 = hz(Math.min(s.z0, s.z1)), z1 = hz(Math.max(s.z0, s.z1));
         if (x1 < lo || x0 > hi || z1 < lo || z0 > hi || x1 <= x0 || z1 <= z0) continue;
-        const thick = rampSlabThickness(s.y0, s.y1, s.steps);
+        const thick = rampSlabThickness(s.y0, s.y1, s.steps, (s.flags & SolidFlag.FILLED) !== 0);
         const ylo = Math.min(s.y0, s.y1) - thick, yhi = Math.max(s.y0, s.y1);
         pushBox(bb, x0, ylo, z0, x1, yhi, z1, s.bakeGroup, s.mat, s.dir, s.y0, s.y1, thick);
       }
@@ -428,14 +428,19 @@ function occInterval(kind: number, hA: number, hB: number, sill: number, e: numb
  * (src/mesh/stairs.ts: nose(s) - off with nose(s) - h(s) = rise * (1 - s / L), off = max(0.15, rise + 0.03) for
  * n > 1 risers, 0.15 otherwise): the former 0.3 m slab swallowed the soffit
  * samples (insideBox -> invalid texels -> pure black stair undersides). The slab only needs to be crossed by rays
- * (dda.ts tests a sign change of y - h), so a few centimetres suffice.
+ * (dda.ts tests a sign change of y - h), so a few centimetres suffice. A FILLED ramp (SolidFlag.FILLED: a built-up
+ * body, sides down to the floor, no soffit) is solid from its walking line down past its low end (FILLED_BASE below
+ * it: the floor under the body), so no ray passes through it and the hidden floor under it is invalid, not lit.
  */
-export function rampSlabThickness(y0: number, y1: number, steps: number): number {
+export function rampSlabThickness(y0: number, y1: number, steps: number, filled = false): number {
+  if (filled) return Math.abs(y1 - y0) + FILLED_BASE;
   const n = Math.max(0, Math.round(steps));
   const rise = n > 0 ? Math.abs(y1 - y0) / n : 0;
   const gap = n > 1 ? Math.max(0.15, rise + 0.03) - rise : 0.15; // min over s of h(s) - soffit(s)
   return Math.max(0.005, gap - 0.005); // the soffit samples sit a further SURF_OFF below the soffit
 }
+/** Depth (m) of a FILLED ramp's occluder below its low end (its low end sits on the floor). */
+export const FILLED_BASE = 0.1;
 
 /** Effective floor of a cell for sample heights (blocker top if any). */
 export const effFloor = (g: VisGrid, c: number): number => (g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c]);

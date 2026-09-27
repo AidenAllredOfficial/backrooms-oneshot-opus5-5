@@ -19,7 +19,7 @@ import { CELL, WALL_T } from '../core/constants.ts';
 import { EDGE_OCCLUDES, edgeOccludesAt, edgeThickness } from '../core/edges.ts';
 import { CellFlag } from '../core/ids.ts';
 import { AO_STRIDE, type BakeJob } from './job.ts';
-import { MAT_PROP } from './visgrid.ts';
+import { MAT_PROP, rampHeight } from './visgrid.ts';
 
 export const aoOut = { ao: 1, wall: 1, wallDist: 10 };
 
@@ -218,7 +218,13 @@ export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, 
       const qz = z < g.box[o + 2] ? g.box[o + 2] : z > g.box[o + 5] ? g.box[o + 5] : z;
       const dx = (qx - x) * CELL, dz = (qz - z) * CELL;
       if (dx * dx + dz * dz >= 0.36 + 1e-9) continue; // (d >= 0.6 whatever the height)
-      const qy = y < g.box[o + 1] ? g.box[o + 1] : y > g.box[o + 4] ? g.box[o + 4] : y;
+      let qy = y < g.box[o + 1] ? g.box[o + 1] : y > g.box[o + 4] ? g.box[o + 4] : y;
+      if (dx === 0 && dz === 0 && g.boxRamp[b] >= 0) {
+        // under a ramp (inside its AABB): the underside of its slab above occludes (the floor and wall under an
+        // open flight; its tread texels above the slab and the body of a FILLED ramp stay at d = 0, skipped below)
+        const lo = rampHeight(g, b, x, z) - g.rampY[b * 3 + 2];
+        if (y < lo) qy = lo;
+      }
       const dy = qy - y;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (d >= 0.6) continue;

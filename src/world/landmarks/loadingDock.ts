@@ -77,7 +77,7 @@ export const loadingDock: LandmarkGenerator = {
     const D = LOADING_DOCK;
     // the well and the ramp lane
     cells(lm, 0, 0, W, D.wellV, { floorCm: D.wellCm });
-    ramp(lm, D.rampU * CELL, 1 * CELL, W * CELL, D.wellV * CELL, 0, 1, D.wellCm / 100, 0, 0, Mat.CONCRETE_FLOOR);
+    ramp(lm, D.rampU * CELL, 1 * CELL, W * CELL, D.wellV * CELL, 0, 1, D.wellCm / 100, 0, 0, Mat.CONCRETE_FLOOR, true);
     for (let u = 0; u < D.rampU; u++) {
       lm.f.setEdge(g, u, D.wellV - 1, u, D.wellV, EdgeKind.OPEN, wallMat, wallMat, { trim: 0 });
     }

@@ -112,7 +112,10 @@ export const DYING_MEAN = 0.35;
 export const EmitterShape = { RECT: 0, SPHERE: 1 } as const;
 
 // ---------------------------------------------------------------- solids / structures / content
-export const SolidFlag = { COLLIDE: 1, OCCLUDE: 2, WALKABLE_TOP: 4, RENDER: 8, NO_LM: 16 } as const;
+/** FILLED (ramps only): a built-up flight or ramp (tiled / cast masonry, pool steps, a dais): its sides run down to
+ * the floor and it has no soffit; the baker occludes the whole body under the walking line. Without it a ramp is an
+ * open flight (stringers and a sloped soffit, the space under it lit and visible: towers, steel stairs). */
+export const SolidFlag = { COLLIDE: 1, OCCLUDE: 2, WALKABLE_TOP: 4, RENDER: 8, NO_LM: 16, FILLED: 32 } as const;
 
 export const StructureKind = { TOWER: 0, ELEVATOR: 1, SPAWN_ROOM: 2, PIT: 3, GLITCH: 4 } as const;
 export type StructureKindId = ValueOf<typeof StructureKind>;

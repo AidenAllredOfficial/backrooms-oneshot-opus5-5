@@ -51,7 +51,7 @@ export const chapel: LandmarkGenerator = {
     // the dais: a 30 cm platform across the far end with a two-step ramp at the aisle
     const dv = C.daisV * CELL, back = L * CELL - WALL_T / 2;
     box(lm, WALL_T / 2, dv, W * CELL - WALL_T / 2, back, 0, C.daisH, Mat.WOOD, WALK_F);
-    ramp(lm, a0 * CELL, dv - 0.6, a1 * CELL, dv, 0, 1, 0, C.daisH, 2, Mat.CARPET_L0);
+    ramp(lm, a0 * CELL, dv - 0.6, a1 * CELL, dv, 0, 1, 0, C.daisH, 2, Mat.CARPET_L0, true);
     const mid = (W / 2) * CELL;
     box(lm, mid - 0.9, back - 1.6, mid + 0.9, back - 0.95, C.daisH, C.daisH + 0.95, Mat.WOOD, SOLID_F); // the table
     box(lm, mid - 0.95, back - 1.62, mid + 0.95, back - 0.93, C.daisH + 0.95, C.daisH + 0.99, Mat.FABRIC_PARTITION, THIN_F); // cloth

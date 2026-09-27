@@ -211,14 +211,15 @@ export function box(lm: Lm, um0: number, vm0: number, um1: number, vm1: number, 
   return lm.g.addSolid({ kind: 'box', min: b.min, max: b.max, mat, flags, bakeGroup: 0 });
 }
 
-/** Ramp over frame metres [um0,um1] x [vm0,vm1] ascending toward frame direction (du, dv). */
-export function ramp(lm: Lm, um0: number, vm0: number, um1: number, vm1: number, du: number, dv: number, yLow: number, yHigh: number, steps: number, mat: MatId): number {
+/** Ramp over frame metres [um0,um1] x [vm0,vm1] ascending toward frame direction (du, dv). `filled`: a built-up
+ * body down to the floor (SolidFlag.FILLED: pool steps, a dais, a concrete ramp), else an open flight. */
+export function ramp(lm: Lm, um0: number, vm0: number, um1: number, vm1: number, du: number, dv: number, yLow: number, yHigh: number, steps: number, mat: MatId, filled = false): number {
   const b = lm.f.box(um0, vm0, um1, vm1, yLow, yHigh);
   const [dx, dz] = lm.f.dir(du, dv);
   const dir: 0 | 1 | 2 | 3 = dx > 0 ? 0 : dx < 0 ? 1 : dz > 0 ? 2 : 3;
   return lm.g.addSolid({
     kind: 'ramp', x0: b.min[0], z0: b.min[2], x1: b.max[0], z1: b.max[2], y0: yLow, y1: yHigh, dir, steps, mat,
-    flags: SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.RENDER | SolidFlag.WALKABLE_TOP, bakeGroup: 0,
+    flags: SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.RENDER | SolidFlag.WALKABLE_TOP | (filled ? SolidFlag.FILLED : 0), bakeGroup: 0,
   });
 }
 

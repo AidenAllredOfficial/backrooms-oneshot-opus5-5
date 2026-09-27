@@ -14,7 +14,7 @@
 
 import { CELL, CHUNK_CELLS, WALL_T } from '../../core/constants.ts';
 import { cellIdx, exIdx, ezIdx } from '../../core/grid.ts';
-import { CeilKind, DECAL_PAINT_STRIPE, EdgeKind, EdgeTrim, FixtureKind, Mat, SeamMode, Zone, type MatId, type ZoneId } from '../../core/ids.ts';
+import { CeilKind, DECAL_PAINT_STRIPE, EdgeKind, EdgeTrim, FixtureKind, Mat, SeamMode, SolidFlag, Zone, type MatId, type ZoneId } from '../../core/ids.ts';
 import { hash01, hash5, SALT } from '../../core/rng.ts';
 import type { DistrictInfo, SeamSpec, ZoneGenContext, ZonePalette } from '../../core/world.ts';
 import { EXIT_RED, fixtureAt, addLatticeFixture } from '../content/util.ts';
@@ -191,7 +191,7 @@ function connectors(ctx: ZoneGenContext, side: Side, spec: SeamSpec, other: Dist
       const [ai, aj] = cellAt(side, r0, D - 1), [bi, bj] = cellAt(side, r1 - 1, D - 1);
       const x0 = Math.min(ai, bi) * CELL, x1 = (Math.max(ai, bi) + 1) * CELL, z0 = Math.min(aj, bj) * CELL, z1 = (Math.max(aj, bj) + 1) * CELL;
       const dir: 0 | 1 | 2 | 3 = side === 'W' ? 0 : side === 'E' ? 1 : side === 'N' ? 2 : 3;
-      g.addSolid({ kind: 'ramp', x0, z0, x1, z1, y0: (f0 - floorDrop) / 100, y1: f0 / 100, dir, steps: 0, mat: Mat.CONCRETE_FLOOR, flags: WALK_SOLID, bakeGroup: 0 });
+      g.addSolid({ kind: 'ramp', x0, z0, x1, z1, y0: (f0 - floorDrop) / 100, y1: f0 / 100, dir, steps: 0, mat: Mat.CONCRETE_FLOOR, flags: WALK_SOLID | SolidFlag.FILLED, bakeGroup: 0 });
     }
     if (unreachedWalkable(l, seen) > base0) { restore(l, snap); continue; }
     // leaves propped open into the host side (hinges at the connector walls), the exit sign over the doors

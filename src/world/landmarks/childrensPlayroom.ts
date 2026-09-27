@@ -34,7 +34,7 @@ export const childrensPlayroom: LandmarkGenerator = {
     // the padded pit: 40 cm deep, soft floor, a 2-step ramp in
     const [pu0, pv0, pu1, pv1] = PLAYROOM.pit;
     cells(lm, pu0, pv0, pu1, pv1, { floorCm: PLAYROOM.pitCm, floorMat: Mat.FABRIC_PARTITION });
-    ramp(lm, pu0 * CELL, (pv1 - 1) * CELL, (pu0 + 1) * CELL, pv1 * CELL, -1, 0, PLAYROOM.pitCm / 100, 0, 2, Mat.RUBBER);
+    ramp(lm, pu0 * CELL, (pv1 - 1) * CELL, (pu0 + 1) * CELL, pv1 * CELL, -1, 0, PLAYROOM.pitCm / 100, 0, 2, Mat.RUBBER, true);
     // cushions (soft boxes) scattered in the pit
     for (let k = 0; k < 6; k++) {
       const um = lm.rng.range((pu0 + 1.2) * CELL, pu1 * CELL - 0.5), vm = lm.rng.range(pv0 * CELL + 0.5, pv1 * CELL - 0.5);
@@ -47,7 +47,7 @@ export const childrensPlayroom: LandmarkGenerator = {
     box(lm, su, sv, su + 1.0, sv + 1.0, 0, 0.9, Mat.PLASTIC, WALK_F);
     for (const [a, b] of [[su, sv], [su + 0.96, sv], [su, sv + 0.96], [su + 0.96, sv + 0.96]]) box(lm, a, b, a + 0.04, b + 0.04, 0.9, 1.6, Mat.METAL_PAINTED, THIN_F);
     box(lm, su, sv + 0.97, su + 1.0, sv + 1.0, 1.2, 1.6, Mat.PLASTIC, THIN_F); // back panel
-    ramp(lm, su + 1.0, sv + 0.1, su + 1.9, sv + 0.9, -1, 0, 0, 0.9, 5, Mat.PLASTIC); // steps up (+u side)
+    ramp(lm, su + 1.0, sv + 0.1, su + 1.9, sv + 0.9, -1, 0, 0, 0.9, 5, Mat.PLASTIC, true); // moulded steps up (+u side)
     ramp(lm, su + 0.15, sv - 2.2, su + 0.85, sv, 0, 1, 0.02, 0.9, 0, Mat.PLASTIC); // the chute (smooth)
     box(lm, su + 0.12, sv - 2.2, su + 0.15, sv, 0.02, 1.1, Mat.PLASTIC, THIN_F); // chute sides
     box(lm, su + 0.85, sv - 2.2, su + 0.88, sv, 0.02, 1.1, Mat.PLASTIC, THIN_F);

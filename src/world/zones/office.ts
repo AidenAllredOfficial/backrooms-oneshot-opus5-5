@@ -416,7 +416,7 @@ function raiseBlock(b: Blk): void {
     g.addSolid({
       kind: 'ramp', x0: Math.min(xa, xb), z0: Math.min(za, zb), x1: Math.max(xa, xb), z1: Math.max(za, zb),
       y0: base / 100, y1: (base + RAISE_CM) / 100, dir, steps: 2, mat: Mat.VINYL_VCT,
-      flags: SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.WALKABLE_TOP | SolidFlag.RENDER, bakeGroup: 0,
+      flags: SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.WALKABLE_TOP | SolidFlag.RENDER | SolidFlag.FILLED, bakeGroup: 0,
     });
   }
 }

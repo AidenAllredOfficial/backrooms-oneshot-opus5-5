@@ -3755,6 +3755,7 @@ export function expandPeriodicProps(l: ChunkLayout): PropPlacement[]; // props a
 7. **Solids.**
    - Boxes (after `expandPeriodicSolids`): every face not flush with a floor, ceiling or SOLID cell, BOX charts.
    - Ramps: visual treads and risers plus stringers, all mapped to one RAMP chart (the sloped plane from `(x0, y0)` to `(x1, y1)`; texels are projected by xz), **plus a sloped soffit** (the underside, 0.15 m below the nosing line, SOFFIT chart) so stair stacks are opaque from below. Handrails come from WP6 props.
+   - `SolidFlag.FILLED` ramps (built-up bodies: pool terraces, arch steps and pool entries, lobby sunken-area and office aisle steps, daises, pit steps, concrete ramps) have no soffit: their sides and a free-standing back face run down to the floor, each on its own vertical BOX chart (lit as the wall of a block, with its floor contact). The baker makes the whole body under the walking line an occluder (`rampSlabThickness(…, filled)`), so no light passes through it and the hidden floor under it is invalid. Open flights (towers, split-level halls, steel and landmark staircases) keep the soffit; the floor and wall under them are valid texels whose analytic AO includes the slab above (`aoAt`).
    - Pipe solids go to WP6.
 8. **Trims.**
    - Baseboards (0.10 m tall, 0.015 m proud) on wall faces whose edge has the `BASEBOARD` trim bit.

@@ -56,10 +56,10 @@ export const drainedPool: LandmarkGenerator = {
     cells(lm, bu0, bv0, s0, bv1, { floorCm: D.shallowCm, floorMat: Mat.POOL_MOSAIC });
     cells(lm, s0, bv0, bu1, bv1, { floorCm: D.deepCm, floorMat: Mat.POOL_MOSAIC });
     // the slope from the shallow floor down to the deep floor (smooth, walkable)
-    ramp(lm, s0 * CELL, bv0 * CELL, s1 * CELL, bv1 * CELL, -1, 0, dp, sh, 0, Mat.POOL_MOSAIC);
+    ramp(lm, s0 * CELL, bv0 * CELL, s1 * CELL, bv1 * CELL, -1, 0, dp, sh, 0, Mat.POOL_MOSAIC, true);
     // stairs from the deck down into the shallow end (8 risers of 15 cm, 30 cm treads)
     const [tu0, tu1, tv0, tv1] = D.stairs;
-    ramp(lm, tu0 * CELL, tv0 * CELL, tu1 * CELL, tv1 * CELL, -1, 0, sh, 0, 8, tile);
+    ramp(lm, tu0 * CELL, tv0 * CELL, tu1 * CELL, tv1 * CELL, -1, 0, sh, 0, 8, tile, true);
     handrail(lm, tu0 * CELL + 0.1, tv0 * CELL + 0.08, 0, tu1 * CELL, tv0 * CELL + 0.08, sh, Mat.METAL_PAINTED);
     handrail(lm, tu0 * CELL + 0.1, tv1 * CELL - 0.08, 0, tu1 * CELL, tv1 * CELL - 0.08, sh, Mat.METAL_PAINTED);
     // ladders on both deep side walls and the deep end wall

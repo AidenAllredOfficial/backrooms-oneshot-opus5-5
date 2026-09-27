@@ -28,7 +28,7 @@
 import { CELL, CHUNK_CELL_COUNT, WALL_T } from '../../core/constants.ts';
 import { cellIdx } from '../../core/grid.ts';
 import {
-  CeilKind, EdgeKind, EdgeTrim, EmitterKind, FixtureKind, Mat, PropKind, Zone, type PropKindId, type StoreyId,
+  CeilKind, EdgeKind, EdgeTrim, EmitterKind, FixtureKind, Mat, PropKind, SolidFlag, Zone, type PropKindId, type StoreyId,
 } from '../../core/ids.ts';
 import { hash01, hash3, hash5, Rng, SALT, type Rng as RngT } from '../../core/rng.ts';
 import { hangDoors } from '../structures/doors.ts';
@@ -597,7 +597,7 @@ function buildDrop(ctx: ZoneGenContext, r: Room, placer: ReturnType<typeof creat
   const dir: 0 | 1 | 2 | 3 = d.axis === 0 ? (inward > 0 ? 0 : 1) : (inward > 0 ? 2 : 3);
   const x0 = d.axis === 0 ? s0 * CELL : stairB * CELL, x1 = d.axis === 0 ? s1 * CELL : (stairB + 1) * CELL;
   const z0 = d.axis === 0 ? stairB * CELL : s0 * CELL, z1 = d.axis === 0 ? (stairB + 1) * CELL : s1 * CELL;
-  g.addSolid({ kind: 'ramp', x0, z0, x1, z1, y0: -DROP_CM / 100, y1: 0, dir, steps: 6, mat: Mat.CONCRETE_FLOOR, flags: WALK_FLAGS, bakeGroup: 0 });
+  g.addSolid({ kind: 'ramp', x0, z0, x1, z1, y0: -DROP_CM / 100, y1: 0, dir, steps: 6, mat: Mat.CONCRETE_FLOOR, flags: WALK_FLAGS | SolidFlag.FILLED, bakeGroup: 0 }); // cast on the lower floor
   // side rail on the open side of the stair (the other side is the room wall or the bay)
   const sideB = stairB === b0 ? stairB + 1 : stairB; // line between the stair column and the bay
   for (const cellA of [lowCell, farCell]) {
