@@ -701,18 +701,26 @@ if ( vBrEmit > 0.0 ) {
 	float brSh = 1.0;
 	if ( ( brF & BR_F_SHIMMER ) != 0 ) brSh = brLensShimmer( int( brAuxB.w ), floor( vBrTint.a * 255.0 + 0.5 ), uTime, uFlickerMode );
 #if BR_DETAIL == 1
-	if ( brEp != 0 ) totalEmissiveRadiance = vBrEmit * vBrTint.rgb * brEmitterShape( brEp, ( int( brAuxB.z + 0.5 ) >> 5 ) & 7,
-		int( brAuxB.x + 0.5 ), floor( vBrTint.a * 255.0 + 0.5 ), vBrUv, brEmVt, brEmFp, uTime, int( brAuxB.w + 0.5 ), brDyn, brSh,
-		( brF & BR_F_DYN_EMIT ) != 0, ( brF & BR_F_SHIMMER ) != 0 );
-	else
+	float brEpRoom;
+	if ( brEp != 0 ) {
+		totalEmissiveRadiance = vBrEmit * vBrTint.rgb * brEmitterShape( brEp, ( int( brAuxB.z + 0.5 ) >> 5 ) & 7,
+			int( brAuxB.x + 0.5 ), floor( vBrTint.a * 255.0 + 0.5 ), vBrUv, brEmVt, brEmFp, uTime, int( brAuxB.w + 0.5 ), brDyn, brSh,
+			( brF & BR_F_DYN_EMIT ) != 0, ( brF & BR_F_SHIMMER ) != 0, brEpRoom );
+		// parabolic louver: its aluminium mirrors the room (neutral), not the lamp-tinted lens diffuse
+		if ( brEpRoom >= 0.0 ) diffuseColor.rgb = vec3( brEpRoom );
+	} else
 #endif
 	totalEmissiveRadiance = vBrEmit * vBrTint.rgb * mix( 1.0, brOrmh.a * 1.3, brIsLens ) * brDyn * brSh;
 } else {
 	totalEmissiveRadiance = vec3( 0.0 );
 #if BR_DETAIL == 1
-	// OFF recessed lens: dark cavity and dead tubes behind it (emissivemap runs before lights_physical: re-shaded)
-	if ( brEp != 0 && brL == BR_M_PANEL_LENS && ( brF & BR_F_PROP_AUX ) == 0 ) diffuseColor.rgb *= brOffLensShade( brEp,
-		int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7, vBrUv, brEmVt, brEmFp );
+	// OFF recessed lens: dark cavity and dead tubes behind it (emissivemap runs before lights_physical: re-shaded);
+	// a dead parabolic louver shows its aluminium blade grid over the dark cells
+	if ( brEp != 0 && brL == BR_M_PANEL_LENS && ( brF & BR_F_PROP_AUX ) == 0 ) {
+		if ( brEp == BR_EP_LOUVER ) diffuseColor.rgb = vec3( brOffLouver( int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7,
+			vBrUv, brEmVt, brEmFp ) );
+		else diffuseColor.rgb *= brOffLensShade( brEp, int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7, vBrUv, brEmVt, brEmFp );
+	}
 #endif
 }
 vec4 brSubInfo = brWaterSubInfo( brF, brSubDepth, vBrTint.a, brNWg ); // package E: water info (chunks/water.ts)

@@ -42,7 +42,7 @@ describe('EMITTER_GLSL', () => {
   });
 
   it('declares every function FRAG_EMISSIVE calls', () => {
-    for (const fn of ['brEmitterShape', 'brOffLensShade']) {
+    for (const fn of ['brEmitterShape', 'brOffLensShade', 'brOffLouver']) {
       expect(EMITTER_GLSL).toMatch(new RegExp(`\\b(vec3|float) ${fn}\\(`));
       expect(FRAG_EMISSIVE_GLSL).toContain(`${fn}(`);
     }
@@ -71,13 +71,22 @@ describe('FRAG_EMISSIVE_GLSL', () => {
     expect(FRAG_EMISSIVE_GLSL).toMatch(/int brEp = \( brF & BR_F_FLOOR_AUX \) == 0 \? \( int\( brAuxB\.z \+ 0\.5 \) >> 1 \) & 15 : 0;/);
   });
 
-  it('shades OFF lenses only on shell PANEL_LENS faces with a profile', () => {
-    const l = lines.findIndex((s) => s.includes('brOffLensShade('));
-    const cond = lines.slice(l - 1, l + 1).join(' ');
-    expect(cond).toContain('brL == BR_M_PANEL_LENS');
-    expect(cond).toContain('( brF & BR_F_PROP_AUX ) == 0');
-    expect(cond).toContain('brEp != 0');
-    expect(condAt('brOffLensShade(')).toContain('#if BR_DETAIL == 1');
+  it('shades OFF lenses only on shell PANEL_LENS faces with a profile (dead louvers: their blade grid)', () => {
+    const g = lines.findIndex((s) => s.includes('brL == BR_M_PANEL_LENS') && s.includes('brEp != 0'));
+    expect(g).toBeGreaterThan(0);
+    expect(lines[g]).toContain('( brF & BR_F_PROP_AUX ) == 0');
+    for (const fn of ['brOffLensShade(', 'brOffLouver(']) {
+      const l = lines.findIndex((s) => s.includes(fn));
+      expect(l, fn).toBeGreaterThan(g);
+      expect(l - g, fn).toBeLessThanOrEqual(4);
+      expect(condAt(fn)).toContain('#if BR_DETAIL == 1');
+    }
+  });
+
+  it('lets a louver replace the lens diffuse by its neutral room reflection', () => {
+    const l = lines.findIndex((s) => s.includes('diffuseColor.rgb = vec3( brEpRoom )'));
+    expect(l).toBeGreaterThan(lines.findIndex((s) => s.includes('brEmitterShape(')));
+    expect(lines[l]).toContain('brEpRoom >= 0.0');
   });
 
   it('takes its derivatives in uniform control flow (before the emissive branch)', () => {
