@@ -21,6 +21,7 @@ import type { BakeTerm, WorkerInit } from '../core/worker.ts';
 import { TEST_SCENES, type TestSceneId } from '../core/world.ts';
 import type { LightmapData, TileMesh } from '../core/mesh.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
+import { LAYER_LATE } from '../materials/shared.ts';
 import { createChunkStreamer, getStreamTiming } from '../stream/ChunkStreamer.ts';
 import { createWorkerPool, poolSizeFor, type WorkerPool } from '../stream/WorkerPool.ts';
 import { generateTextures } from '../textures/TextureBaker.ts';
@@ -163,6 +164,7 @@ async function main(): Promise<void> {
   scene.background = new THREE.Color(0x0b0b0c);
   const camera = new THREE.PerspectiveCamera(60, innerWidth / Math.max(1, innerHeight), 0.05, 600);
   camera.rotation.order = 'YXZ';
+  camera.layers.enable(LAYER_LATE); // the streamed tiles' water meshes live on the late layer (stream/TileObject.ts)
   scene.add(camera);
 
   // ---- minimal post: scene -> HalfFloat target -> exposure + AgX (final view) or passthrough (debug views)

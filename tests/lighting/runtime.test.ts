@@ -21,6 +21,7 @@ import { createLightingRuntime, FAR_FRACTION, FAR_WARM, sampleLightVolume } from
 import { createAnomalyDirector, sparkBurstTime, lightDiesRoll } from '../../src/lighting/anomalyDirector.ts';
 import { FLASHLIGHT } from '../../src/lighting/Flashlight.ts';
 import { createGlobals } from '../../src/materials/MaterialSystem.ts';
+import { LAYER_LATE } from '../../src/materials/shared.ts';
 
 // ---------------------------------------------------------------- fakes
 function globals(): MaterialGlobals {
@@ -297,6 +298,8 @@ describe('LightingRuntime', () => {
     const rt = createLightingRuntime(scene, globals(), textures, QUALITY.low, DEFAULT_SETTINGS, bus);
     const fl = rt.flashlight;
     expect(scene.children).toContain(fl.light);
+    // lit by both the opaque render (layer 0) and ScenePass's late render (LAYER_LATE only: water, sparks)
+    expect(fl.light.layers.isEnabled(0) && fl.light.layers.isEnabled(LAYER_LATE)).toBe(true);
     expect(fl.light.castShadow).toBe(true);
     expect(fl.light.shadow.camera.far).toBe(FLASHLIGHT.DISTANCE);
     expect(fl.light.distance).toBe(25);
@@ -369,6 +372,8 @@ describe('anomaly director', () => {
     const w = world(Zone.LOBBY, Mood.NORMAL, new Map([['0:0', lay]]), [fref]);
     const dir = createAnomalyDirector(bus, rt, scene);
     expect(scene.children.some((c) => c.name === 'sparks')).toBe(true);
+    // sparks draw only in the late render, after the opaque colour copy
+    expect(scene.getObjectByName('sparks')!.layers.mask).toBe(1 << LAYER_LATE);
     const p = player(4, 4);
     const T = 400;
     let expected = 0;
