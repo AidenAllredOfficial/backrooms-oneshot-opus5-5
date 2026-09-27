@@ -124,8 +124,12 @@ const float BR_WALPHA0[3] = float[3](${W.ALPHA0.map(f).join(', ')});
 const vec3 BR_WTEX_GAIN[3] = vec3[3](${W.TEX_GAIN.map(v3).join(', ')});
 const vec3 BR_WTEX_P = ${v3(W.TEX_PERIOD)};
 ${waveTablesGlsl()}
-// stored slope of the texture map at uv (repeat 1)
-vec2 brWaterTex( vec2 uv ) { return ( texture( uBrWaterNormals, uv ).rg * 2.0 - 1.0 ) * BR_WTEX_SCALE; }
+// stored slope of the texture map at uv (repeat 1), filtered isotropically over the pixel footprint (fp metres, the
+// layer period p): no anisotropic taps; the slope variance the filter removes becomes roughness (brWaterUnres)
+vec2 brWaterTex( vec2 uv, float fp, float p ) {
+	float lod = log2( max( fp / p * ${f(512)}, 1.0 ) );
+	return ( textureLod( uBrWaterNormals, uv, lod ).rg * 2.0 - 1.0 ) * BR_WTEX_SCALE;
+}
 float brWaterUnres( float s, float fp, float lam ) { float q = fp / lam; return 0.5 * s * s * ( 1.0 - exp( - 8.0 * q * q ) ); }
 
 // surface slope (dh/dx, dh/dz) at the world-periodic position pw; t time, kind, D depth (m), fp the pixel footprint
@@ -134,14 +138,14 @@ vec2 brWaterSlope( vec2 pw, float t, int kind, float D, float fp, out float var 
 	vec2 S = vec2( 0.0 );
 	var = 0.0;
 	vec3 g = BR_WTEX_GAIN[ kind ];
-	vec2 s1 = brWaterTex( pw / BR_WTEX_P.x + t * ${v2(W.TEX_DRIFT[0])} );
-	vec2 s2 = brWaterTex( pw.yx / BR_WTEX_P.y + t * ${v2(W.TEX_DRIFT[1])} ).yx;
+	vec2 s1 = brWaterTex( pw / BR_WTEX_P.x + t * ${v2(W.TEX_DRIFT[0])}, fp, BR_WTEX_P.x );
+	vec2 s2 = brWaterTex( pw.yx / BR_WTEX_P.y + t * ${v2(W.TEX_DRIFT[1])}, fp, BR_WTEX_P.y ).yx;
 	S += g.x * s1 + g.y * s2;
 	var += brWaterUnres( g.x * BR_WTEX_RMS, fp, BR_WTEX_P.x * BR_WTEX_FEATURE ) + brWaterUnres( g.y * BR_WTEX_RMS, fp, BR_WTEX_P.y * BR_WTEX_FEATURE );
 #if BR_WATER_WAVES > 0
 	// third octave on a 3-4-5 rotated lattice (0.6 NW / 1.92 and 0.8 NW / 1.92 are integers: still periodic)
 	const mat2 brR = mat2( 0.6, - 0.8, 0.8, 0.6 );
-	vec2 s3 = transpose( brR ) * brWaterTex( brR * pw / BR_WTEX_P.z + t * ${v2(W.TEX_DRIFT[2])} );
+	vec2 s3 = transpose( brR ) * brWaterTex( brR * pw / BR_WTEX_P.z + t * ${v2(W.TEX_DRIFT[2])}, fp, BR_WTEX_P.z );
 	S += g.z * s3;
 	var += brWaterUnres( g.z * BR_WTEX_RMS, fp, BR_WTEX_P.z * BR_WTEX_FEATURE );
 	float kd = max( D, 0.02 );
@@ -239,6 +243,7 @@ vec4 brWaterFlecks( vec2 pw, float t, int kind, float fpx ) {
 	vec2 q = pw / ${f(W.FLECK_CELL)} - 0.5;
 	ivec2 c0 = ivec2( floor( q ) );
 	vec4 acc = vec4( 0.0 );
+	if ( fpx > 0.05 ) return acc; // every fleck is sub-pixel
 	for ( int j = 0; j < 2; j ++ ) {
 		for ( int i = 0; i < 2; i ++ ) {
 			ivec2 c = c0 + ivec2( i, j );
@@ -255,9 +260,9 @@ vec4 brWaterFlecks( vec2 pw, float t, int kind, float fpx ) {
 			dv = vec2( dot( dv, cs ), dot( dv, vec2( - cs.y, cs.x ) ) / asp );
 			float dist = length( dv );
 			if ( dist > 1.6 * r + fpx ) continue;
-			// ragged outline: two angular harmonics of the radius
+			// ragged outline: a few weak angular harmonics of the radius (no single one dominates: no clover shapes)
 			float th = atan( dv.y, dv.x );
-			float re = r * ( 1.0 + 0.28 * sin( 3.0 * th + p1 ) + 0.14 * sin( 5.0 * th + p2 ) );
+			float re = r * ( 1.0 + 0.12 * sin( 2.0 * th + p1 ) + 0.1 * sin( 3.0 * th + p2 ) + 0.07 * sin( 5.0 * th + p1 + p2 ) );
 			float a = ( 1.0 - smoothstep( re - fpx, re + fpx, dist ) ) * smoothstep( 0.5, 1.5, r / max( fpx, 1e-5 ) ) * 0.9;
 			// soaked matter: grey paper, ceiling-tile crumbs, cardboard, dark lint
 			float pal = brU01( brPcg( h + 6u ) );
@@ -295,8 +300,8 @@ vec4 brWaterSubInfo( int f, float subDepth, float tintA, vec3 nWg ) {
 }
 #ifdef BR_CAUSTICS_FULL
 // Above-water caustics: pool-water coverage around p (tile-local xz) from the 4 nearest wall-mask cells (bilinear
-// over cell centres: spills ~0.6 m past the water's edge; flooded water x BR_CAUSTIC_ABOVE_FLOOD, films none), with
-// the mean surface height wy; cells behind a wall of the fragment's own cell do not count.
+// over cell centres: spills ~0.6 m past the water's edge; pools only), with the mean surface height wy; cells behind
+// a wall of the fragment's own cell do not count.
 float brWaterCover( vec2 p, out float wy ) {
 	vec2 cv = p / BR_CELL - 0.5;
 	ivec2 c0 = ivec2( floor( cv ) );
@@ -310,11 +315,11 @@ float brWaterCover( vec2 p, out float wy ) {
 			ivec2 c = c0 + ivec2( i, j );
 			float wyc;
 			int k;
-			if ( ! brWaterCell( c, wyc, k ) || k == 2 ) continue;
+			if ( ! brWaterCell( c, wyc, k ) || k != 0 ) continue;
 			ivec2 d = c - cs;
 			if ( ( d.x > 0 && ( wb & 2 ) != 0 ) || ( d.x < 0 && ( wb & 8 ) != 0 ) || ( d.y > 0 && ( wb & 4 ) != 0 ) || ( d.y < 0 && ( wb & 1 ) != 0 ) ) continue;
 			float w = ( i == 0 ? 1.0 - fr.x : fr.x ) * ( j == 0 ? 1.0 - fr.y : fr.y );
-			cov += w * ( k == 0 ? 1.0 : BR_CAUSTIC_ABOVE_FLOOD );
+			cov += w;
 			wy += w * wyc;
 			ws += w;
 		}

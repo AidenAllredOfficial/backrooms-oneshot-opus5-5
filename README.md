@@ -100,6 +100,8 @@ and `high` for everything else.
 | Surface shader detail | lite | full | full | full |
 | Bake workers (max) | 3 | 4 | 4 | 6 |
 | Water reflections | off | on | on | on |
+| Water surface: analytic waves / ripple simulation (texels) | 0 / off | 3 / 128² | 6 / 256² | 8 / 512² |
+| Water caustics above pools, flashlight caustics through water | off | off | on | on |
 | Render scale | 0.75 | 0.9 | 1.0 | 1.5 (supersampled) |
 
 Every preset uses dynamic resolution unless you turn it off. It budgets for at least 11 ms per frame, so on a

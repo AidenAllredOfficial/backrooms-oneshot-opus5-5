@@ -148,7 +148,8 @@ void main() {
 			refl = textureLod( uReflTex, ruv, lod ).rgb;
 		}
 	} else {
-		refl = mix( irr * BR_WATER_ENV_ALBEDO / BR_PI * BR_WATER_ENV_TINT, uFarColor, 0.25 );
+		// room-average environment: the atmosphere's haze tint is the room colour (warm Level 0, cool pool halls)
+		refl = mix( irr * BR_WATER_ENV_ALBEDO / BR_PI * uHazeTint, uFarColor, 0.25 );
 		vec3 rW = normalize( ( vec4( reflect( - V, nV ), 0.0 ) * viewMatrix ).xyz );
 		// the quad's own emitter plane and light region (0: the rect spans several regions, accept any emitter)
 		float rk = brAuxB.y + 256.0 * brAuxB.z;
@@ -224,9 +225,11 @@ void main() {
 #endif
 #ifdef BR_WATER_RIPPLE
 	// bubbles of the wading foam: a 2 cm value-noise froth thinned by the foam density
-	float fc = smoothstep( 0.05, 0.6, foam * brVNoise( pw / 0.02, ivec2( 61440 ), 919u ) ) * 0.8;
-	colPm = mix( colPm, irr / BR_PI * BR_FOAM_ALB[ kind ], fc );
-	A = mix( A, 1.0, fc );
+	if ( foam > 0.05 ) {
+		float fc = smoothstep( 0.05, 0.6, foam * brVNoise( pw / 0.02, ivec2( 61440 ), 919u ) ) * 0.8;
+		colPm = mix( colPm, irr / BR_PI * BR_FOAM_ALB[ kind ], fc );
+		A = mix( A, 1.0, fc );
+	}
 #endif
 	// ---- haze (F's API): the premultiplied layer keeps its own in-scatter share A; the floor below receives its own
 	// haze with weight 1 - A

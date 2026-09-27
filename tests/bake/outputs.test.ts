@@ -11,6 +11,7 @@ import { ChartKind } from '../../src/core/mesh.ts';
 import { bakeTile } from '../../src/bake/index.ts';
 import { fixtureRadiance, towerGroups, type ChunkLayout } from '../../src/core/layout.ts';
 import { makeNeighborhood } from '../../src/world/neighborhood.ts';
+import { tileWaterOf } from '../../src/stream/TileObject.ts';
 import { testSceneChunk } from '../../src/world/testScenes.ts';
 import { Q_HIGH, addLight, carveRoom, findChart, gridTexel, handNeighborhood, setEx, solidLayout, surfacesOf } from './helpers.ts';
 
@@ -200,6 +201,10 @@ describe('wall mask water channels (package E)', () => {
     expect(cell(3, 3)).toEqual({ wy: -0.1, kind: 0 });
     expect(cell(5, 4)).toEqual({ wy: -0.1, kind: 0 });
     expect(cell(9, 8)).toEqual({ wy: 0.25, kind: 1 });
+  });
+  it('the tile water flag is the kind mask (1 pool | 2 flooded | 4 film; stream/TileObject.ts)', () => {
+    expect(tileWaterOf(lm.volume.wallMask)).toBe(3);
+    expect(tileWaterOf(new Uint8Array(18 * 18 * 4))).toBe(0);
   });
   it('dry and SOLID cells have b = 0 (and the wall bits in r are unchanged)', () => {
     expect(cell(6, 3).kind).toBe(-1);

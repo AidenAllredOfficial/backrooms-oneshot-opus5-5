@@ -324,12 +324,11 @@ export const WATER_MEDIA = {
 } as const;
 
 /** Caustic strengths (package E; the pattern is chunks/common.ts brCausticsW): submerged walls (x the floors'
- * CAUSTIC_STRENGTH), and the zero-mean modulation of ceilings / walls above pool water (flooded water x 0.25). */
+ * CAUSTIC_STRENGTH), and the zero-mean modulation of ceilings / walls above pool water. */
 export const WATER_CAUSTICS = {
   WALL: 0.6,
   CEIL: 0.45,
   ABOVE_WALL: 0.2,
-  ABOVE_FLOOD: 0.25,
   /** the above-water net magnifies with the height h above the water (cells x (1 + MAGNIFY h)) and fades as
    * 1 / (1 + FADE h) */
   MAGNIFY: 0.33,
@@ -351,7 +350,6 @@ const float BR_WM_BLUR[3] = float[3](${M.BLUR.map(f).join(', ')});
 #define BR_CAUSTIC_WALL ${f(C.WALL)}
 #define BR_CAUSTIC_CEIL ${f(C.CEIL)}
 #define BR_CAUSTIC_ABOVE_WALL ${f(C.ABOVE_WALL)}
-#define BR_CAUSTIC_ABOVE_FLOOD ${f(C.ABOVE_FLOOD)}
 #define BR_CAUSTIC_MAGNIFY ${f(C.MAGNIFY)}
 #define BR_CAUSTIC_FADE ${f(C.FADE)}
 #define BR_CAUSTIC_SPOT_GAIN ${f(C.SPOT_GAIN)}

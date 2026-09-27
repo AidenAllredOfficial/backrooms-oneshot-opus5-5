@@ -110,11 +110,13 @@ function slotSpec(lm: LightmapData, slot: number, o: SlotSpec): SlotSpec {
 
 const EMPTY_BOUNDS = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
 
-/** Package E: 1 when the tile's wall mask has a water cell (b = kind + 1 != 0, bake/volume.ts bakeWallMask), which
- * gates the above-water caustics and the wet band on the tile's surfaces (uTileWater). */
+/** Package E: the water kinds in the tile's wall mask (b = kind + 1, bake/volume.ts bakeWallMask) as a bit mask,
+ * 1 pool | 2 flooded | 4 film; 0 = dry. uTileWater gates the wet band (any water) and the above-water caustics
+ * (pool water) on the tile's surfaces with one uniform branch. */
 export function tileWaterOf(wallMask: Uint8Array): number {
-  for (let i = 2; i < wallMask.length; i += 4) if (wallMask[i] !== 0) return 1;
-  return 0;
+  let m = 0;
+  for (let i = 2; i < wallMask.length; i += 4) if (wallMask[i] !== 0) m |= 1 << (wallMask[i] - 1);
+  return m;
 }
 
 const sameSize = (t: THREE.Texture, s: SlotSpec): boolean => {
