@@ -307,6 +307,7 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
         const prevWire = WIRE_PX.value;
         const prevView = globals.debugView.value;
         const prevMW = scene.matrixWorldAutoUpdate;
+        const prevRefl = REFL_PASS.value, prevMrt = MRT_PASS.value;
         const light = flashlight();
         const prevIntensity = light ? light.intensity : 0;
         globals.debugView.value = 0; // the capture always sees the lit scene (debug views sample the probe)
@@ -339,7 +340,8 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
           if (light) light.intensity = prevIntensity;
           renderer.xr.enabled = prevXr;
           renderer.shadowMap.autoUpdate = prevShadow;
-          REFL_PASS.value = 0;
+          REFL_PASS.value = prevRefl;
+          MRT_PASS.value = prevMrt;
           WIRE_PX.value = prevWire;
           globals.debugView.value = prevView;
           renderer.setRenderTarget(prevRT, prevFace, prevLevel);

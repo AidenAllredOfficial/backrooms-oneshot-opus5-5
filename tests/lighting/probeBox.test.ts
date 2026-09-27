@@ -1,6 +1,7 @@
 // tests/lighting/probeBox.test.ts — package D: the reflection probe's room box (lighting/probeBox.ts) from 12
-// horizontal rays: exact extents in a box room, a single pillar does not shrink it (per-axis median), an L-shaped
-// room, the clamps, and the floor / ceiling fallbacks.
+// horizontal rays plus parallel axis rays: exact extents in a box room, a single pillar does not shrink it (per-axis
+// median), an L-shaped room, corridors (their full length, but never through the doorway at their end), the clamps,
+// and the floor / ceiling fallbacks.
 
 import { describe, expect, it } from 'vitest';
 import { PROBE_BOX, probeBox } from '../../src/lighting/probeBox.ts';
@@ -47,7 +48,8 @@ describe('probeBox', () => {
       expect(b[1]).toBe(0);
       expect(b[4]).toBe(2.8);
     }
-    expect(w.rays).toBe(3 * PROBE_BOX.RAYS);
+    // 12 rays + 2 parallel rays per axis
+    expect(w.rays).toBe(3 * (PROBE_BOX.RAYS + 8));
     // the analytic exit distances agree with the marcher
     expect(rectExit(4, 3, 1, 0, 0, 8, 0, 6)).toBe(4);
   });
@@ -70,6 +72,32 @@ describe('probeBox', () => {
     expect(b[3] - 2).toBeLessThan(10);
     expect(b[5] - 2).toBeGreaterThan(1.5);
     expect(b[5] - 2).toBeLessThan(10);
+  });
+
+  it('a corridor keeps its length: the +-30 deg rays on the side walls only bound the axis from below', () => {
+    // 30 x 2.4 m; the +-30 deg rays meet the side walls 2.1 m ahead, which alone would end the box there
+    const w = world([[0, 30, 0, 2.4]]);
+    for (const [x, z] of [[5, 1.2], [5, 0.4], [20, 2.0]]) {
+      const b = probeBox(w, x, 1.62, z, 0, box());
+      expect(b[3], `+x from ${x},${z}`).toBeCloseTo(30, 1);
+      expect(b[0], `-x from ${x},${z}`).toBeCloseTo(0, 1);
+      expect(b[2]).toBeLessThanOrEqual(0.01);
+      expect(b[5]).toBeGreaterThanOrEqual(2.39);
+      expect(b[5] - b[2]).toBeLessThan(3.7); // the MIN clamp near a side wall adds at most 0.6 - 0.4
+    }
+  });
+
+  it('a corridor ending in a doorway: the parallel rays stop at the end wall (no box through the door)', () => {
+    // a 0.9 m door in the end wall (30.0-30.2) opening into a 10 x 12 m room; the anchor on the door's axis
+    const w = world([[0, 30, 0, 2.4], [29.9, 30.3, 0.75, 1.65], [30.2, 40, -5, 7]]);
+    const b = probeBox(w, 5, 1.62, 1.2, 0, box());
+    expect(b[3]).toBeCloseTo(30, 1);
+  });
+
+  it('a pillar on a corridor\'s axis: the parallel rays pass it', () => {
+    const w = world([[0, 10, 0, 2.4], [10.4, 30, 0, 2.4], [10, 10.4, 0, 1.0], [10, 10.4, 1.4, 2.4]]);
+    const b = probeBox(w, 5, 1.62, 1.2, 0, box());
+    expect(b[3]).toBeCloseTo(30, 1);
   });
 
   it('clamps the half-extents to [MIN, MAX]', () => {

@@ -1,7 +1,7 @@
 // tests/props/lockers.test.ts — locker banks dressed onto tall METAL_PAINTED PARTITION edges (lockers.ts via
 // buildTileProps): only locker-height metal partitions get them, valid geometry wound to its normals, the dressing
 // stays within the bank's slab + locker depth (+ ajar doors) and under the top cap, it covers both faces and the
-// top of the slab, detail per door, deterministic.
+// top of the slab, detail per door, the enamel's clearcoat bit, deterministic.
 
 import { describe, expect, it } from 'vitest';
 import { CELL, PARTITION_T } from '../../src/core/constants.ts';
@@ -70,6 +70,18 @@ describe('locker banks on tall metal partitions', () => {
     }
     expect(Math.min(zNeg, zPos, xNeg, xPos)).toBeGreaterThan(500);
     expect(cap).toBeGreaterThan(0);
+  });
+
+  it('the enamel paint carries the clearcoat bit (aux.z & 2); handles, plates and interiors do not', () => {
+    const m = buildTileProps(fakeNeighborhood(room(200)), key)!;
+    let coat = 0, bare = 0;
+    for (let v = 0; v < m.vertexCount; v++) {
+      if ((m.aux[v * 4 + 2] & 2) === 0) { bare++; continue; }
+      coat++;
+      expect(m.layer[v]).toBe(Mat.METAL_PAINTED);
+    }
+    expect(coat).toBeGreaterThan(m.vertexCount / 3);
+    expect(bare).toBeGreaterThan(0);
   });
 
   it('skips the face toward a SOLID cell and is deterministic', () => {

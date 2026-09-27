@@ -152,9 +152,10 @@ describe('probe in the lighting chunk', () => {
     expect(PROBE_GLSL).not.toContain('{ return 0.0; }');
   });
 
-  it('share: influence x roughness fade, never in reflection passes; the clearcoat takes the full influence', () => {
+  it('share: influence x roughness fade, never in reflection passes or under water; the clearcoat takes the full influence', () => {
     const blk = FRAG_LIGHTS_GLSL.slice(FRAG_LIGHTS_GLSL.indexOf('#ifdef BR_PROBE'));
-    expect(blk).toContain('if ( uBrReflPass < 0.5 && uBrProbeOn > 0.5 ) {');
+    // under water (submerged, or a wet floor under film water) the water mesh reflects the room: no second reflection
+    expect(blk).toContain('if ( uBrReflPass < 0.5 && uBrProbeOn > 0.5 && ! brUnderW ) {');
     expect(blk).toContain('brPrW = brPw * ( 1.0 - smoothstep( BR_PROBE_ROUGH0, BR_PROBE_ROUGH1, material.roughness ) );');
     expect(blk).toContain('brPrWc = brPw;');
   });

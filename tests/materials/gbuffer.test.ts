@@ -68,15 +68,19 @@ describe('G-buffer outputs', () => {
 });
 
 describe('lighting split (package D)', () => {
-  it('eligibility: MRT frame (or the specw view), no emitter, not submerged, a glossy routed lobe, never on decals', () => {
+  it('eligibility: MRT frame (or the specw view), no emitter, not under water, a glossy routed lobe, never on decals', () => {
     const decide = FRAG_LIGHTS_GLSL.slice(FRAG_LIGHTS_GLSL.indexOf('#if defined( BR_SSR ) && ! defined( BR_DECAL )'));
-    expect(decide).toMatch(/brMrtSpec = \( uBrMrt > 0\.5 \|\| uDebugView == \d+ \) && vBrEmit <= 0\.0 && brSubInfo\.x <= 0\.0/);
+    expect(decide).toMatch(/brMrtSpec = \( uBrMrt > 0\.5 \|\| uDebugView == \d+ \) && vBrEmit <= 0\.0 && ! brUnderW/);
     // the routed lobe: a clearcoat pixel's lacquer, else the base
     expect(decide).toMatch(/float brLobeR = material\.roughness;\s*#ifdef USE_CLEARCOAT\s*if \( brCoat \) brLobeR = material\.clearcoatRoughness;\s*#endif/);
     expect(decide).toContain('&& brLobeR < BR_SSR_ELIG_ROUGH;');
     expect(FRAG_LIGHTS_GLSL).toContain(`#define BR_SSR_ELIG_ROUGH ${SSR.ELIG_ROUGH}`);
-    // a wet floor under a water surface keeps its specular inline (the water mesh reflects)
-    expect(decide).toContain('brWaterCell( ivec2( floor( vBrLocal.xz / BR_CELL ) ), brWy, brWk ) && brWy > vBrLocal.y - 0.01');
+    // under water: submerged, or a wet floor under a water surface (the water mesh reflects); decided before the split
+    // and the probe, for both
+    const uw = FRAG_LIGHTS_GLSL.indexOf('bool brUnderW = brSubInfo.x > 0.0;');
+    expect(uw).toBeGreaterThan(0);
+    expect(uw).toBeLessThan(FRAG_LIGHTS_GLSL.indexOf('#if defined( BR_SSR ) && ! defined( BR_DECAL )'));
+    expect(FRAG_LIGHTS_GLSL).toContain('brWaterCell( ivec2( floor( vBrLocal.xz / BR_CELL ) ), brWy, brWk ) && brWy > vBrLocal.y - 0.01 ) brUnderW = true;');
   });
 
   it('RE_Direct is called once (not inlined: sheen and clearcoat stay exact) and the baked lobe moves by difference', () => {

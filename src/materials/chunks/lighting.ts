@@ -13,7 +13,8 @@
 //    operands are rounded exactly as before (the preset images stay bit-identical).
 //  - brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brMrtRough, brMrtN: the specular G-buffer split (package D;
 //    chunks/haze.ts writes them to MRT attachments 1 and 2 under BR_SSR). On MRT frames (uBrMrt) a glossy,
-//    non-emissive, dry pixel moves its replaceable specular out of the inline sum: the baked dominant-direction lobe
+//    non-emissive pixel that is not under water (brUnderW: submerged, or a wet floor under a film-water surface,
+//    whose reflection the water mesh draws) moves its replaceable specular out of the inline sum: the baked dominant-direction lobe
 //    (the difference of reflectedLight.directSpecular across RE_Direct: three's sheen / clearcoat terms stay exact)
 //    and the environment radiance (uniform, or the reflection probe's). Clearcoat pixels (props with the coat bit)
 //    route their lacquer lobe instead (clearcoatSpecularDirect's difference, the coat environment) and keep the base
@@ -21,7 +22,7 @@
 //    (post/frame/MrtComposite.ts) replaces it by confidence, so a screen-space miss falls back to the probe.
 //  - brPrW / brPrWc: the reflection probe's share (package D, chunks/probe.ts, BR_PROBE) of the base / clearcoat
 //    environment: the baked dominant-direction lobe fades out by (1 - share) and the uniform environment is mixed
-//    toward the box-projected, lightmap-normalised probe radiance. three leaves clearcoatRadiance at 0 (this chunk
+//    toward the box-projected, lightmap-normalised probe radiance (not under water either). three leaves clearcoatRadiance at 0 (this chunk
 //    replaces lights_fragment_maps): it is set here, from the probe or the uniform environment.
 //  - High / ultra (BR_SSR or BR_PROBE) compile the emission-map reflection out (BR_EM_REFL, chunks/common.ts: the
 //    surface sampler budget; SSR and the probe replace it). Medium keeps it.
@@ -89,33 +90,37 @@ bool brMrtSpec = false;
 vec3 brFbDir = vec3( 0.0 ), brFbEnv = vec3( 0.0 ), brFbSpec = vec3( 0.0 );
 float brWs = 0.0, brMrtRough = 1.0;
 vec3 brMrtN = normal; // the routed lobe's normal (att2): the shading normal, or the clearcoat's
+// under water: submerged (the water body's optics act on the whole radiance), or a glossy wet floor under a water
+// surface in the wall mask (film water over puddles). The water mesh reflects the room at its surface: neither SSR
+// nor the reflection probe may reflect it a second time from the floor below (package D)
+bool brUnderW = brSubInfo.x > 0.0;
+#if defined( BR_SSR ) || defined( BR_PROBE )
+if ( ! brUnderW && uTileWater > 0.5 && material.roughness < BR_SSR_ELIG_ROUGH ) {
+	float brWy;
+	int brWk;
+	if ( brWaterCell( ivec2( floor( vBrLocal.xz / BR_CELL ) ), brWy, brWk ) && brWy > vBrLocal.y - 0.01 ) brUnderW = true;
+}
+#endif
 #if defined( BR_SSR ) && ! defined( BR_DECAL )
 // MRT frame: the routed lobe (a clearcoat pixel's lacquer, else the base) glossy (below BR_SSR_ELIG_ROUGH), not an
-// emitter, not submerged (the water body's optics act on the whole radiance).
-// The specw debug view evaluates the split without MRT (its output replaces the colour).
+// emitter, not under water. The specw debug view evaluates the split without MRT (its output replaces the colour).
 float brLobeR = material.roughness;
 #ifdef USE_CLEARCOAT
 if ( brCoat ) brLobeR = material.clearcoatRoughness;
 #endif
-brMrtSpec = ( uBrMrt > 0.5 || uDebugView == ${DebugView.SPECW} ) && vBrEmit <= 0.0 && brSubInfo.x <= 0.0
+brMrtSpec = ( uBrMrt > 0.5 || uDebugView == ${DebugView.SPECW} ) && vBrEmit <= 0.0 && ! brUnderW
 	&& brLobeR < BR_SSR_ELIG_ROUGH;
-if ( brMrtSpec && uTileWater > 0.5 ) {
-	// a wet floor under a water surface (film water over puddles): the water mesh reflects the room, a traced
-	// reflection of the floor below it would double it
-	float brWy;
-	int brWk;
-	if ( brWaterCell( ivec2( floor( vBrLocal.xz / BR_CELL ) ), brWy, brWk ) && brWy > vBrLocal.y - 0.01 ) brMrtSpec = false;
-}
 #endif
 // ---- reflection probe (package D, chunks/probe.ts): brPrW = its share of the base lobe's environment (influence x
 // roughness fade), brPrWc of the clearcoat lobe's (the lacquer is always glossy); brPrRad / brPrRadC = the
 // box-projected, normalised probe radiance of each lobe. Not in reflection passes (the planar mirror, the probe's own
 // capture): the camera-relative box belongs to the main camera, and a capture never sees the probe (no feedback).
+// Not under water (brUnderW): those keep the legacy uniform environment.
 float brPrW = 0.0, brPrWc = 0.0;
 vec3 brPrRad = vec3( 0.0 ), brPrRadC = vec3( 0.0 );
 #ifdef BR_PROBE
 vec3 brPc = ( vec4( geometryPosition, 0.0 ) * viewMatrix ).xyz; // camera-relative world position
-if ( uBrReflPass < 0.5 && uBrProbeOn > 0.5 ) {
+if ( uBrReflPass < 0.5 && uBrProbeOn > 0.5 && ! brUnderW ) {
 	float brPw = brProbeWeight( brPc );
 	brPrW = brPw * ( 1.0 - smoothstep( BR_PROBE_ROUGH0, BR_PROBE_ROUGH1, material.roughness ) );
 	if ( brPrW > 0.0 ) {
