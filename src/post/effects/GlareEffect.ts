@@ -345,6 +345,10 @@ export class GlareChain extends Pass {
     const L = this.levels;
     const star = starW > 0 && this.star !== null && L > 1;
     const ghost = ghostW > 0 && this.ghost !== null && L > 1;
+    // every pass overwrites its whole target, and the second star axis ADDS onto the first: never clear (the composer
+    // runs with autoClear off, but do not depend on it)
+    const autoClear = renderer.autoClear;
+    renderer.autoClear = false;
     // 1. prefilter (full res -> D0, per-tap clamp, motion-blurred while the camera moves) and the downs
     const pm = this.preMat.uniforms;
     pm.tIn.value = input;
@@ -421,6 +425,7 @@ export class GlareChain extends Pass {
       this.draw(renderer, m, dst);
     }
     this.fullscreenMaterial = this.downMat;
+    renderer.autoClear = autoClear;
   }
 
   /** Every material of the chain (quality-switch warm-up). */
@@ -462,7 +467,9 @@ export class GlareEffect extends Effect {
   private readonly uK: THREE.Uniform<number>;
   private readonly uGlare: THREE.Uniform<THREE.Texture | null>;
   private motion: MotionBlurState | null = null;
-  private depth: THREE.Texture | null = null;
+  // the composer's depth texture, boxed: Effect.dispose() disposes every own Texture property, and this one is the
+  // composer's, not ours
+  private readonly depthRef: { tex: THREE.Texture | null } = { tex: null };
   private k = 0;
   private starGain = 0;
   private ghostGain = 0;
@@ -520,12 +527,13 @@ export class GlareEffect extends Effect {
 
   override setDepthTexture(depthTexture: THREE.Texture, depthPacking?: THREE.DepthPackingStrategies): void {
     super.setDepthTexture(depthTexture, depthPacking);
-    this.depth = depthTexture;
+    this.depthRef.tex = depthTexture;
   }
 
   override update(renderer: THREE.WebGLRenderer, inputBuffer: THREE.WebGLRenderTarget): void {
     const on = this.active && this.k > 0;
-    const motion = this.motion && this.depth ? { state: this.motion, depth: this.depth } : null;
+    const depth = this.depthRef.tex;
+    const motion = this.motion && depth ? { state: this.motion, depth } : null;
     if (on) {
       this.chain.run(renderer, inputBuffer.texture, inputBuffer.width, inputBuffer.height, this.exposure,
         this.starGain / this.k, this.ghostGain / this.k, motion);
