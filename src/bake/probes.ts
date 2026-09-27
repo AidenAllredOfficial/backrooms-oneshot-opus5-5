@@ -15,11 +15,12 @@
 // cube per channel (ProbeSet.dyn), so flickering panels light the ceiling and walls around them indirectly like
 // the static lights do (the old per-light constant 0.3 * rho * Y_mean left a black ceiling around them).
 // With `farR` > 0 (full bakes with the near-field gather) every probe also stores its FAR field (ProbeSet.far*, the
-// dynamic channel cubes included): the same rays with the prop boxes entered within farR m transparent (a ray hitting a desk top 0.3 m above a low
-// probe is traced on past it). Receivers in the near-field region blend towards it by their nearWeight, and the
-// gather then puts the props within its own NEAR.R back (visibility + box bounce): a probe under a desk top or a
-// chair seat no longer darkens the under-desk floor a second time (the traced V multiplied the probe's own view of
-// the same desk), while probes away from the region keep the props (tall racks still shade the aisles).
+// dynamic channel cubes included): the same rays with the prop boxes entered within farR m transparent (a ray
+// hitting a desk top 0.3 m above a low probe is traced on past it). Receivers in the near-field region blend towards
+// it by their nearWeight, and the gather then puts the props within its own NEAR.R back (visibility + box bounce): a
+// probe under a desk top or a chair seat no longer darkens the under-desk floor a second time (the traced V
+// multiplied the probe's own view of the same desk), while probes away from the region keep the props (tall racks
+// still shade the aisles).
 
 import { CELL, LIGHT } from '../core/constants.ts';
 import { CellFlag } from '../core/ids.ts';
