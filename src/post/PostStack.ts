@@ -360,6 +360,9 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       }
       applyEnabled();
     },
+    setReflectionDebug(mode) {
+      renderPass.composite.setDebug(mode); // package D: URL reflView (the SSR composite's debug outputs)
+    },
     setExposureLock(ev100) {
       lockedEv = ev100 === null || !Number.isFinite(ev100) ? null : ev100;
       if (lockedEv !== null) { spring.ev = lockedEv; spring.vel = 0; }

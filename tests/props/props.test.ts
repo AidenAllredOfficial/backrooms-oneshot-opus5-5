@@ -3,7 +3,7 @@
 // winding matches normals; outward normals (sampled ray tests); CEILING mirroring; PROP_AUX metadata.
 
 import { describe, expect, it } from 'vitest';
-import { PROP_KIND_COUNT, PropFlag, VFlag, type PropKindId } from '../../src/core/ids.ts';
+import { Mat, PROP_KIND_COUNT, PropFlag, VFlag, type PropKindId } from '../../src/core/ids.ts';
 import type { PropPlacement } from '../../src/core/layout.ts';
 import { PROP_DEFS } from '../../src/core/props.ts';
 import { GeometryWriter } from '../../src/core/writer.ts';
@@ -151,13 +151,32 @@ describe('WP6 props: every kind, variant and yaw', () => {
         const f = m.flags[i];
         const dyn = (f & (VFlag.DYN_EMIT | VFlag.SHIMMER)) !== 0;
         if ((f & VFlag.PROP_AUX) === 0 || (f & VFlag.FLOOR_AUX) !== 0) bad.push(`${kind}: flags ${f}`);
-        if (m.aux[i * 4 + 1] !== 0 || m.aux[i * 4 + 2] !== 1) bad.push(`${kind}: aux.yz`);
+        // aux.z = the anchor's bits; bit 1 = clearcoat on coated parts (car paint)
+        if (m.aux[i * 4 + 1] !== 0 || (m.aux[i * 4 + 2] & ~2) !== 1) bad.push(`${kind}: aux.yz`);
         if (!dyn && (m.aux[i * 4 + 3] !== 57 || m.tint[i * 4 + 3] !== 0xa7)) bad.push(`${kind}: aux.w / tint.a`);
         if (m.lmUv[i * 2] !== 0 || m.lmUv[i * 2 + 1] !== 0) bad.push(`${kind}: lmUv`);
         if (bad.length > 5) break;
       }
     }
     expect(bad).toEqual([]);
+  });
+
+  it('clearcoat bit (aux.z & 2): the car body and pillar paint, nothing else of the car and no other kind', () => {
+    const CAR = PROP_DEFS.findIndex((d) => d.name === 'CAR_SEDAN');
+    for (const kind of KINDS) {
+      for (let v = 0; v < PROP_VARIANTS; v++) {
+        const m = build(place(kind, v));
+        let coat = 0;
+        for (let i = 0; i < m.vertexCount; i++) {
+          if ((m.flags[i] & (VFlag.DYN_EMIT | VFlag.SHIMMER)) !== 0 || m.emit[i] > 0) continue; // emitters: profile bits
+          if ((m.aux[i * 4 + 2] & 2) === 0) continue;
+          coat++;
+          expect(m.layer[i], `${PROP_DEFS[kind].name} v${v}`).toBe(Mat.METAL_PAINTED);
+        }
+        if (kind === CAR) expect(coat, `CAR_SEDAN v${v}`).toBeGreaterThan(m.vertexCount / 6); // body + pillars (wheels are dense)
+        else expect(coat, PROP_DEFS[kind].name).toBe(0);
+      }
+    }
   });
 
   it('SHELF_RACK variant 2 is the collapsed rack and CAR_SEDAN variant 3 has the driver door open', () => {

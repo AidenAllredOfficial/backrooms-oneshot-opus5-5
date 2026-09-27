@@ -101,6 +101,8 @@ and `high` for everything else.
 | Surface shader detail | lite | full | full | full |
 | Bake workers (max) | 3 | 4 | 4 | 6 |
 | Water reflections | off | on | on | on |
+| Screen-space reflections (half resolution, up to roughness) | off | off | 0.45 | 0.6, filtered |
+| Reflection probe (box-projected cube, face size) | off | off | 128 | 256 |
 | Water surface: analytic waves / ripple simulation (texels) | 0 / off | 3 / 128² | 6 / 256² | 8 / 512² |
 | Water caustics above pools, flashlight caustics through water | off | off | on | on |
 | Volumetric haze (froxels) and dust motes | off | off | on, 3000 motes | on, 6000 motes |

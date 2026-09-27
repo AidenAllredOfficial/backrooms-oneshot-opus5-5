@@ -60,7 +60,7 @@ gl_FragColor.rgb = min( max( gl_FragColor.rgb, vec3( 0.0 ) ), vec3( BR_HDR_CLAMP
 #ifdef BR_SSR
 {
 	// specular G-buffer (package D fills the split in chunks/lighting.ts): att1 = fallback specular x haze
-	// transmittance and Ws x T, att2 = oct view normal + lobe roughness. Decals blend att1 with (Zero,
+	// transmittance and Ws x T, att2 = oct view normal + roughness of the routed lobe (base or clearcoat). Decals blend att1 with (Zero,
 	// OneMinusSrcAlpha) on alpha, which attenuates the surface's specular weight under them by their coverage; att2
 	// keeps the surface below (src alpha 0).
 	vec4 brO1 = vec4( 0.0 ), brO2 = vec4( 0.0 );
@@ -68,7 +68,7 @@ gl_FragColor.rgb = min( max( gl_FragColor.rgb, vec3( 0.0 ) ), vec3( BR_HDR_CLAMP
 	if ( uDebugView == 0 && brMrtSpec ) {
 		float brT = brHazeT( - vViewPosition );
 		brO1 = vec4( min( brFbSpec * brT, vec3( BR_HDR_CLAMP ) ), brWs * brT );
-		brO2 = vec4( brOctEnc( normalize( normal ) ), brMrtRough, 1.0 );
+		brO2 = vec4( brOctEnc( normalize( brMrtN ) ), brMrtRough, 1.0 );
 	}
 #else
 	brO1 = vec4( 0.0, 0.0, 0.0, gl_FragColor.a );

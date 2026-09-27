@@ -1,6 +1,7 @@
-// src/props/car.ts — CAR_SEDAN (§5 WP6): a mid-size sedan, <= 2500 triangles. METAL_PAINTED body, dark glass,
-// RUBBER tyres, silver rims; variant 3 = driver door open (narrower compact body so the door stays inside the
-// PROP_DEFS footprint; see docs/contract-changes/WP6.md). Front faces -Z. Pure module (no three/DOM).
+// src/props/car.ts — CAR_SEDAN (§5 WP6): a mid-size sedan, <= 2500 triangles. METAL_PAINTED body and pillars under
+// a clearcoat (aux.z bit 1: the lacquer lobe, chunks/materialPost.ts), dark glass, RUBBER tyres, silver rims; variant
+// 3 = driver door open (narrower compact body so the door stays inside the PROP_DEFS footprint; see
+// docs/contract-changes/WP6.md). Front faces -Z. Pure module (no three/DOM).
 //
 // Body: the side profile (z, y) with wheel-arch cut-outs is split at the door shut lines into four sections, each a
 // chamfered extrusion across the width (the chamfer grooves between sections read as panel gaps). The greenhouse
@@ -88,7 +89,7 @@ function greenhouse(b: PartBuilder, hw: number, paint: RGB): void {
     const l = Math.hypot(ny, nz) || 1;
     ny /= l; nz /= l;
     if (GH_GLASS[s]) b.mat(Mat.PLASTIC, GLASS[0], GLASS[1], GLASS[2], 0, 0.05);
-    else b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25);
+    else b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25, true);
     const wa = hwAt(ya), wb = hwAt(yb);
     const len = Math.hypot(zb - za, yb - ya);
     b.quad(b.v(-wa, ya, za, 0, ny, nz, -wa, 0), b.v(wa, ya, za, 0, ny, nz, wa, 0), b.v(wb, yb, zb, 0, ny, nz, wb, len), b.v(-wb, yb, zb, 0, ny, nz, -wb, len));
@@ -113,7 +114,7 @@ function greenhouse(b: PartBuilder, hw: number, paint: RGB): void {
   for (const s of [-1, 1]) {
     b.mat(Mat.PLASTIC, GLASS[0], GLASS[1], GLASS[2], 0, 0.05);
     side(GH, s, 0);
-    b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25);
+    b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25, true);
     side(A, s, 0.003);
     side(RAIL, s, 0.003);
     side(B, s, 0.003);
@@ -141,7 +142,7 @@ export const carSedan: PropBuild = (b, v) => {
   const prof = sideProfile();
   const cuts = [-2.3, -0.95, 0.12, 0.98, 2.3];
   const C = 0.045;
-  b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25);
+  b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25, true);
   for (let s = 0; s < 4; s++) {
     const sec = clipZ(prof, cuts[s], cuts[s + 1]);
     if (open && s === 1) {
@@ -157,7 +158,7 @@ export const carSedan: PropBuild = (b, v) => {
       section(b, sec, -hw, -hw + DT, 0.02);
       b.mat(Mat.METAL_PAINTED, 0.5, 0.5, 0.48, 0, 0.25);
       box(b, -hw - 0.015, 0.73, -0.25, -hw, 0.75, -0.13, SKIP.PX); // handle
-      b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25);
+      b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25, true);
       b.pop();
     } else section(b, sec, -hw, hw, C);
   }

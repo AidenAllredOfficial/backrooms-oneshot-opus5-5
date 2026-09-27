@@ -86,6 +86,8 @@ function setup(q: QualityConfig, opts: { water?: boolean; waterInView?: boolean;
 }
 
 const seq = (ev: Ev[]): string[] => ev.map((x) => x.e);
+// high without SSR (package D turns it on at high / ultra): the plain split path without MRT
+const HIGH_PLAIN: QualityConfig = { ...QUALITY.high, ssr: 'off' };
 
 describe('ScenePass frame graph', () => {
   it('low / medium: one prepass + shading render into the input buffer, no split, no MRT (water in view)', () => {
@@ -101,7 +103,7 @@ describe('ScenePass frame graph', () => {
   });
 
   it('high with water in view: split frame (opaque without LAYER_LATE, pyramid, afterOpaque, late render)', () => {
-    const t = setup(QUALITY.high);
+    const t = setup(HIGH_PLAIN);
     t.run();
     expect(seq(t.events)).toEqual(['clear', 'prepass', 'hook:ssao', 'hook:hiz', 'shade', 'quad:br-pyramid-full', 'hook:ssr', 'late']);
     const ev = (e: string): Ev => t.events.find((x) => x.e === e) as Ev;
@@ -130,12 +132,12 @@ describe('ScenePass frame graph', () => {
 
   it('no split without a late mesh in view, nor in debug views other than WATER', () => {
     for (const o of [{ waterInView: false }, { water: false }, { debugView: DebugView.ALBEDO }]) {
-      const t = setup(QUALITY.high, o);
+      const t = setup(HIGH_PLAIN, o);
       t.run();
       expect(seq(t.events)).toEqual(['clear', 'prepass', 'hook:ssao', 'hook:hiz', 'shade', 'hook:ssr']);
       expect((t.events.find((x) => x.e === 'shade') as Ev).mask).toBe(1 | (1 << LAYER_LATE));
     }
-    const w = setup(QUALITY.high, { debugView: DebugView.WATER });
+    const w = setup(HIGH_PLAIN, { debugView: DebugView.WATER });
     w.run();
     expect(w.pass.lastFrame.split).toBe(true);
   });
@@ -180,7 +182,7 @@ describe('ScenePass frame graph', () => {
   });
 
   it('hooks run in order within a stage and can be removed; ctx carries the depth of the target', () => {
-    const t = setup(QUALITY.high);
+    const t = setup(HIGH_PLAIN);
     const remove = t.pass.addHook('afterDepth', { name: 'vol', order: 40, run: () => { t.events.push({ e: 'hook:vol' }); } });
     t.pass.addHook('afterDepth', { name: 'atlas', order: 30, run: () => { t.events.push({ e: 'hook:atlas' }); } });
     t.run();

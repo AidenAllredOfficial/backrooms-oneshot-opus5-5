@@ -8,9 +8,15 @@
 //    box over the texel's footprint (about 3x3 source texels at 0.67).
 //  - a = the linear view depth (positive metres; the far plane where nothing was drawn) of the NEAREST full-resolution
 //    depth texel: read it with texelFetch on level 0 only (the mip chain averages it).
+//  - rgb is clamped to PYR_MAX (about half the surfaces' HDR_CLAMP): gl.generateMipmap of an RGBA16F texture sums a 2x2
+//    block in half precision on some drivers (NVIDIA GL), so lamps at the clamp overflowed to Inf in the mips, which
+//    the SSR cone lookups turned into fireflies (WAREHOUSE high-bays; a red dot where only R overflowed).
 
 import * as THREE from 'three';
 import { FullscreenQuad, quadMaterial } from './quad.ts';
+
+/** nits: the largest colour the pyramid stores (4 x it stays below the half-float maximum 65504) */
+export const PYR_MAX = 16000;
 
 const FRAG = /* glsl */ `
 precision highp float;
@@ -36,7 +42,7 @@ void main() {
 	float d = texelFetch( tDepth, p, 0 ).x;
 	// window depth -> positive view distance (perspective; the SSAO pass linearises the same way)
 	float z = d >= 1.0 ? uFar : uNear * uFar / ( uFar - d * ( uFar - uNear ) );
-	outColor = vec4( c, z );
+	outColor = vec4( min( c, vec3( ${PYR_MAX.toFixed(1)} ) ), z ); // the mips must not overflow half floats
 }
 `;
 

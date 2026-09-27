@@ -245,14 +245,31 @@ describe('surface sampler budget (16 texture units)', () => {
   it('BR_SSR compiles the floor planar path (uReflTex) out of every surface program; water keeps it', () => {
     const on = CASES.find(([n]) => n === 'every define on')![1];
     for (const b of on) expect(b.samplers.has('uReflTex'), b.variant).toBe(b.variant === 'water');
-    // without SSR and the froxel volume: the shell / props floors and water read the planar reflection (decals have
-    // no reflection block); package F's volume (high / ultra) takes that unit until SSR supersedes the path anyway
+    // without SSR and the froxel volume (medium): the shell / props floors and water read the planar reflection
+    // (decals have no reflection block); high and ultra trace SSR instead, and package F's volume takes the unit
     const medium = CASES.find(([n]) => n === 'medium')![1];
     for (const b of medium) expect(b.samplers.has('uReflTex'), b.variant).toBe(b.variant !== 'decal');
     for (const n of ['high', 'ultra']) {
       for (const b of CASES.find(([c]) => c === n)![1]) {
         expect(b.samplers.has('uReflTex'), `${n} ${b.variant}`).toBe(b.variant === 'water');
         expect(b.samplers.has('uVolTex'), `${n} ${b.variant}`).toBe(true);
+      }
+    }
+  });
+
+  it('high / ultra swap the emission map for the reflection probe (lead decision); medium keeps it, water keeps it', () => {
+    // under BR_SSR || BR_PROBE the surface programs compile out brEmissionRefl and the EMISSION view's fetch, and
+    // the probe cube takes the unit (package D)
+    for (const n of ['high', 'ultra', 'high (final flags)', 'ultra (final flags)', 'every define on']) {
+      for (const b of CASES.find(([c]) => c === n)![1]) {
+        expect(b.samplers.has('uEmission'), `${n} ${b.variant}`).toBe(b.variant === 'water');
+        expect(b.samplers.has('uBrProbe'), `${n} ${b.variant}`).toBe(b.variant !== 'water');
+      }
+    }
+    for (const n of ['low', 'medium']) {
+      for (const b of CASES.find(([c]) => c === n)![1]) {
+        expect(b.samplers.has('uEmission'), `${n} ${b.variant}`).toBe(true);
+        expect(b.samplers.has('uBrProbe'), `${n} ${b.variant}`).toBe(false);
       }
     }
   });

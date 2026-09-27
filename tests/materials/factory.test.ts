@@ -347,14 +347,16 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
   });
 
   it('decals blend the SSR attachment alpha with (Zero, OneMinusSrcAlpha) only when SSR is on', () => {
-    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.high);
+    sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.medium);
     const d = sys.createTileMaterials(false).decal;
     expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([null, null, null]);
     applySurfaceDefines(d, 'decal', ALL_ON);
     expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([THREE.ZeroFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
     expect([d.blendSrc, d.blendDst, d.blendEquation]).toEqual([THREE.OneFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
-    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.high));
+    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.medium));
     expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([null, null, null]);
+    applySurfaceDefines(d, 'decal', qualityDefinesOf(QUALITY.high)); // high / ultra trace SSR
+    expect([d.blendSrcAlpha, d.blendDstAlpha, d.blendEquationAlpha]).toEqual([THREE.ZeroFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation]);
   });
 
   it('program keys differ for every single-field change (no token collisions)', () => {

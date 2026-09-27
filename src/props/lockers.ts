@@ -62,7 +62,8 @@ function styleOf(l: ChunkLayout, s: number, cx: number, cz: number, li: number, 
   return { paint, tiers, numBase: 100 * (1 + ((hash4(h, line, 5, 1) >>> 7) % 8)) };
 }
 
-const paintMat = (c: RGB, k: number, rough = 0.38): void => B.mat(Mat.METAL_PAINTED, c[0] * k, c[1] * k, c[2] * k, 0, rough);
+// enamel paint: a clearcoat lobe over the base (aux.z bit 1; dust dulls it, chunks/materialPost.ts)
+const paintMat = (c: RGB, k: number, rough = 0.38): void => B.mat(Mat.METAL_PAINTED, c[0] * k, c[1] * k, c[2] * k, 0, rough, true);
 
 /** 1..3 seven-segment digits centred at (cx, cy) on the plane z (facing +Z). */
 function digits(n: number, cx: number, cy: number, z: number): void {
