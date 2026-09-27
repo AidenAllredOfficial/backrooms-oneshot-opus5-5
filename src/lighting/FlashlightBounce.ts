@@ -278,12 +278,25 @@ export function createFlashlightBounce(): FlashlightBounce {
   let active = 0;
   let storey = -1;
 
-  const fillOf = (world: WorldQuery, x: number, z: number): Float64Array => {
+  // the angular bins integrate the beam profile (~10 ms the first time, before the JIT warms up): build them with
+  // the runtime instead of on the frame the torch first turns on
+  bounceBins(4);
+  bounceBins(8);
+
+  /** The room box of the cell holding (x, z). `fresh`: ignore the cache (frozen / hitched frames: a box cached
+   * while a neighbouring chunk was still streaming in must not decide a capture). */
+  const fillOf = (world: WorldQuery, x: number, z: number, fresh: boolean): Float64Array => {
     const key = cellKey(worldToCell(x), worldToCell(z));
     const f = fills.get(key);
-    if (f && frame - f.frame <= B.FILL_TTL) return f.box;
+    if (f && (f.frame === frame || (!fresh && frame - f.frame <= B.FILL_TTL))) return f.box;
+    if (f) {
+      // refresh in place (frozen captures refresh every frame: no allocation)
+      f.frame = frame;
+      roomBox(world, x, z, f.box);
+      return f.box;
+    }
     if (fills.size > 128) fills.clear();
-    const b = f ? f.box : new Float64Array(4);
+    const b = new Float64Array(4);
     roomBox(world, x, z, b);
     fills.set(key, { frame, box: b });
     return b;
@@ -346,7 +359,7 @@ export function createFlashlightBounce(): FlashlightBounce {
         tg[o + 8] = f * inp.cb * hit.b * multiBounce(hit.b);
         const ci = Math.max(B.PATCH_COS_MIN, Math.abs(vx * hit.nx + vy * hit.ny + vz * hit.nz));
         tg[o + 9] = Math.max(B.EPS2, (hit.t * hit.t * bin.omega) / (Math.PI * ci));
-        const rb = fillOf(world, tg[o] + hit.nx * 0.05, tg[o + 2] + hit.nz * 0.05);
+        const rb = fillOf(world, tg[o] + hit.nx * 0.05, tg[o + 2] + hit.nz * 0.05, snap);
         tg[o + 10] = rb[0]; tg[o + 11] = rb[1]; tg[o + 12] = rb[2]; tg[o + 13] = rb[3];
         tg[o + S_ON] = 1; tg[o + S_ISO] = 0;
       }

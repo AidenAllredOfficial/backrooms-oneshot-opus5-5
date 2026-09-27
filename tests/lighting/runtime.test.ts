@@ -304,7 +304,7 @@ describe('LightingRuntime', () => {
     expect(fl.light.castShadow).toBe(true);
     expect(fl.light.shadow.camera.far).toBe(FLASHLIGHT.DISTANCE);
     expect(fl.light.distance).toBe(FLASHLIGHT.DISTANCE);
-    // package F optics: one source for the photometry; the cookie spans exactly the cone (focus 1)
+    // package F optics: one source for the photometry; the cookie and the shadow map span the cone x MAP_FOCUS
     expect(fl.light.intensity).toBe(0);
     expect(FLASHLIGHT.CD).toBe(FLASHLIGHT_OPTICS.PEAK_CD);
     expect(fl.light.angle).toBe(FLASHLIGHT_OPTICS.CONE);

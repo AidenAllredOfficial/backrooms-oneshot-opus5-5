@@ -15,6 +15,7 @@ import {
   type BounceUniforms,
 } from '../../src/lighting/FlashlightBounce.ts';
 import { beamFluxLm, FLASHLIGHT_OPTICS } from '../../src/lighting/flashlightOptics.ts';
+import { BOUNCE_GLSL } from '../../src/materials/chunks/bounce.ts';
 
 const deg = (d: number): number => (d * Math.PI) / 180;
 
@@ -215,6 +216,42 @@ describe('flashlight bounce', () => {
     expect(s[0]).toBeCloseTo(6 - WALL_T / 2 + BOUNCE.OFFSET * -1, 1);
     expect(s[3]).toBe(-1);
     expect(s[12]).toBeCloseTo(6, 9);
+  });
+
+  it('the shader loops over the slots the runtime fills (ultra: 8 rays in 4 slots), not over BR_BOUNCE_N', () => {
+    // BR_BOUNCE_N 8 / 4 / 1 -> BR_FB_SLOTS bounceSlots(n), in the preprocessor order of bounceCount's rounding
+    const m = /#if BR_BOUNCE_N >= 8\s+#define BR_FB_SLOTS (\d+)\s+#elif BR_BOUNCE_N >= 4\s+#define BR_FB_SLOTS (\d+)\s+#else\s+#define BR_FB_SLOTS (\d+)/.exec(BOUNCE_GLSL);
+    expect(m).not.toBeNull();
+    expect([Number(m![1]), Number(m![2]), Number(m![3])]).toEqual([bounceSlots(8), bounceSlots(4), bounceSlots(1)]);
+    expect(BOUNCE_GLSL).toContain('k < BR_FB_SLOTS;');
+    expect(BOUNCE_GLSL).not.toContain('k < BR_BOUNCE_N;');
+  });
+
+  it('frozen frames rebuild the room box (a box cached while a neighbour chunk streamed in never decides a capture)', () => {
+    // an open room over chunk (0, 0) that continues into chunk (1, 0); the torch looks straight down at x = 37.8,
+    // next to the chunk border at x = 38.4, so the fill reaches over the border once chunk (1, 0) is loaded
+    const k: ChunkKey = { s: 0, cx: 1, cz: 0 };
+    const l2: ChunkLayout = createEmptyLayout(k, Zone.LOBBY, 1, Mood.NORMAL);
+    l2.floorCm.fill(0); l2.ceilCm.fill(270);
+    l2.floorMat.fill(Mat.CARPET_L0); l2.ceilMat.fill(Mat.CEILING_TILE); l2.wallMat.fill(Mat.WALLPAPER_L0);
+    const s0 = new StoreyData();
+    const k0: ChunkKey = { s: 0, cx: 0, cz: 0 };
+    const l0: ChunkLayout = createEmptyLayout(k0, Zone.LOBBY, 1, Mood.NORMAL);
+    l0.floorCm.fill(0); l0.ceilCm.fill(270);
+    l0.floorMat.fill(Mat.CARPET_L0); l0.ceilMat.fill(Mat.CEILING_TILE); l0.wallMat.fill(Mat.WALLPAPER_L0);
+    s0.set(createChunkData(l0, buildChunkCollision(l0)));
+    const data = [s0, new StoreyData(), new StoreyData()];
+    const w = createWorldQuery({ storey: () => 0 as StoreyId, data: (s) => data[s] });
+    const fb = createFlashlightBounce();
+    const u = uniforms();
+    const down: [number, number, number] = [0, -1, 0];
+    fb.update(input(4, 37.8, 20, down, 1 / 60), w, u); // first activation: fresh
+    expect(fb.slot(0)[12]).toBeCloseTo(38.4, 9); // x1: the loaded chunk's edge
+    s0.set(createChunkData(l2, buildChunkCollision(l2))); // the neighbour streams in
+    fb.update(input(4, 37.8, 20, down, 1 / 60), w, u); // live frame: the cached box (refreshed within FILL_TTL)
+    expect(fb.slot(0)[12]).toBeCloseTo(38.4, 9);
+    fb.update(input(4, 37.8, 20, down, 0), w, u); // frozen: rebuilt against the world as it is now
+    expect(fb.slot(0)[12]).toBeGreaterThan(38.4 + 3 * CELL);
   });
 
   it('smooths small moves, snaps on jumps, frozen frames and first activation', () => {

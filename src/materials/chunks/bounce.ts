@@ -1,6 +1,7 @@
 // src/materials/chunks/bounce.ts — package F: the flashlight's one-bounce fill from CPU-placed VPLs
-// (lighting/FlashlightBounce.ts). No samplers: uniform arrays of BR_BOUNCE_N lights (1 medium, 4 high, 8 ultra),
-// camera-relative world space (the runtime uploads them relative to the frame's eye):
+// (lighting/FlashlightBounce.ts). No samplers: uniform arrays of BR_FB_SLOTS lights (BR_BOUNCE_N 1 / 4 / 8: 1 on
+// medium, 4 on high, 4 on ultra from 8 rays), camera-relative world space (the runtime uploads them relative to the
+// frame's eye):
 //   uFbP[k]   = (position, active 0/1)            uFbN[k] = (surface normal of the lit patch, isotropic share)
 //   uFbC[k]   = (flux / PI per channel, eps2)     uFbBox[k] = the lit room's xz bounds (x0, z0, x1, z1)
 //   uFbOn     = 1 while any VPL is active (the whole block is skipped otherwise, and in reflection passes)
@@ -11,7 +12,7 @@
 // thickness. FRAG_BOUNCE_GLSL (inlined by chunks/lighting.ts after the ambient lines) adds it to the diffuse
 // irradiance times the SSAO multi-bounce factor brSsC, and keeps it in brFbE for view=bounce.
 
-import { BOUNCE } from '../../lighting/FlashlightBounce.ts';
+import { BOUNCE, bounceSlots } from '../../lighting/FlashlightBounce.ts';
 import { f } from './params.ts';
 
 /** Lux shown as 1.0 in view=bounce. */
@@ -22,12 +23,21 @@ export const BOUNCE_GLSL = /* glsl */ `
 // ---- flashlight bounce (package F)
 #define BR_FB_DEBUG_LUX ${f(BOUNCE_DEBUG_LUX)}
 #ifdef BR_BOUNCE_N
+// the VPL slots the runtime fills for BR_BOUNCE_N (FlashlightBounce LAYOUT / bounceSlots: ultra's 8 rays merge into
+// 4 slots, so its loop stops there instead of testing 4 slots that are never active)
+#if BR_BOUNCE_N >= 8
+#define BR_FB_SLOTS ${bounceSlots(8)}
+#elif BR_BOUNCE_N >= 4
+#define BR_FB_SLOTS ${bounceSlots(4)}
+#else
+#define BR_FB_SLOTS ${bounceSlots(1)}
+#endif
 #define BR_FB_INV_R2 ${f(1 / (BOUNCE.RANGE * BOUNCE.RANGE))}
 #define BR_FB_SOFT ${f(BOUNCE.BOX_SOFT)}
 // P, N: camera-relative world position and unit normal of the shaded point
 vec3 brBounce( vec3 P, vec3 N ) {
 	vec3 E = vec3( 0.0 );
-	for ( int k = 0; k < BR_BOUNCE_N; k ++ ) {
+	for ( int k = 0; k < BR_FB_SLOTS; k ++ ) {
 		vec4 pk = uFbP[ k ];
 		if ( pk.w < 0.5 ) continue; // uniform branch: inactive slot
 		vec3 dv = pk.xyz - P;
