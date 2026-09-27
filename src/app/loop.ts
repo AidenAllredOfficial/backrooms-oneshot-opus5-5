@@ -1,7 +1,7 @@
 // src/app/loop.ts (WP14) — the frame loop (§6.2, renderer.setAnimationLoop), the ready gate (§6.1 steps 6-7 and
 // "teleport and goto after ready") and teleports. Steps 1-11 do not allocate (scratch objects are preallocated).
 
-import { cellIdx, worldToCell, worldToChunk, chunkOriginX, chunkOriginZ } from '../core/grid.ts';
+import { cellIdx, worldToCell, worldToChunk } from '../core/grid.ts';
 import { CellFlag } from '../core/ids.ts';
 import type { TeleportTarget } from '../core/debug.ts';
 import type { GameEvents } from '../core/events.ts';
@@ -9,6 +9,7 @@ import type { MoodId, StoreyId, ZoneId } from '../core/ids.ts';
 import type { PlayerInput } from '../core/player.ts';
 import { setFlashlightBounce } from '../lighting/LightingRuntime.ts';
 import { DEFAULT_CONTROLLER, type PlayerInputExt } from '../player/controller.ts';
+import { nearestWaterPlane } from '../materials/water/rippleSources.ts';
 import type { AppCore, GateOptions, ReadyGate } from './appState.ts';
 import { applyLaunchToggles } from './boot.ts';
 
@@ -200,34 +201,8 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
     const s = core.sys;
     if (!s || s.q.planarReflectionScale <= 0) { waterY = null; return; }
     const st = s.player.state;
-    const q = s.streamer.query;
-    const ex = st.eyeX, ez = st.eyeZ, ey = st.eyeY;
-    const fx = -Math.sin(st.camYaw), fz = -Math.cos(st.camYaw);
-    const pcx = worldToChunk(ex), pcz = worldToChunk(ez);
-    let best = Infinity;
-    let bestY: number | null = null;
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const l = q.layoutAt(pcx + dx, pcz + dz);
-        if (!l || l.water.length === 0) continue;
-        const ox = chunkOriginX(pcx + dx), oz = chunkOriginZ(pcz + dz);
-        for (let i = 0; i < l.water.length; i++) {
-          const w = l.water[i];
-          if (w.y >= ey - 0.05 || w.y < ey - 8) continue; // must be below the eye, and near
-          // closest point of the rect to the eye (xz)
-          const cx = Math.min(Math.max(ex, ox + w.x0), ox + w.x1);
-          const cz = Math.min(Math.max(ez, oz + w.z0), oz + w.z1);
-          const ddx = cx - ex, ddz = cz - ez;
-          const d = Math.sqrt(ddx * ddx + ddz * ddz + (ey - w.y) * (ey - w.y));
-          if (d > WATER_MAX_DIST || d >= best) continue;
-          const h = Math.sqrt(ddx * ddx + ddz * ddz);
-          if (h > 2 && (ddx * fx + ddz * fz) / h < -0.35) continue; // behind the camera
-          best = d;
-          bestY = w.y;
-        }
-      }
-    }
-    waterY = bestY;
+    const wp = nearestWaterPlane(s.streamer.query, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), WATER_MAX_DIST);
+    waterY = wp ? wp.y : null;
   };
 
   const loop = ((now: number): void => {
@@ -291,6 +266,7 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       // 10. planar reflection
       if (core.frame % WATER_SCAN_INTERVAL === 0) scanWater();
       core.gpu?.begin();
+      s.ripples.update(r, dt, t, st, query); // package E: ripple window and fixed steps (inside the GPU timer)
       s.reflection.update(r, core.scene, core.camera, waterY);
       // 11. post
       s.post.setAtmosphere(s.lighting.atmosphere());

@@ -21,6 +21,7 @@ import { FRAG_DIRVIS_GLSL } from './pom.ts';
 
 /** Replaces `#include <lights_fragment_maps>`. */
 export const FRAG_LIGHTS_GLSL = /* glsl */ `
+#undef getSpotLightInfo
 // ==== WP9 baked lighting
 vec4 brLmA;
 vec4 brLmB;
@@ -100,23 +101,52 @@ iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC ); // ambient part (diffuse + mul
 radiance += ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI; // ambient part as a uniform environment (indirect specular)
 ${FRAG_BOUNCE_GLSL}
 vec3 brIrrLocal = brE + brEf; // haze inscatter + water in-scatter
-// ---- submerged caustics (up-facing, below the water plane): redistributes the local irradiance. The water body
-// kind rides in tint.a of submerged floors (mesh/floors.ts): 0 pool (full), 1 flooded room (weak, large, slow),
-// 2 film (none). Deeper water spreads the filaments (brCaustics) and the finite source size blurs them further.
-if ( ( brF & BR_F_UNDERWATER ) != 0 && brNWg.y > 0.5 ) {
-	float brWy = brAuxB.w * 0.05 - 3.2;
-	float brDepth = brWy - vBrLocal.y; // both storey-relative (tile-local)
-	int brWK = int( vBrTint.a * 255.0 + 0.5 );
+// ---- caustics (package E): zero-mean redistributions of the local irradiance.
+// Submerged shell faces (below the water plane; brSubInfo = depth, kind from chunks/water.ts): 0 pool (full),
+// 1 flooded room (weak, large, slow), 2 film (none). Deeper water spreads the filaments (brCaustics) and the finite
+// source size blurs them further. Floors take the pattern straight above; walls the pattern where the baked light
+// entered the water (along the refracted dominant direction), which draws streaks down the pool walls.
+if ( ( brF & BR_F_UNDERWATER ) != 0 && brSubInfo.x > 0.0 && brNWg.y > ( BR_DETAIL == 1 ? - 0.5 : 0.5 ) ) { // lite: floors only
+	float brDepth = brSubInfo.x;
+	int brWK = int( brSubInfo.y + 0.5 );
 	float brKS = brWK == 0 ? 1.0 : brWK == 1 ? BR_CAUSTIC_FLOOD : 0.0;
-	if ( brDepth > 0.0 && brKS > 0.0 ) {
+	if ( brKS > 0.0 ) {
 		float brSc = brWK == 1 ? BR_CAUSTIC_FLOOD_SCALE : 1.0;
 		float brTs = brWK == 1 ? BR_CAUSTIC_FLOOD_SPEED : 1.0;
-		float brC = brCaustics( vBrLocal.xz + uNoiseOrigin.xz, uTime * brTs, brDepth, brSc );
+		vec2 brXs = vBrLocal.xz;
+		if ( brNWg.y <= 0.5 ) {
+			// the light reaching depth d of a wall entered the water d tan(theta_t) out from it: along the refracted
+			// baked direction, else along the wall normal at a typical 25 deg (the net then varies with depth)
+			brKS *= ( 1.0 - abs( brNWg.y ) ) * BR_CAUSTIC_WALL;
+			float brLy = max( brLw.y, 0.3 );
+			float brSt = 0.75 * sqrt( max( 1.0 - brLy * brLy, 0.0 ) ); // refracted sine
+			brXs += brW >= 0.2 ? normalize( brLw.xz + 1e-6 ) * ( brSt / sqrt( 1.0 - brSt * brSt ) ) * brDepth : brNWg.xz * ( 0.47 * brDepth );
+		}
+		float brC = brCaustics( brXs + uNoiseOrigin.xz, uTime * brTs, brDepth, brSc );
 		float brSoft = 1.0 / ( 1.0 + brDepth * BR_CAUSTIC_SRC_TAN / ( 0.6 * brSc ) );
 		float brCf = exp( - brDepth * BR_CAUSTIC_DEPTH_K ) * smoothstep( 0.0, 0.15, brDepth ) * brSoft * brKS;
 		irradiance += brE * ( BR_CAUSTIC_STRENGTH * ( brC - brCausticMean( brDepth ) ) * brCf );
 	}
 }
+#ifdef BR_CAUSTICS_FULL
+// Above pool water (ceilings and walls of tiles with pool water, uTileWater bit 0; still flood water focuses nothing):
+// light reflected and refracted by the wavy surface dances on them. Coverage from the 4 nearest wall-mask cells
+// (chunks/water.ts brWaterCover); the net is softer (width 0.18), magnified in steps with the height above the water
+// (brCausticsAbove) and slower; zero-mean, so the baked average (which already holds the pool bounce and the
+// underwater lights' up-light) is kept. Not in the mirror pass (the reflected ceiling is seen through the wavy surface anyway).
+else if ( ( int( uTileWater + 0.5 ) & 1 ) != 0 && brNWg.y < 0.5 && uBrReflPass < 0.5 ) {
+	float brCwy;
+	float brCov = brWaterCover( vBrLocal.xz + brNWg.xz * 0.05, brCwy );
+	float brH = vBrLocal.y - brCwy;
+	if ( brCov > 0.0 && brH > 0.02 ) {
+		vec2 brXs = vBrLocal.xz - brNWg.xz * ( brH * 0.3 );
+		float brBand = abs( brNWg.y ) > 0.9 ? 0.05 : 0.2; // flat ceilings: constant height, a narrow cross-fade band
+		float brC = brCausticsAbove( brXs + uNoiseOrigin.xz, uTime * 0.7, 1.0 + brH * BR_CAUSTIC_MAGNIFY, brBand );
+		float brStr = brNWg.y < - 0.5 ? BR_CAUSTIC_CEIL : BR_CAUSTIC_ABOVE_WALL;
+		irradiance += brE * ( brStr * ( brC - brCausticMeanW( 0.18 ) ) * brCov / ( 1.0 + BR_CAUSTIC_FADE * brH ) );
+	}
+}
+#endif
 `;
 
 /** Replaces `#include <aomap_fragment>`: specular occlusion from the baked AO (indirect diffuse already holds the

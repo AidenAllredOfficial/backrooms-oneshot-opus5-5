@@ -110,6 +110,15 @@ function slotSpec(lm: LightmapData, slot: number, o: SlotSpec): SlotSpec {
 
 const EMPTY_BOUNDS = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
 
+/** Package E: the water kinds in the tile's wall mask (b = kind + 1, bake/volume.ts bakeWallMask) as a bit mask,
+ * 1 pool | 2 flooded | 4 film; 0 = dry. uTileWater gates the wet band (any water) and the above-water caustics
+ * (pool water) on the tile's surfaces with one uniform branch. */
+export function tileWaterOf(wallMask: Uint8Array): number {
+  let m = 0;
+  for (let i = 2; i < wallMask.length; i += 4) if (wallMask[i] !== 0) m |= 1 << (wallMask[i] - 1);
+  return m;
+}
+
 const sameSize = (t: THREE.Texture, s: SlotSpec): boolean => {
   const img = t.image as { width: number; height: number; depth?: number };
   const is3 = (t as THREE.Data3DTexture).isData3DTexture === true;
@@ -268,6 +277,7 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
       while (gpu.texCur < SLOT_COUNT) {
         const slot = gpu.texCur++;
         const s = slotSpec(lm, slot, spec);
+        if (slot === SLOT_VOLMASK) b.water.value = tileWaterOf(lm.volume.wallMask);
         const binding = bindingOf(b, slot);
         const old = gpu.slots[slot];
         if (old) { pool.release(old); gpu.slots[slot] = null; } // restarted step (defensive)
@@ -315,6 +325,7 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
       while (gpu.swapCur < SLOT_COUNT) {
         const slot = gpu.swapCur++;
         const s = slotSpec(lm, slot, spec);
+        if (slot === SLOT_VOLMASK) b.water.value = tileWaterOf(lm.volume.wallMask);
         const old = gpu.slots[slot];
         const binding = bindingOf(b, slot);
         if (s.data && old && sameSize(old, s)) {

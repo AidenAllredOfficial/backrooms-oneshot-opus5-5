@@ -19,6 +19,7 @@ import type { SpawnPoint } from '../core/world.ts';
 import { generateTextures } from '../textures/TextureBaker.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
 import { createPlanarReflection } from '../materials/PlanarReflection.ts';
+import { createWaterRipples } from '../materials/water/WaterRipples.ts';
 import { createLightingRuntime } from '../lighting/LightingRuntime.ts';
 import { createAnomalyDirector } from '../lighting/anomalyDirector.ts';
 import { createPostStack, postInternals } from '../post/PostStack.ts';
@@ -281,6 +282,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
+  const ripples = createWaterRipples(materials.globals, q, core.bus); // resets itself on teleports / seed changes
   const anomaly = createAnomalyDirector(core.bus, lighting, core.scene);
   cb.progress('shaders', 0.3);
   await materials.warmup(r, core.camera, core.scene);
@@ -321,7 +323,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
   startup.clear();
   return {
-    q, features: featuresOf(p), textures, materials, lighting, post, reflection, anomaly, dynRes, pool,
+    q, features: featuresOf(p), textures, materials, lighting, post, reflection, ripples, anomaly, dynRes, pool,
     poolTarget: poolSize(q), streamer, player, audio, input, init,
     spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
   };
@@ -364,6 +366,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   s.post.setSize(innerWidth, innerHeight);
   s.lighting.setQuality(nq);
   s.reflection.setQuality(nq);
+  s.ripples.setQuality(nq);
   s.audio.setQuality(nq);
   s.materials.setQuality(nq);
   s.dynRes = createDynamicResolution(s.post, r, nq);

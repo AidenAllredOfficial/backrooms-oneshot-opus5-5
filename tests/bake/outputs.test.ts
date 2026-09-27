@@ -11,6 +11,7 @@ import { ChartKind } from '../../src/core/mesh.ts';
 import { bakeTile } from '../../src/bake/index.ts';
 import { fixtureRadiance, towerGroups, type ChunkLayout } from '../../src/core/layout.ts';
 import { makeNeighborhood } from '../../src/world/neighborhood.ts';
+import { tileWaterOf } from '../../src/stream/TileObject.ts';
 import { testSceneChunk } from '../../src/world/testScenes.ts';
 import { Q_HIGH, addLight, carveRoom, findChart, gridTexel, handNeighborhood, setEx, solidLayout, surfacesOf } from './helpers.ts';
 
@@ -176,5 +177,38 @@ describe('surface mask', () => {
     expect(stain).toBeGreaterThan(80);
     // grime in a corner vs. the middle of the floor
     expect(m(1.3, 1.3, 1)).toBeGreaterThan(m(7.0, 7.0, 1));
+  });
+});
+
+describe('wall mask water channels (package E)', () => {
+  // a pool (cells 3..5 x 3..4: floor -60, water -10, kind 0) and a flooded strip (cells 8..10 x 8: floor 0, water
+  // +25, kind 1) in one room; everything else dry
+  const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+  carveRoom(l, 1, 1, 15, 15);
+  for (let j = 3; j < 5; j++) for (let i = 3; i < 6; i++) { l.floorCm[j * 32 + i] = -60; l.waterCm[j * 32 + i] = -10; }
+  l.water.push({ x0: 3 * CELL, z0: 3 * CELL, x1: 6 * CELL, z1: 5 * CELL, y: -0.1, floorY: -0.6, kind: 0 });
+  for (let i = 8; i < 11; i++) l.waterCm[8 * 32 + i] = 25;
+  l.water.push({ x0: 8 * CELL, z0: 8 * CELL, x1: 11 * CELL, z1: 9 * CELL, y: 0.25, floorY: 0, kind: 1 });
+  addLight(l, { px: 7.0, pz: 7.0 });
+  const nb = handNeighborhood(l);
+  const lm = bakeTile(nb, TILE, surfacesOf(nb, TILE, 12), 'preview', Q_HIGH, 'all');
+  const cell = (li: number, lj: number): { wy: number | null; kind: number } => {
+    const o = ((lj + 1) * 18 + (li + 1)) * 4, m = lm.volume.wallMask;
+    if (m[o + 2] === 0) return { wy: null, kind: -1 };
+    return { wy: (m[o + 1] * 256 + m[o + 3] - 32768) / 100, kind: m[o + 2] - 1 };
+  };
+  it('g/a decode to the water surface and b to kind + 1', () => {
+    expect(cell(3, 3)).toEqual({ wy: -0.1, kind: 0 });
+    expect(cell(5, 4)).toEqual({ wy: -0.1, kind: 0 });
+    expect(cell(9, 8)).toEqual({ wy: 0.25, kind: 1 });
+  });
+  it('the tile water flag is the kind mask (1 pool | 2 flooded | 4 film; stream/TileObject.ts)', () => {
+    expect(tileWaterOf(lm.volume.wallMask)).toBe(3);
+    expect(tileWaterOf(new Uint8Array(18 * 18 * 4))).toBe(0);
+  });
+  it('dry and SOLID cells have b = 0 (and the wall bits in r are unchanged)', () => {
+    expect(cell(6, 3).kind).toBe(-1);
+    expect(cell(0, 0).kind).toBe(-1); // SOLID ring
+    expect(lm.volume.wallMask[((1 + 1) * 18 + (1 + 1)) * 4] & 9).toBe(9); // N and W walls of cell (1, 1)
   });
 });

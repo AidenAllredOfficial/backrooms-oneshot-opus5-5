@@ -9,7 +9,8 @@ import { NOISE_GLSL } from '../../src/textures/glsl/noise.ts';
 import { LAYER_RECIPES, LAYER_RECIPES_FULL } from '../../src/textures/registry.ts';
 import { SIGN_ASPECT, signSlotRect, STENCIL_SLOTS } from '../../src/textures/signage.ts';
 import { GRIME_GLSL } from '../../src/textures/grime.ts';
-import { WATER_NORMALS_GLSL } from '../../src/textures/waterNormals.ts';
+import { WATER_NORMALS_GLSL, WATER_SLOPE_K, WATER_SLOPE_SCALE } from '../../src/textures/waterNormals.ts';
+import { WATER_SURFACE } from '../../src/materials/chunks/water.ts';
 import { COOKIE_GLSL } from '../../src/textures/cookie.ts';
 
 const stripComments = (s: string): string => s.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -198,10 +199,17 @@ describe('height scratch fallback (packed RGBA8)', () => {
 });
 
 describe('water normals', () => {
-  it('keeps calm-water slopes (tangent xy scale <= 0.015 per unit of noise gradient)', () => {
-    const m = /normalize\(vec3\(-hx \* ([0-9.]+), -hy \* ([0-9.]+), 1\.0\)\)/.exec(WATER_NORMALS_GLSL);
+  it('stores calm-water slopes s = (v * 2 - 1) * scale (scale <= 0.25, shared with the water shader decode)', () => {
+    expect(WATER_SLOPE_SCALE).toBeLessThanOrEqual(0.25);
+    expect(WATER_SURFACE.TEX_SCALE).toBe(WATER_SLOPE_SCALE);
+    const m = /vec2 s = vec2\(hx, hy\) \* ([0-9.]+);/.exec(WATER_NORMALS_GLSL);
     expect(m).not.toBeNull();
-    expect(Number(m![1])).toBeLessThanOrEqual(0.015);
-    expect(Number(m![2])).toBe(Number(m![1]));
+    expect(Number(m![1])).toBeCloseTo(WATER_SLOPE_K, 4);
+    expect(WATER_NORMALS_GLSL).toMatch(new RegExp(`s / ${WATER_SLOPE_SCALE.toFixed(4)}, -1\\.0, 1\\.0\\) \\* 0\\.5 \\+ 0\\.5`));
+  });
+
+  it('both octaves tile (integer periodic lattices over the repeat)', () => {
+    const cells = [...WATER_NORMALS_GLSL.matchAll(/gnoise\(uv, ivec2\((\d+)\), \d+\)/g)].map((x) => Number(x[1]));
+    expect(cells).toEqual([8, 19]);
   });
 });

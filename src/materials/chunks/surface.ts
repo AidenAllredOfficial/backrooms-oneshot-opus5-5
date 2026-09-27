@@ -474,4 +474,6 @@ if ( vBrEmit > 0.0 ) {
 		int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7, vBrUv, brEmVt, brEmFp );
 #endif
 }
+vec4 brSubInfo = brWaterSubInfo( brF, brSubDepth, vBrTint.a, brNWg ); // package E: water info (chunks/water.ts)
+#define getSpotLightInfo( l, p, d ) brSpotInfoW( l, p, d, brSubInfo )
 `;

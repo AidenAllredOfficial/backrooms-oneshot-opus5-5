@@ -3768,7 +3768,7 @@ export function expandPeriodicProps(l: ChunkLayout): PropPlacement[]; // props a
    - `emit`/`color` from the placement (0 / white by default). No kind has hard-coded emission.
    - Decals whose surface is not in this tile are clipped to the owner tile's cells (quads split at cell lines like faces).
 10. **Water.**
-    - Each `WaterRect` intersecting the tile becomes quads at `y` with flag REFLECTIVE, lmUv from the FLOOR_GRID at the same xz, and `aux.x = clamp((y − floorY)·20, 0, 255)` (depth in 5 cm units), `aux.w = clamp((y·100 + 320)/5, 0, 255)` (plane height, so WP9 can tell which plane the planar reflection belongs to).
+    - Each `WaterRect` intersecting the tile becomes quads at `y` with flag REFLECTIVE, lmUv from the FLOOR_GRID at the same xz, `tint = (1, 1, 1, kind)` (0 pool, 1 flooded, 2 film), `aux.x = clamp((y − floorY)·50, 0, 255)` (depth in 2 cm units), `aux.y/z` = the region key of the rect's cells in the tile (0 when they span several regions) and `aux.w = clamp((floorY + reflPlane − y)·20, 0, 255)` (floorAux's emitter plane above the water, 5 cm units). WP9 identifies the mirrored plane by the fragment's own y.
     - These go into the separate `water` buffer. The optics of the water body live on the submerged surfaces (rule 4); the water mesh itself only carries reflection and specular.
 11. **Wall tints.** Per run: roll shade `±2%` (hash of run id) times a warmth hue shift of ±4° (warmth field of the owner cell: warm → +R−B).
 12. **Atlas** (`atlas.ts`):
@@ -3990,7 +3990,7 @@ export function createBakeCache(): BakeCache;
     - 32×6×32 samples at the tile-local `((i + 0.5)·0.6, LV.Y[k], (j + 0.5)·0.6)`.
     - Samples inside solids are marked invalid and dilated.
     - Samples whose cell is a TOWER cell are baked with **that tower's bake group** (isolated, periodic lighting), so the WP9 y-wrap for tower props reads valid values.
-    - `wallMask` (18×18, tile cells + ring): bits N1 E2 S4 W8 where the cell's edge occludes at y = 1.2 m.
+    - `wallMask` (18×18, tile cells + ring): r = bits N1 E2 S4 W8 where the cell's edge occludes at y = 1.2 m; g/a = the cell's water surface (`waterCm + 32768`, high / low byte) and b = WaterRect kind + 1 (0 = dry or SOLID), read by the shaders' `brWaterCell`. The tile's water kinds (bit mask 1 pool | 2 flooded | 4 film) become `TileBindings.water` (`uTileWater`).
     - Per sample, accumulate SH-L1 of direct light (each light as a directional delta with visibility) plus indirect (probe SH), with the per-channel multi-bounce.
     - **Near-field samples** (full bake, `q.nearRays` > 0, a prop box within 1.2 m): when the sample's own cell holds a box rising above the sample or above the bitset point at the nearest bit height, lights a box could cut off get one DDA ray from the sample instead of the cell bitset (chairs under desks are shadowed, a monitor above the desk top is lit); `nearRays` sphere rays correct the probe SH where they hit prop faces (delta form); the stored AO drops by the hit fraction.
     - Encode:
@@ -4216,10 +4216,10 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   7. Add the result to `reflectedLight.indirectSpecular`.
 - **Planar reflection** (`REFLECTIVE && reflOn`, wet tile, and the water surface): only surfaces whose plane height equals the reflected plane (`uReflY`, ±2 cm; water: `aux.w`, floors: floorY) sample `textureLod(reflTex, screenUv + n.xz·0.02, roughness·6)`, then Fresnel. Other planes fall back to the emission-map reflection.
 - **`aomap_fragment`.** Specular occlusion: `reflectedLight.indirectSpecular *= computeSpecularOcclusion(dotNV, lmA.a, roughness)`. Indirect diffuse already contains the AO.
-- **Submerged surfaces** (`UNDERWATER` flag; the water body's optics live here, not on the transparent water mesh):
-  - `waterY = aux.w·255·0.05 − 3.2`; view path in water `L = (waterY − p.y)/max(|v.y|, 0.05)` (p, v in world orientation from view space);
-  - `color *= exp(−σ·L)` per channel with `σ = (0.45, 0.09, 0.06)` /m, plus in-scatter `(1 − exp(−σ·L))·E·0.02·(0.3, 0.75, 0.8)`;
-  - animated 2-octave Voronoi caustics × `E` × depth fade on up-facing surfaces.
+- **Submerged surfaces** (the water body's optics live here, not on the transparent water mesh; `brSubInfo` = depth, kind, surface y from `chunks/water.ts brWaterSubInfo`: `UNDERWATER` shell faces carry the plane in `aux.w = (waterCm + 320)/5`, floors the kind in tint.a, other faces and props use the wall-mask cell):
+  - per-kind media `WATER_MEDIA` (`params.ts`: pool σa (0.35, 0.065, 0.03) /m, σs 0.04, g 0.9; flooded and film tea-coloured and silty) along the **refracted** view path `L = depth / cos θt` (Snell, η 0.75; at most ~1.5× the depth), with the transport coefficient `κ = σa + (1 − g)σs`: `color = (lit·exp(−0.8 κ depth) + emission)·exp(−κ L) + Lin` — the baked light reached the surface through the water above it (downwelling), and `Lin = (1 − g)σs·E/π·tint·(1 − e^{−K L})/K`, `K = κ(1 + 0.8 cos θt)` is the closed-form single scatter of the ambient field;
+  - caustics (zero-mean, × `E`): 2-octave Voronoi (`brCausticsW`, filament width and cell scale as parameters, mean `brCausticMeanW`) on up-facing submerged faces, and on submerged walls the pattern where the light entered the water (along the refracted baked direction), which draws streaks down pool walls; above **pool** water (`BR_CAUSTICS_FULL`, tiles with `uTileWater` bit 0) ceilings and walls get a softer net magnified with the height, from the bilinear coverage of the 4 nearest wall-mask cells;
+  - the flashlight on submerged fragments (`BR_CAUSTICS_FULL`): `chunks/surface.ts` redirects three's `getSpotLightInfo` call in `lights_fragment_begin` to `brSpotInfoW` (`#define` at the end of the emissive chunk, `#undef` at the start of `chunks/lighting.ts`), which absorbs the beam along its refracted in-water path and focuses it into a fine sharp caustic net.
 - **`fog_fragment` (replaced; it runs after `colorspace_fragment` in r186 and targets are linear):**
   ```glsl
   float d = length(vViewPosition);
@@ -4233,7 +4233,15 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
 - **World-space noise** (macro variation, hashed wear features): xz from `vBrLocal.xz + uNoiseOrigin.xz`; any y input uses noise periodic in y with a period dividing 3.0 m (tower periodicity).
 - **Debug views.** Before haze, `if (uDebugView != 0)` outputs the selected term: `DEBUG_VIEW_NAMES` order; TEXEL = checker at lightmap texel frequency; ZONE/ROOM = hash colours from `aux`.
 
-**Water material.** Outputs **only** reflection and specular: premultiplied colour = `F·reflection + specular` with `alpha = F` (Fresnel), blended `One, OneMinusSrcAlpha`, so the (already absorbed, see "Submerged surfaces") pool floor shows through with weight `1 − F`. Reflection = planar texture if this plane is the reflected one (`aux.w` matches `uReflY`), else emission-map reflection, else `uFarColor` tinted. Two scrolling normal layers from `waterNormals`; specular from the lightmap dominant direction at the same xz. Haze by the same GLSL function; HDR clamp.
+**Water material.** Outputs reflection, specular and floating matter premultiplied: colour = `F·reflection + specular` with `alpha = F` (Fresnel), blended `One, OneMinusSrcAlpha`, so the (already absorbed, see "Submerged surfaces") floor shows through with weight `1 − alpha`. Per-quad kind / depth / emitter plane / region key arrive in flat varyings.
+- Surface slope (`chunks/water.ts brWaterSlope`): `BR_WATER_WAVES` analytic gravity-capillary waves (dispersion at the quad's depth, integer wave lattice periodic over NOISE_WRAP, 1.6 → 0.22 m, per-kind slope RMS pool 0.012, flooded 0.004, film 0.0015) plus three drifting octaves of the `waterNormals` slope map (1.2 m, 0.96 m axis-swapped, 1.92 m 3-4-5 rotated; low: two octaves only), footprint-filtered, with the removed variance in the roughness `α = sqrt(α0² + 2 var)`; ripple-window and drip-ring slopes add on top (`BR_WATER_RIPPLE`).
+- Reflection: the planar texture when this plane is the mirrored one (fragment y = `uReflY` ± 2 cm; the perturbed reflected ray is projected 3 m behind the surface, so the wobble shrinks with distance; rough water is blurred along the view plane with 4 taps), else the emission-map reflection at the quad's own emitter plane and region over the room average (haze tint).
+- Specular: the flashlight GGX at α (glints); the baked dominant direction only where α > 0.08 (on calm water the reflection already holds the emitters).
+- `BR_WATER_DEBRIS`: a drifting dust / oil film (patchy roughness and a faint diffuse term) and floating flecks on a 0.24 m lattice (ragged, soaked matter; sub-pixel ones fade out).
+- Haze through `brHazeT` / `brHaze`; HDR clamp. Debug view `water` shows α, the ripple height and the slope.
+- Wave-2 slot: with the colour pyramid the water turns opaque in volMode (`F·refl + spec + (1 − F)·trans`), see `WaterMaterial.ts`.
+
+**Water ripples** (`materials/water/WaterRipples.ts`, `rippleSources.ts`). A world-anchored window of `waterRippleRes`² texels of `waterRippleTexel` m (medium 128 × 6 cm, high 256 × 4 cm, ultra 512 × 3 cm) snapped to whole texels around the eye, over the plane the player stands in or the nearest one within 6 m. HalfFloat ping-pong targets hold (h, h_prev, foam); a fixed 1/60 s step (≤ 4 per frame, none while the simulation clock is frozen; a clock jump resets it) integrates `h' = (2h − h_prev + C²∇²h)·damp` (c 0.55 m/s, τ 2.5 s pool / 1.2 s flooded) with reflecting walls from a per-window cell mask (water on the plane, wall bits at plane + 5 cm, dry pillars). Impulses: footsteps in water, zero-volume wading-wake dipoles per leg (+ foam), idle sway, DRIP emitters falling into the window; drips elsewhere within 25 m become analytic rings (`uDrips`). Only the water shader samples `uRipple`; it interpolates the last two steps. Loop step 10, inside the GPU timer ('waterSim' profile segment).
 
 **Planar reflection.**
 - A mirrored camera about `y = waterY` with the oblique near-plane clip (the math from `Reflector.js`), rendered at `q.planarReflectionScale`, HalfFloat, with mipmaps.
@@ -5062,7 +5070,7 @@ most 16 texture units (`tests/materials/samplerBudget.test.ts`; dev builds also 
 At high / ultra the shell and decal programs then use 13 units before the new features: albedo, normal, ormh, grime,
 lmIrr, lmDir, lmMask, lmFlick, emission, volMask, the flashlight shadow map and cookie, and three's own `dfgLUT`
 (material.dfg in `lights_fragment_begin`). The planned probe, SSAO, froxel volume and detail array make 17, so one
-more sampler must go before the last of them lands (props: 12 + 4 = 16; water: 9 today). Package A's `uSsaoTex`
+more sampler must go before the last of them lands (props: 12 + 4 = 16; water: 10 with E's `uRipple`). Package A's `uSsaoTex`
 (pre-shade SSAO and contact shadows, medium / high / ultra) makes the high / ultra shell 14; the lead's resolution is
 that D compiles the emission-map reflection out under `BR_SSR` / `BR_PROBE`, which frees `uEmission`. Package A's
 colour pyramid (`uSceneColor`) is read by water and SSR passes only, never by surface programs.
@@ -5142,7 +5150,8 @@ colour pyramid (`uSceneColor`) is read by water and SSR passes only, never by su
   - `autowalk({distance, speed?, seed?})` → AutowalkReport;
   - `walk(path, speed?)`;
   - `layerAlbedoCheck()`;
-  - `audio.stats()`, `audio.recentEvents()`, `events()`.
+  - `audio.stats()`, `audio.recentEvents()`, `events()`;
+  - `water.poke(dx, dz, amp = 1)` (a footstep-sized ripple impulse × amp at dx m right, dz m ahead of the eye), `water.step(n)` (n 1/60 s ripple steps now: frozen-time captures), `water.stats()` (plane, kind, window, steps, drips); `gpuProfile` reports the ripple simulation as `waterSim`.
 
 ### 7.3 Harness pages (each sets `window.__backrooms` to a `HarnessDebugAPI`: `{ ready, isReady(), stats(), layerAlbedoCheck? }`)
 

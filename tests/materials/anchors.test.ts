@@ -185,6 +185,8 @@ describe('WP9 shader anchors (three r186)', () => {
       expect(st.ifDepth).toBe(0);
       expect(st.ifDepthOk).toBe(true);
     }
-    expect(f).toMatch(/gl_FragColor = vec4\( min\( max\( col, vec3\( 0\.0 \) \), vec3\( BR_HDR_CLAMP \) \), F \);/);
+    expect(f).toMatch(/gl_FragColor = vec4\( min\( max\( col, vec3\( 0\.0 \) \), vec3\( BR_HDR_CLAMP \) \), A \);/);
+    // premultiplied: the Fresnel weight is the alpha, and floating matter only raises it
+    expect(f).toMatch(/float A = F;/);
   });
 });

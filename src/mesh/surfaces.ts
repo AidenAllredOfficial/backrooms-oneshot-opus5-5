@@ -50,7 +50,8 @@ export function planTile(nb: LayoutNeighborhood, tile: TileKey, tpc: LmTpc): Til
   const walls = new WallModel(g);
   const solids = expandPeriodicSolids(nb.center);
 
-  emitFloors(plan, g, floorAux(g));
+  const aux = floorAux(g);
+  emitFloors(plan, g, aux);
   emitPitBottoms(plan, g);
   const cc = new CeilCharts(plan, g);
   emitCeilings(plan, g, tileRecessed(g), cc);
@@ -61,7 +62,7 @@ export function planTile(nb: LayoutNeighborhood, tile: TileKey, tpc: LmTpc): Til
   const idx = new VFaceIndex(plan, g);
   emitTrims(plan, walls, idx);
   emitDecals(plan, g, idx, cc);
-  emitWater(plan, g);
+  emitWater(plan, g, aux);
 
   const specs = plan.finalize();
   const atlasH = packAtlas(specs, tpc);
