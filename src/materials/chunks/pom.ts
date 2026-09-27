@@ -15,12 +15,18 @@ export const POM_PARS_GLSL = /* glsl */ `
 #define BR_POM_MAX BR_POM_MAX_1
 #define BR_POM_STEP_PX BR_POM_PX_PER_STEP
 #endif
-// texture height (normal.a) at uv under the march's fixed cell transform: texel uv = ( b0 + M ( uv cells - c0 ) ) / cells
-// (a rotated physical tile's hashed rotation / flip M and cell offset, taken at the march start; plain layers: cells 1,
-// M identity, b0 = c0), at an explicit isotropic LOD (the footprint's area): trilinear, never anisotropic, which is
-// what makes 5-20 lookups per pixel affordable; the smoother height only softens the parallax at grazing angles
-float brPomH( vec2 uv, mat2 M, vec2 cells, vec2 c0, vec2 b0, float lf, float lod ) {
-	return textureLod( uBrNormal, vec3( ( b0 + M * ( uv * cells - c0 ) ) / cells, lf ), lod ).a;
+// texture height (normal.a) at uv through the rotated-tile transform of physical tiles (brRotUv, per lookup: a march
+// or shadow ray that crosses a cell edge reads the neighbour tile as the shading will, so tile corners never catch false
+// shadows), at an explicit isotropic LOD (the footprint's area): trilinear, never anisotropic, which is what makes 5-20
+// lookups per pixel affordable; the smoother height only softens the parallax at grazing angles
+float brPomH( vec2 uv, vec2 cells, uint salt, float lf, float lod ) {
+	vec2 t = uv;
+	if ( cells.x > 0.0 ) {
+		mat2 M;
+		int ri;
+		t = brRotUv( uv, cells, salt, M, ri );
+	}
+	return textureLod( uBrNormal, vec3( t, lf ), lod ).a;
 }
 #endif
 `;
@@ -44,7 +50,7 @@ export const FRAG_DIRVIS_GLSL = /* glsl */ `
 			for ( int i = 1; i <= BR_POM_SH_STEPS; i ++ ) {
 				float brT = float( i ) / float( BR_POM_SH_STEPS );
 				float brRay = mix( brPomHitN, 1.0, brT );
-				float brHs = brPomH( brUv + brDuL * brT, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomLod ) / brPTop;
+				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brPomLod ) / brPTop;
 				brOcc = max( brOcc, ( brHs - brRay ) * BR_POM_SH_K * ( 1.0 - 0.5 * brT ) );
 			}
 			brDirVis *= 1.0 - clamp( brOcc, 0.0, 1.0 ) * brPomK * brW;
