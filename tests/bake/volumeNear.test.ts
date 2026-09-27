@@ -34,6 +34,7 @@ describe('light volume near a desk', () => {
   const far = bakeTile(nb, TILE, s, 'full', Q_HIGH, 'all').volume.a;
   const near = bakeTile(nb, TILE, s, 'full', Q16, 'all').volume.a;
   const nearDirect = bakeTile(nb, TILE, s, 'full', Q16, 'direct').volume.a;
+  const farDirect = bakeTile(nb, TILE, s, 'full', Q_HIGH, 'direct').volume.a;
 
   it('the sample under the desk (0.2 m) gets <= 0.6x the light of the sample 1.8 m beside it', () => {
     const under = lv(near, 14, 0, 14), beside = lv(near, 17, 0, 14);
@@ -44,7 +45,10 @@ describe('light volume near a desk', () => {
   it('the sample over the desk top (0.8 m) is lit by the troffer above it (the bitset point under the desk top is not)', () => {
     const over = lv(nearDirect, 14, 1, 14);
     expect(over).toBeGreaterThan(0.5 * lv(nearDirect, 17, 1, 14));
-    expect(lv(near, 14, 1, 14)).toBeGreaterThan(1.5 * lv(far, 14, 1, 14));
+    // without near rays (low, medium) too: every sample in a cell with boxes takes the per-sample ray, not the bitset
+    // (whose point under the desk top baked it dark: 1.5x less than the near-field bake)
+    expect(lv(farDirect, 14, 1, 14)).toBeGreaterThan(0.5 * lv(farDirect, 17, 1, 14));
+    expect(lv(far, 14, 1, 14)).toBeGreaterThan(0.8 * lv(near, 14, 1, 14));
   });
 
   it('the samples 1.5 m and 2.3 m up change < 2%', () => {

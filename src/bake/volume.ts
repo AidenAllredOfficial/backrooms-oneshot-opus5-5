@@ -80,6 +80,12 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
         valid[s] = 1;
         const nw = nearRays > 0 && !tower ? nearWeight(job, c, x, y, z, 0, 0, 0, group, false) : 0;
         const near = nw > 0;
+        // per-sample direct visibility where boxes may hide a light: near-field samples, and every non-tower sample of
+        // a bake without near rays (low, medium). The bitset alone answers for its cell-centre point at the nearest bit
+        // height: in the cells of a car that point lies inside the cabin, and the samples all over the car (up to 1.5 m,
+        // above its roof) baked black (dark smudges on its hood and windshield); under a lounge chair's frame the
+        // samples missed its shadow.
+        const rayVis = near || (nearRays === 0 && !tower);
         aoAt(job, x, y, z, 0, 0, 0, c, group, true, nearRays > 0);
         const ao = aoOut.ao;
         AO[s] = ao;
@@ -93,7 +99,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
           }
           for (let q = 0; q < m; q++) {
             const l = sel[q];
-            const e = near ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
+            const e = rayVis ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
             if (e <= 0) continue;
             const o = l * 3;
             er += e * L.rad[o]; eg += e * L.rad[o + 1]; eb += e * L.rad[o + 2];
@@ -108,7 +114,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
               const ch = L.channel[l];
               if ((seen & (1 << ch)) !== 0) throw new Error(`bakeTile: two dynamic lights of flicker channel ${ch} reach the same light-volume sample`);
               seen |= 1 << ch;
-              const e = near ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
+              const e = rayVis ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
               if (e > 0) F[s * 4 + ch] += e * L.radLum[l];
             }
           }
@@ -184,11 +190,14 @@ function lightDelta(job: BakeJob, l: number, x: number, y: number, z: number, c:
   return f * w;
 }
 
-/** lightDelta for near-field samples: when the sample's own cell holds a box rising above the sample or above the
- * bitset's cell-centre point at the nearest bit height (a chair under a desk; a monitor sample above a desk top that
- * hides the light from the bit below it; rack decks between the bits of a tall hall), and a box could cut the segment
- * to the emitter (classify.ts boxesBetween), one DDA ray from the sample to the emitter centre decides instead of
- * the bitset (like tower samples). */
+/**
+ * lightDelta for near-field samples (and every non-tower sample of a bake without near rays): when the sample's own
+ * cell holds a box rising above the sample or above the bitset's cell-centre point at the nearest bit height (a chair
+ * under a desk; a monitor sample above a desk top that hides the light from the bit below it; rack decks between the
+ * bits of a tall hall; a car, whose cabin swallows the bit point), and a box could cut the segment to the emitter
+ * (classify.ts boxesBetween), one DDA ray from the sample to the emitter centre decides instead of the bitset (like
+ * tower samples).
+ */
 function lightDeltaNear(job: BakeJob, l: number, x: number, y: number, z: number, c: number, group: number, layer: number): number {
   const yc = Math.min(y, job.cellY[c * 5 + layer]);
   const ray = job.boxTop[c] > yc && boxesBetween(job, c, l, Math.min(yc, lightLowY(job, l)));
