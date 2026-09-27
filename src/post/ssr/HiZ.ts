@@ -98,11 +98,18 @@ export class HiZ {
     this.info.w = 1;
   }
 
-  /** Publish into the material globals (valid = built this frame). */
+  /** Publish into the material globals (valid = built this frame; otherwise the inert null texture). */
   publish(g: MaterialGlobals, valid: boolean): void {
-    if (valid) g.hiZ.value = this.target.texture;
+    g.hiZ.value = valid ? this.target.texture : null;
     g.hiZInfo.value.copy(this.info);
     g.hiZInfo.value.w = valid ? 1 : 0;
+  }
+
+  /** Free the GL targets (a preset without SSR); the next build reallocates them. */
+  release(): void {
+    this.target.dispose();
+    this.scratch.dispose();
+    this.info.w = 0;
   }
 
   /** Mark the pyramid stale (a frame that did not build it). */

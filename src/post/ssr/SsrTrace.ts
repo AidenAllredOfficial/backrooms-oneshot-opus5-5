@@ -115,6 +115,12 @@ export class ScreenSpaceReflections {
     }
     this.settings = s;
     this.trace.uniforms.uMaxRough.value = s.maxRough;
+    if (!this.enabled) {
+      // free the GL targets on presets without SSR (they reallocate on the next traced frame)
+      this.hiz.release();
+      this.ssrRT.dispose();
+      this.tmpRT.dispose();
+    }
   }
 
   private runHiZ(ctx: FrameContext): void {

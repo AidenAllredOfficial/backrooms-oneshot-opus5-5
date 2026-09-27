@@ -126,7 +126,8 @@ ${FRAG_DIRVIS_GLSL}
 }
 irradiance += brEf * mix( vec3( 1.0 ), brSsC, 0.5 ); // flicker channels: diffuse irradiance
 iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC ); // ambient part (diffuse + multiscatter specular in RE_IndirectSpecular)
-// ambient part as a uniform environment (indirect specular; package D: the G-buffer fallback on MRT pixels)
+// ambient part as a uniform environment (indirect specular; package D: the G-buffer fallback on MRT pixels; the
+// reflection probe mixes into brEnvRad here, before the split)
 vec3 brEnvRad = ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;
 if ( brMrtSpec ) brFbEnv = brEnvRad;
 else radiance += brEnvRad;
