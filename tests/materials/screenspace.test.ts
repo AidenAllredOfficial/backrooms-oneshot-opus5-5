@@ -103,7 +103,7 @@ describe('GLSL twins', () => {
     expect(src.split('brContactShadow(').length).toBe(2); // only there
     expect(direct).not.toMatch(/brSs[KC]?\b/);
     expect(src).toContain('iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC );');
-    expect(src).toContain('radiance += ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;');
+    expect(src).toContain('vec3 brEnvRad = ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;'); // radiance, or D's G-buffer
     expect(src).toContain('brDL.color = brW * brE / brNgL * brDirVis;');
     expect(FRAG_AO_REFL_GLSL).toContain('computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav, material.roughness )');
   });

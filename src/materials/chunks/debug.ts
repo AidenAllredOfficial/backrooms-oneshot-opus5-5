@@ -64,7 +64,11 @@ vec3 brDbg = vec3( 0.0 );
 	else if ( dv == ${DebugView.BOUNCE} ) brDbg = brFbE / BR_FB_DEBUG_LUX; // package F: flashlight bounce irradiance
 	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E
 	else if ( dv == ${DebugView.PROBE} ) brDbg = vec3( 0.0 ); // package D
-	else if ( dv == ${DebugView.SPECW} ) brDbg = vec3( 0.0 ); // package D
+	else if ( dv == ${DebugView.SPECW} ) {
+		// package D: r = the G-buffer specular weight Ws x 4 (0 on pixels that keep their specular inline), g = the
+		// lobe roughness, b = reserved for the probe weight
+		brDbg = vec3( brWs * 4.0, material.roughness, 0.0 );
+	}
 	else if ( dv == ${DebugView.SSAO} ) {
 		// package A: the screen-space AO (after its exponent) in grey, the contact shadow of the baked directional
 		// light in red

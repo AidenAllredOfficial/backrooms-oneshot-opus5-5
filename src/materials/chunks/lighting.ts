@@ -20,6 +20,7 @@
 //  - brDirVis: visibility of the baked directional light (A's contact shadow, then B's FRAG_DIRVIS_GLSL).
 //  - FRAG_BOUNCE_GLSL (F) after the ambient lines.
 
+import { DebugView } from '../../core/ids.ts';
 import { SSR } from '../../post/ssr/ssrGlsl.ts';
 import { FRAG_BOUNCE_GLSL } from './bounce.ts';
 import { f } from './params.ts';
@@ -82,7 +83,16 @@ float brWs = 0.0, brMrtRough = 1.0;
 #if defined( BR_SSR ) && ! defined( BR_DECAL )
 // MRT frame: glossy (below BR_SSR_ELIG_ROUGH), not an emitter, not submerged (the water body's optics act on the
 // whole radiance). Clearcoat pixels stay inline until their coat lobe is routed (package D, second half).
-brMrtSpec = uBrMrt > 0.5 && vBrEmit <= 0.0 && brSubInfo.x <= 0.0 && material.roughness < BR_SSR_ELIG_ROUGH && ! brCoat;
+// The specw debug view evaluates the split without MRT (its output replaces the colour).
+brMrtSpec = ( uBrMrt > 0.5 || uDebugView == ${DebugView.SPECW} ) && vBrEmit <= 0.0 && brSubInfo.x <= 0.0
+	&& material.roughness < BR_SSR_ELIG_ROUGH && ! brCoat;
+if ( brMrtSpec && uTileWater > 0.5 ) {
+	// a wet floor under a water surface (film water over puddles): the water mesh reflects the room, a traced
+	// reflection of the floor below it would double it
+	float brWy;
+	int brWk;
+	if ( brWaterCell( ivec2( floor( vBrLocal.xz / BR_CELL ) ), brWy, brWk ) && brWy > vBrLocal.y - 0.01 ) brMrtSpec = false;
+}
 #endif
 // r186 only initialises this when punctual lights exist; set it exactly as lights_fragment_begin does
 material.multiScatteringCompensation = 1.0 + material.specularColorBlended * ( 1.0 / ( material.dfg.x + material.dfg.y ) - 1.0 );
@@ -174,6 +184,7 @@ else if ( ( int( uTileWater + 0.5 ) & 1 ) != 0 && brNWg.y < 0.5 && uBrReflPass <
  * baked AO) times the texture cavity AO + planar / emission-map reflections added to indirectSpecular; on G-buffer
  * pixels (brMrtSpec) the fallback specular brFbSpec and its weight brWs instead (package D). */
 export const FRAG_AO_REFL_GLSL = /* glsl */ `
+#define BR_HORIZON_K ${f(SSR.HORIZON_K)}
 // ==== WP9 specular occlusion + reflections
 float brDotNV = saturate( dot( geometryNormal, geometryViewDir ) );
 // texture cavity AO (WP8 ormh.r: grout, seams, carpet pile) on the ambient terms; the baked AO is already inside
@@ -233,9 +244,10 @@ vec3 brReflRad = vec3( 0.0 ); // the emission-map reflection's radiance x its fa
 #endif
 #if defined( BR_SSR ) && ! defined( BR_DECAL )
 if ( brMrtSpec ) {
-	// package D: the replaceable specular of a G-buffer pixel, weighted as the inline terms were (the environment
-	// radiance by the single-scatter DFG term, three's sheen energy loss and the specular occlusion; the
-	// emission-map reflection by its legacy F x gloss x AO), plus the baked lobe; nothing of it stays inline
+	// package D: the replaceable specular of a G-buffer pixel, nothing of it stays inline. The environment and
+	// emission-map radiance share one weight, which the SSR hit inherits (brWs): the single-scatter DFG term (dielectric
+	// and metal mixed by metalness, three's sheen energy loss), the specular occlusion (baked AO x SSAO x cavity) and a
+	// horizon term, so normal-mapped grout and bevels do not reflect from under the surface. Plus the baked lobe.
 	vec3 brSsD = vec3( 0.0 ), brMsD = vec3( 0.0 ), brSsM = vec3( 0.0 ), brMsM = vec3( 0.0 );
 	computeMultiscattering( material.dfg, material.specularColor, material.specularF90, brSsD, brMsD );
 	computeMultiscattering( material.dfg, material.diffuseColor, material.specularF90, brSsM, brMsM );
@@ -243,8 +255,10 @@ if ( brMrtSpec ) {
 #ifdef USE_SHEEN
 	brSSw *= 1.0 - max3( material.sheenColor ) * IBLSheenBRDF( geometryNormal, geometryViewDir, material.sheenRoughness );
 #endif
-	brFbSpec = brFbEnv * brSSw * brSO + brRefl + brFbDir;
-	brWs = brLuma( brSSw ) * brSO;
+	float brHor = saturate( 1.0 + BR_HORIZON_K * dot( reflect( - geometryViewDir, geometryNormal ), brNg ) );
+	float brSOh = brSO * brHor * brHor;
+	brFbSpec = ( brFbEnv + brReflRad ) * brSSw * brSOh + brFbDir;
+	brWs = brLuma( brSSw ) * brSOh;
 	brMrtRough = material.roughness;
 	brRefl = vec3( 0.0 );
 }
