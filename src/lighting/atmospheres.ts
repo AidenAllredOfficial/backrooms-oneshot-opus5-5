@@ -23,50 +23,53 @@ const grade = (g: Partial<ColorGrade>): ColorGrade => ({
 // clip to pure white like a consumer sensor (the shader also fades the split-tone to neutral above y 0.85 and
 // bleaches channels toward white near clip). Colour casts live in gamma (midtones) and shadowTint instead.
 // `pedestal` is the sensor black level (sRGB-encoded) added after the contrast curve: no pure #000 anywhere.
+// Package C.7a (PROVISIONAL, retuned numerically in C.7b after the wave-2 lighting / haze / reflection merges): the
+// halation veil is gone (energy-conserving glare), so lift and pedestal drop and a filmic `toe` (ColorGradeEffect)
+// takes the deep reveals toward black while the mids and the famous yellow stay where they were.
 
 /** Level 0 look: green-yellow midtone push (gamma), lifted blacks, white-clipping highlights. */
 const GRADE_L0 = grade({
-  temperature: 0.0, tint: -0.04, saturation: 0.95, contrast: 1.1,
-  lift: [0.02, 0.02, 0.012], gamma: [1.0, 1.05, 0.9], gain: [1, 1, 1],
-  shadowTint: [0.97, 1.0, 0.9], highlightTint: [1, 1, 1], pedestal: 0.04,
+  temperature: 0.0, tint: -0.04, saturation: 0.97, contrast: 1.16,
+  lift: [0.008, 0.008, 0.004], gamma: [1.0, 1.05, 0.9], gain: [1, 1, 1],
+  shadowTint: [0.97, 1.0, 0.9], highlightTint: [1, 1, 1], pedestal: 0.03, toe: 0.45,
 });
 /** MAZE: the same office fluorescents seen by a slightly warmer, dimmer camera (narrow halls, older tubes). */
 const GRADE_MAZE = grade({
-  temperature: 0.0, tint: -0.04, saturation: 0.93, contrast: 1.12,
-  lift: [0.02, 0.018, 0.01], gamma: [0.96, 1.03, 0.9], gain: [1, 1, 1],
-  shadowTint: [0.98, 0.99, 0.88], highlightTint: [1, 1, 1], pedestal: 0.04,
+  temperature: 0.0, tint: -0.04, saturation: 0.93, contrast: 1.16,
+  lift: [0.008, 0.007, 0.004], gamma: [0.96, 1.03, 0.9], gain: [1, 1, 1],
+  shadowTint: [0.98, 0.99, 0.88], highlightTint: [1, 1, 1], pedestal: 0.03, toe: 0.45,
 });
 const GRADE_MANILA = grade({
   // manila = sickly green-beige, desaturated; still inside the §8.2 Level 0 hue band [38, 65] deg
-  temperature: -0.02, tint: -0.08, saturation: 0.8, contrast: 1.06,
-  lift: [0.02, 0.022, 0.018], gamma: [0.95, 1.12, 0.95], gain: [1, 1, 1],
-  shadowTint: [0.95, 1.0, 0.93], highlightTint: [1, 1, 1], pedestal: 0.04,
+  temperature: -0.02, tint: -0.08, saturation: 0.84, contrast: 1.12,
+  lift: [0.008, 0.009, 0.007], gamma: [0.95, 1.12, 0.95], gain: [1, 1, 1],
+  shadowTint: [0.95, 1.0, 0.93], highlightTint: [1, 1, 1], pedestal: 0.03, toe: 0.4,
 });
 const GRADE_DARK = grade({
-  temperature: 0.03, tint: -0.05, saturation: 0.9, contrast: 1.08,
-  lift: [0.012, 0.014, 0.01], gamma: [0.99, 1.02, 0.92], gain: [1, 1, 1],
-  shadowTint: [0.92, 1.0, 0.92], highlightTint: [1.02, 1.0, 0.96], pedestal: 0.035,
+  temperature: 0.03, tint: -0.05, saturation: 0.9, contrast: 1.1,
+  lift: [0.005, 0.006, 0.004], gamma: [0.99, 1.02, 0.92], gain: [1, 1, 1],
+  shadowTint: [0.92, 1.0, 0.92], highlightTint: [1.02, 1.0, 0.96], pedestal: 0.028, toe: 0.5,
 });
 const GRADE_OFFICE = grade({
-  temperature: -0.03, tint: -0.03, saturation: 0.94, contrast: 1.05,
-  lift: [0.016, 0.018, 0.02], gamma: [0.98, 1.01, 1.0], gain: [1, 1, 1],
-  shadowTint: [0.95, 1.0, 0.98], highlightTint: [1, 1, 1], pedestal: 0.035,
+  temperature: -0.03, tint: -0.03, saturation: 0.94, contrast: 1.1,
+  lift: [0.006, 0.007, 0.008], gamma: [0.98, 1.01, 1.0], gain: [1, 1, 1],
+  shadowTint: [0.95, 1.0, 0.98], highlightTint: [1, 1, 1], pedestal: 0.028, toe: 0.4,
 });
 /** Poolrooms: neutral white tile under soft daylight; the water supplies the turquoise. */
 const GRADE_POOL = grade({
-  temperature: 0, tint: -0.02, saturation: 0.96, contrast: 1.0,
-  lift: [0.015, 0.018, 0.02], gamma: [1.0, 1.01, 1.01], gain: [1, 1, 1],
-  shadowTint: [0.98, 1.0, 1.0], highlightTint: [1, 1, 1], pedestal: 0.02,
+  temperature: 0, tint: -0.02, saturation: 0.96, contrast: 1.06,
+  lift: [0.006, 0.007, 0.008], gamma: [1.0, 1.01, 1.01], gain: [1, 1, 1],
+  shadowTint: [0.98, 1.0, 1.0], highlightTint: [1, 1, 1], pedestal: 0.02, toe: 0.3,
 });
 const GRADE_INDUSTRIAL = grade({
-  temperature: 0.02, tint: -0.04, saturation: 0.88, contrast: 1.08,
-  lift: [0.014, 0.016, 0.014], gamma: [1.0, 1.01, 0.94], gain: [1, 1, 1],
-  shadowTint: [0.93, 1.0, 0.95], highlightTint: [1.02, 1.0, 0.95], pedestal: 0.035,
+  temperature: 0.02, tint: -0.04, saturation: 0.88, contrast: 1.12,
+  lift: [0.006, 0.007, 0.006], gamma: [1.0, 1.01, 0.94], gain: [1, 1, 1],
+  shadowTint: [0.93, 1.0, 0.95], highlightTint: [1.02, 1.0, 0.95], pedestal: 0.028, toe: 0.45,
 });
 const GRADE_PARKING = grade({
-  temperature: 0.04, tint: -0.06, saturation: 0.9, contrast: 1.12,
-  lift: [0.014, 0.016, 0.012], gamma: [1.0, 1.02, 0.93], gain: [1, 1, 1],
-  shadowTint: [0.9, 1.0, 0.94], highlightTint: [1.03, 1.0, 0.94], pedestal: 0.035,
+  temperature: 0.04, tint: -0.06, saturation: 0.9, contrast: 1.16,
+  lift: [0.006, 0.007, 0.005], gamma: [1.0, 1.02, 0.93], gain: [1, 1, 1],
+  shadowTint: [0.9, 1.0, 0.94], highlightTint: [1.03, 1.0, 0.94], pedestal: 0.028, toe: 0.45,
 });
 
 interface Row {

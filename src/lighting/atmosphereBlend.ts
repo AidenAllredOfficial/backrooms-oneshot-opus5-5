@@ -13,6 +13,7 @@ function newGrade(): ColorGrade {
   return {
     temperature: 0, tint: 0, saturation: 1, contrast: 1,
     lift: [0, 0, 0], gamma: [1, 1, 1], gain: [1, 1, 1], shadowTint: [1, 1, 1], highlightTint: [1, 1, 1], pedestal: 0,
+    toe: 0,
   };
 }
 export function newParams(): AtmosphereParams {
@@ -37,6 +38,7 @@ export function copyParams(d: AtmosphereParams, s: AtmosphereParams): void {
   const g = d.grade, h = s.grade;
   g.temperature = h.temperature; g.tint = h.tint; g.saturation = h.saturation; g.contrast = h.contrast;
   g.pedestal = h.pedestal ?? 0;
+  g.toe = h.toe ?? 0;
   c3(g.lift, h.lift); c3(g.gamma, h.gamma); c3(g.gain, h.gain); c3(g.shadowTint, h.shadowTint); c3(g.highlightTint, h.highlightTint);
 }
 
@@ -52,6 +54,7 @@ export function lerpParams(d: AtmosphereParams, a: AtmosphereParams, b: Atmosphe
   g.temperature = lp(w, ga.temperature, gb.temperature); g.tint = lp(w, ga.tint, gb.tint);
   g.saturation = lp(w, ga.saturation, gb.saturation); g.contrast = lp(w, ga.contrast, gb.contrast);
   g.pedestal = lp(w, ga.pedestal ?? 0, gb.pedestal ?? 0);
+  g.toe = lp(w, ga.toe ?? 0, gb.toe ?? 0);
   l3(g.lift, ga.lift, gb.lift, w); l3(g.gamma, ga.gamma, gb.gamma, w); l3(g.gain, ga.gain, gb.gain, w);
   l3(g.shadowTint, ga.shadowTint, gb.shadowTint, w); l3(g.highlightTint, ga.highlightTint, gb.highlightTint, w);
 }

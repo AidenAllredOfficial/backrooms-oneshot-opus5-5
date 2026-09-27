@@ -5,8 +5,9 @@
 //     shading with LEQUAL and no depth writes, the colour pyramid and the late layer
 //  2. (no pass: the surface shader applies the SSAO to the indirect light)
 //  3. AutoExposurePass (meter; needsSwap false)
-//  4. EffectPass[Bloom (threshold 1/exposure nits), Exposure (+ warm halation from the two coarsest bloom mips), AgX,
-//     Grade (+ highlight knee and black pedestal)]
+//  4. EffectPass[MotionBlur (HDR camera blur, camcorder shutter; CONVOLUTION | DEPTH, sorted first), Glare (energy-
+//     conserving angular PSF + aperture star / ghosts from its own half-res pyramid), Exposure (+ cos^4 vignette), AgX,
+//     Grade (+ toe, highlight knee and black pedestal)]
 //  5. EffectPass[SMAA | FXAA] (a convolution effect, alone)
 //  6. EffectPass[Lens (CONVOLUTION, no mainUv; lens MTF softness + camcorder detail halo), FilmGrain] with dithering,
 //     rendered directly to the canvas. Capture frames use an RGBA8 display target, blitted to the canvas and downsampled.
@@ -16,8 +17,7 @@
 import * as THREE from 'three';
 import { effectiveDpr, maxScaleFor } from './DynamicResolution.ts';
 import {
-  BloomEffect, BlendFunction, EffectComposer, EffectPass, FXAAEffect, SMAAEffect, SMAAPreset,
-  ToneMappingEffect, ToneMappingMode,
+  EffectComposer, EffectPass, FXAAEffect, SMAAEffect, SMAAPreset, ToneMappingEffect, ToneMappingMode,
 } from 'postprocessing';
 import type { EffectMaterial, Pass } from 'postprocessing';
 import { PHOTOMETRY } from '../core/constants.ts';
@@ -31,15 +31,18 @@ import { ScenePass } from './ScenePass.ts';
 import { ColorGradeEffect } from './effects/ColorGradeEffect.ts';
 import { ExposureEffect } from './effects/ExposureEffect.ts';
 import { FilmGrainEffect } from './effects/FilmGrainEffect.ts';
+import { GlareEffect } from './effects/GlareEffect.ts';
+import { MOTION_BLUR, MotionBlurEffect, motionShutter, rollingShutterUv } from './effects/MotionBlurEffect.ts';
 import { LENS_MTF, LensEffect, VIGNETTE_FOCAL } from './effects/LensEffect.ts';
 import { ev100FromLog2, exposureFromEv, meterClamp, stepExposure } from './exposureMath.ts';
+import { FLARE, GLARE } from './glareMath.ts';
 import type { ExposureState } from './exposureMath.ts';
 
 /** Static description of the pass layout (asserted by tests/post/effects.test.ts; built by createPostStack). */
 export const POST_PASSES: readonly { name: string; effects: readonly string[] }[] = [
   { name: 'RenderPass', effects: [] },
   { name: 'AutoExposurePass', effects: [] },
-  { name: 'EffectPass', effects: ['BloomEffect', 'ExposureEffect', 'ToneMappingEffect', 'ColorGradeEffect'] },
+  { name: 'EffectPass', effects: ['MotionBlurEffect', 'GlareEffect', 'ExposureEffect', 'ToneMappingEffect', 'ColorGradeEffect'] },
   { name: 'EffectPass', effects: ['SMAAEffect|FXAAEffect'] },
   { name: 'EffectPass', effects: ['LensEffect', 'FilmGrainEffect'] },
 ];
@@ -48,11 +51,8 @@ export const POST_TUNING = {
   AO_RADIUS: 0.7, // R2-post: tighter, darker contact shadows at wall bases / under furniture
   AO_FALLOFF: 0.6,
   SSAO_POW_SCALE: 0.8, // pre-shade SSAO exponent = atmosphere aoIntensity x this (indirect light only)
-  BLOOM_RADIUS: 0.85,
-  BLOOM_SMOOTHING: 0.6, // x 1/exposure (absolute nits): a soft knee, bright ceiling tiles near a panel glow a little
-  BLOOM_SCALE: 0.35, // atmosphere bloomIntensity (table 0.4-0.6) -> BloomEffect.intensity (soft camcorder bloom)
-  HALATION: 0.3, // x the effective bloom intensity: the two coarsest bloom mips re-added (wide consumer-lens veil)
-  HALATION_TINT: [1.0, 0.85, 0.7] as readonly [number, number, number],
+  // lens scatter fraction per unit atmosphere bloomIntensity (x the mood's bloomMul): GlareEffect k = GLARE_K * bi
+  GLARE_K: GLARE.K,
   GRAIN_SIGMA: 0.009, // sRGB-encoded sigma at grain 1, exposure_ref (correlated 1.5 px grain reads stronger per sigma)
   GRAIN_CHROMA: 0.25,
   GRAIN_GAIN_MIN: 0.7,
@@ -86,7 +86,8 @@ export interface PostInternals {
   /** the pre-shade SSAO helper (the frame graph's 'ssao' hook) */
   ao: SsaoPre;
   autoExposure: AutoExposurePass;
-  bloom: BloomEffect;
+  glare: GlareEffect;
+  motionBlur: MotionBlurEffect;
   passes: Pass[];
   finalPass: EffectPass;
   targetEv(): number;
@@ -95,14 +96,6 @@ export interface PostInternals {
 const internals = new WeakMap<PostStack, PostInternals>();
 export function postInternals(p: PostStack): PostInternals | null {
   return internals.get(p) ?? null;
-}
-
-/** BloomEffect whose (costly) update can be skipped when bloom is disabled. */
-class HdrBloom extends BloomEffect {
-  active = true;
-  override update(renderer: THREE.WebGLRenderer, inputBuffer: THREE.WebGLRenderTarget, deltaTime?: number): void {
-    if (this.active) super.update(renderer, inputBuffer, deltaTime);
-  }
 }
 
 // ssr: read by ScenePass's MRT decision (package A frame graph); URL ssr=0 turns it off for A/B checks
@@ -138,15 +131,16 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   // 3. exposure meter
   const ae = new AutoExposurePass();
 
-  // 4. bloom + exposure + AgX + grade
-  const bloom = new HdrBloom({
-    blendFunction: BlendFunction.ADD, mipmapBlur: true, levels: q.bloomLevels, radius: P.BLOOM_RADIUS,
-    intensity: 0.5, luminanceThreshold: 1, luminanceSmoothing: P.BLOOM_SMOOTHING,
-  });
+  // 4. motion blur + glare + exposure + AgX + grade (the motion blur stays in the pass at every preset: taps 0 is a
+  // uniform branch, so a quality change never rebuilds this pass; the glare's star / ghost targets follow the flags)
+  const motionBlur = new MotionBlurEffect(camera);
+  const glare = new GlareEffect(q.bloomLevels);
+  glare.setFlare(q.glareStreaks, q.glareGhosts);
+  glare.setMotionSource(motionBlur.state);
   const exposureFx = new ExposureEffect();
   const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.AGX });
   const grade = new ColorGradeEffect();
-  const hdrPass = new EffectPass(camera, bloom, exposureFx, toneMapping, grade);
+  const hdrPass = new EffectPass(camera, motionBlur, glare, exposureFx, toneMapping, grade);
 
   // 5. AA (alone: SMAA and FXAA are convolution effects)
   const makeAA = (qq: QualityConfig): EffectPass =>
@@ -198,7 +192,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const applyEnabled = (): void => {
     ao.enabled = enabled.ao && quality.ao !== 'off';
     renderPass.setSsrEnabled(enabled.ssr);
-    bloom.active = enabled.bloom;
+    glare.active = enabled.bloom;
     aaPass.enabled = enabled.smaa && quality.aa !== 'off';
     grade.enabled = enabled.grade;
   };
@@ -247,27 +241,23 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const updateUniforms = (realDt: number, t: number): void => {
     const e = exposure.value;
     exposureFx.exposure = e;
-    // bloom threshold in absolute nits: starts where the exposed luminance exceeds 1
-    bloom.luminanceMaterial.threshold = 1 / e;
-    bloom.luminanceMaterial.smoothing = P.BLOOM_SMOOTHING / e;
+    const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
+    // glare: scatter fraction k (energy-conserving, no threshold); the PSF is angular, so it needs the FOV and the
+    // buffer height. Aperture star / ghosts (C.5) are gated by the lens toggle and Settings.film.flare.
     const bi = atm ? atm.bloomIntensity : 0.5;
-    bloom.intensity = enabled.bloom ? bi * P.BLOOM_SCALE : 0;
-    // halation: the two coarsest upsampling mips of the bloom blur (they already hold the coarser levels)
-    const ups = (bloom.mipmapBlurPass as unknown as { upsamplingMipmaps: THREE.WebGLRenderTarget[] }).upsamplingMipmaps;
-    if (enabled.bloom && ups.length >= 1) {
-      const t0 = ups[Math.max(0, ups.length - 1)].texture;
-      const t1 = ups[Math.max(0, ups.length - 2)].texture;
-      const k = P.HALATION * bi * P.BLOOM_SCALE;
-      const T = P.HALATION_TINT;
-      exposureFx.setHalation(t0, t1, T[0] * k, T[1] * k, T[2] * k);
-    } else exposureFx.setHalation(null, null, 0, 0, 0);
+    glare.setParams(enabled.bloom ? P.GLARE_K * bi : 0, e, tanHalf, dbs.y);
+    const flare = enabled.lens ? film.flare : 0;
+    glare.setFlareGains(quality.glareStreaks ? FLARE.STAR_GAIN * flare : 0, quality.glareGhosts ? FLARE.GHOST_GAIN * flare : 0);
+    // motion blur (C.4): the camcorder shutter lengthens from 1/60 to 1/30 s at max sensor gain (the same low-light
+    // factor as the grain below); Settings.film.motionBlur scales it (0 = off, the motion-sickness opt-out)
+    const low = smoothstep(P.LOW_LIGHT_EV, P.LOW_LIGHT_EV_MIN, exposure.ev100);
+    motionBlur.set(quality.motionBlurTaps, motionShutter(low, film.motionBlur), MOTION_BLUR.MAX_BLUR * dbs.y);
     if (atm) {
       ao.intensity = atm.aoIntensity; // aoColor is retired: the SSAO multi-bounce keeps the albedo's hue
       grade.setGrade(atm.grade);
     }
     const frame = Math.floor(t * 24);
     // lens (film strengths) and glitch
-    const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
     // the optical vignette acts on HDR radiance (ExposureEffect) so clipped emitters stay white near the edges
     if (enabled.lens) { lens.setLens(film.distortion, film.chromaticAberration, 0, tanHalf); lens.setMtf(LENS_MTF.MIX, LENS_MTF.UNSHARP); }
     else { lens.setLens(0, 0, 0, tanHalf); lens.setMtf(0, 0); }
@@ -284,10 +274,14 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
     const fm = atm && atm.flickerMode !== undefined ? atm.flickerMode : 0;
     const band = fm >= 2 ? 0 : fm >= 1 ? P.BEAT_BAND * 0.5 : P.BEAT_BAND;
     lens.setCamcorder(enabled.lens && film.camcorder, frame, t, band);
+    // CMOS rolling shutter (camcorder mode, C.6): skew from the camera's angular velocity over the frame that is
+    // about to render (the motion-blur state of the previous update; zero after a cut or while paused)
+    const av = motionBlur.angularVelocity;
+    const rs = enabled.lens && film.camcorder && !paused && !motionBlur.wasCut ? rollingShutterUv(av.yaw, av.pitch, tanHalf, camera.aspect) : null;
+    lens.setRollingShutter(rs ? rs[0] : 0, rs ? rs[1] : 0);
     // grain: sigma ~ grain * sqrt(scene exposure / exposure_ref) (dark footage is noisier), plus the low-light AGC boost
     // (grain and chroma noise grow as the metered EV falls below LOW_LIGHT_EV: a camcorder at max gain)
     const g = atm ? atm.grain : 0.5;
-    const low = smoothstep(P.LOW_LIGHT_EV, P.LOW_LIGHT_EV_MIN, exposure.ev100);
     // the gain follows the metered scene EV (not the zone's look bias, not the user's brightness)
     const eScene = exposureFromEv(exposure.ev100, 0, 0);
     const gain = Math.min(P.GRAIN_GAIN_MAX, Math.max(P.GRAIN_GAIN_MIN, Math.sqrt(eScene / EXPOSURE_REF)) * (1 + P.LOW_LIGHT_GAIN * low));
@@ -335,7 +329,8 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
         ao.intensity = old.intensity;
         old.dispose();
       }
-      if (bloom.mipmapBlurPass.levels !== nq.bloomLevels) bloom.mipmapBlurPass.levels = nq.bloomLevels;
+      glare.setLevels(nq.bloomLevels);
+      glare.setFlare(nq.glareStreaks, nq.glareGhosts);
       const key = nq.aa === 'smaa' ? `smaa:${nq.smaaPreset}` : 'fxaa';
       if (key !== aaKey) {
         aaKey = key;
@@ -373,6 +368,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       exposure.value = exposureFromEv(spring.ev, atm ? atm.exposureBias : 0, brightnessEV);
     },
     snapExposure() {
+      motionBlur.cut(); // teleport / new seed / time=: never blur across it
       snapLeft = P.SNAP_MEASUREMENTS;
       if (lastMeasure > 0) { spring.ev = targetEv; spring.vel = 0; }
     },
@@ -384,6 +380,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
     },
     setPaused(p) {
       paused = p;
+      motionBlur.cut();
       ae.paused = p;
     },
     capture(w, h) {
@@ -403,7 +400,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   };
   applyEnabled();
   internals.set(post, {
-    composer, scenePass: renderPass, get ao() { return ao; }, autoExposure: ae, bloom, finalPass,
+    composer, scenePass: renderPass, get ao() { return ao; }, autoExposure: ae, glare, motionBlur, finalPass,
     get passes() { return composer.passes; },
     targetEv: () => targetEv,
     measurements: () => ae.measurements,

@@ -102,7 +102,7 @@ export function validateSettings(raw: unknown): Settings {
   const vol = isObj(r.volume) ? r.volume : {};
   const film = isObj(r.film) ? r.film : {};
   const v = (k: keyof Settings['volume']): number => numIn(vol[k], R.volume[0], R.volume[1], d.volume[k]);
-  const f = (k: 'grain' | 'chromaticAberration' | 'vignette' | 'distortion'): number => numIn(film[k], R.film[0], R.film[1], d.film[k]);
+  const f = (k: 'grain' | 'chromaticAberration' | 'vignette' | 'distortion' | 'motionBlur' | 'flare'): number => numIn(film[k], R.film[0], R.film[1], d.film[k]);
   const lastSeed = typeof r.lastSeed === 'string' ? r.lastSeed.trim().slice(0, 64) : typeof r.lastSeed === 'number' ? String(r.lastSeed) : '';
   return {
     version: 1,
@@ -121,7 +121,7 @@ export function validateSettings(raw: unknown): Settings {
     volume: { master: v('master'), ambience: v('ambience'), hum: v('hum'), sfx: v('sfx'), ui: v('ui') },
     film: {
       grain: f('grain'), chromaticAberration: f('chromaticAberration'), vignette: f('vignette'), distortion: f('distortion'),
-      camcorder: boolOr(film.camcorder, d.film.camcorder),
+      camcorder: boolOr(film.camcorder, d.film.camcorder), motionBlur: f('motionBlur'), flare: f('flare'),
     },
     mainsHz: r.mainsHz === 50 || r.mainsHz === '50' ? 50 : r.mainsHz === 60 || r.mainsHz === '60' ? 60 : d.mainsHz,
     lastSeed,

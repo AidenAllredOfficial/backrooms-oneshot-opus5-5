@@ -37,7 +37,7 @@ describe('validateSettings: defaults', () => {
       ...DEFAULT_SETTINGS, quality: 'ultra', overrides: { renderScale: 0.8, dynamicResolution: false }, fov: 75,
       mouseSensitivity: 0.003, invertY: true, headBob: 0.4, flicker: 'off', toggleSprint: true, toggleCrouch: true,
       brightnessEV: -0.5, volume: { master: 0.5, ambience: 0.1, hum: 0.2, sfx: 0.3, ui: 0 },
-      film: { grain: 0.2, chromaticAberration: 0, vignette: 0.5, distortion: 0.25, camcorder: true }, mainsHz: 50, lastSeed: 'abc',
+      film: { grain: 0.2, chromaticAberration: 0, vignette: 0.5, distortion: 0.25, camcorder: true, motionBlur: 0.3, flare: 0 }, mainsHz: 50, lastSeed: 'abc',
     };
     expect(validateSettings(JSON.parse(JSON.stringify(v)))).toEqual(v);
   });
@@ -48,7 +48,7 @@ describe('validateSettings: clamping and types', () => {
     const s = validateSettings({
       version: 1, fov: 200, mouseSensitivity: -1, headBob: 3, brightnessEV: -9,
       volume: { master: 2, ambience: -1, hum: 0.5, sfx: 'x', ui: null },
-      film: { grain: 7, chromaticAberration: -2, vignette: 0.3, distortion: Infinity },
+      film: { grain: 7, chromaticAberration: -2, vignette: 0.3, distortion: Infinity, motionBlur: 4, flare: -1 },
       overrides: { renderScale: 9, streamRadius: 2.7, maxDpr: 0 },
     });
     expect(s.fov).toBe(90);
@@ -56,7 +56,7 @@ describe('validateSettings: clamping and types', () => {
     expect(s.headBob).toBe(1);
     expect(s.brightnessEV).toBe(-1);
     expect(s.volume).toEqual({ master: 1, ambience: 0, hum: 0.5, sfx: DEFAULT_SETTINGS.volume.sfx, ui: DEFAULT_SETTINGS.volume.ui });
-    expect(s.film).toEqual({ grain: 1, chromaticAberration: 0, vignette: 0.3, distortion: DEFAULT_SETTINGS.film.distortion, camcorder: false });
+    expect(s.film).toEqual({ grain: 1, chromaticAberration: 0, vignette: 0.3, distortion: DEFAULT_SETTINGS.film.distortion, camcorder: false, motionBlur: 1, flare: 0 });
     expect(s.overrides).toEqual({ renderScale: 2, streamRadius: 3, maxDpr: 0.5 });
   });
   it('enums fall back to defaults; unknown fields are dropped', () => {
