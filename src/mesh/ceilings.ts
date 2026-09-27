@@ -3,6 +3,7 @@
 // TROFFER_2x2, SKY_PANEL) emitted whole in the tile containing their centre. Pure module.
 
 import { CEIL_TILE } from '../core/constants.ts';
+import { lensAux, recessedProfile } from '../core/emitterProfile.ts';
 import { tileOfPoint } from '../core/grid.ts';
 import { CeilKind, CellFlag, DYING_MEAN, LightState, Mat, TileState, VFlag, isRecessedFixture } from '../core/ids.ts';
 import { fixtureRadiance, getTile, type Fixture } from '../core/layout.ts';
@@ -302,12 +303,15 @@ const cfgHas = (c: number[], a0: number, a1: number, y: number): boolean =>
 
 // ------------------------------------------------------------------------------------------------ recessed fixtures
 
-function lensState(f: Fixture): FaceState {
+/** Lens face state. aux = profile parameter A | profile bits << 16 | state << 24 and tint.a = seed & 255 in every
+ * state (core/emitterProfile.ts): the shaders shape the lens (PRISM / LOUVER / OPAL) at medium and above, and an
+ * OFF lens keeps its profile for the dark-cavity look. U, V: lens size in ceiling tiles; axis 1: lamps along v. */
+function lensState(f: Fixture, zone: number, U: number, V: number): FaceState {
   const c = f.color;
-  let emit = fixtureRadiance(f), flags = VFlag.NO_GRIME, aux = 0, st: number = f.state;
-  let tint = tintRGB(c[0], c[1], c[2]);
+  let emit = fixtureRadiance(f), flags = VFlag.NO_GRIME, st: number = f.state;
+  let tint = tintRGB(c[0], c[1], c[2], f.seed & 255);
   switch (f.state) {
-    case LightState.OFF: emit = 0; tint = tintRGB(0.55, 0.53, 0.5); break;
+    case LightState.OFF: emit = 0; tint = tintRGB(0.55, 0.53, 0.5, f.seed & 255); break;
     case LightState.DYING: emit *= DYING_MEAN; flags |= VFlag.SHIMMER; break;
     case LightState.BUZZ: flags |= VFlag.SHIMMER; break;
     case LightState.FLICKER:
@@ -319,11 +323,8 @@ function lensState(f: Fixture): FaceState {
     case LightState.ANOMALY: if (f.dynamic) flags |= VFlag.DYN_EMIT; break;
     default: break;
   }
-  if (flags & (VFlag.DYN_EMIT | VFlag.SHIMMER)) {
-    aux = (st & 255) << 24;
-    tint = tintRGB(c[0], c[1], c[2], f.seed & 255);
-  }
-  return state(Mat.PANEL_LENS, flags, tint, emit, aux >>> 0);
+  const axis = Math.abs(f.tz) > Math.abs(f.tx) ? 1 : 0;
+  return state(Mat.PANEL_LENS, flags, tint, emit, lensAux(recessedProfile(f.kind, U, V, axis, f.seed, zone), st));
 }
 
 function emitRecessed(plan: Plan, g: TileGrid, r: RecessedFixture, cc: CeilCharts): void {
@@ -332,10 +333,11 @@ function emitRecessed(plan: Plan, g: TileGrid, r: RecessedFixture, cc: CeilChart
   const trim = state(Mat.TRIM_PAINT, VFlag.NO_GRIME, tintRGB(0.93, 0.93, 0.9));
   const put = (f: Face): void => { plan.borrow(f, spec); };
   const { x0, x1, z0, z1, y } = r;
-  const lens = lensState(r.f);
+  const U = (x1 - x0) / CEIL_TILE, V = (z1 - z0) / CEIL_TILE;
+  const lens = lensState(r.f, g.nb.center.zone, U, V);
   const lensQuad = (yl: number): void => {
+    // uv 0..U along +x, 0..V along +z: the lens shader's frame (chunks/emitters.ts)
     const f = hQuad(yl, -1, x0, x1, z0, z1, lens);
-    const U = (x1 - x0) / CEIL_TILE, V = (z1 - z0) / CEIL_TILE;
     f.uv = [0, 0, U, 0, U, V, 0, V];
     put(f);
   };

@@ -8,8 +8,13 @@
 // Photometric calibration (tested): the emissive part is sized so that (emit x projected area along n) equals the
 // fixture's intensity (SPHERE / disk: `luminance` cd, emit = I / (pi r^2), r = w / 2) or L * w * h (RECT). SPHERE
 // geometry is a sphere of radius exactly w / 2; HIGHBAY's disk has radius w / 2.
+// Emitter profiles (graphics-realism C.3, core/emitterProfile.ts; the shaders shape them at medium and up, each
+// normalised to mean 1 at the nadir, so the calibration holds): TUBE (param = length cm, v in [-0.5, 0.5] along the
+// tube, variant = tube index), BULB (variant 1 = clear glass), HIGHBAY (uv = xz / r), DROP and SODIUM (uv in [0, 1]^2,
+// u along the long axis, param = length cm). Lens sides and dead (OFF) fixtures keep the legacy look.
 // Pure module (no three/DOM).
 
+import { EP } from '../core/emitterProfile.ts';
 import { DROP_LENS_H, DYING_MEAN, FixtureKind, isRecessedFixture, LightState, Mat, SignKind, VFlag } from '../core/ids.ts';
 import { fixtureRadiance, type Fixture } from '../core/layout.ts';
 import type { GeometryWriter } from '../core/writer.ts';
@@ -45,11 +50,15 @@ export const emissiveArea = (f: Pick<Fixture, 'shape' | 'w' | 'h'>): number =>
 const st: EmitState = { emit: 0, flags: 0, state: 0 };
 let cur: Fixture;
 
-/** Switch the builder to the emissive (lens / tube / bulb) material, or an unlit dusty lens when OFF. */
-function lens(layer: number): void {
-  if (st.emit > 0) B.emissive(layer, cur.color[0], cur.color[1], cur.color[2], st.emit, st.flags, st.state, cur.seed);
+/** Switch the builder to the emissive (lens / tube / bulb) material with emitter profile `ep` (core/emitterProfile.ts),
+ * or an unlit dusty lens when OFF (legacy look, no profile). Returns whether it is emissive. */
+function lens(layer: number, ep = 0, variant = 0, param = 0): boolean {
+  if (st.emit > 0) B.emissive(layer, cur.color[0], cur.color[1], cur.color[2], st.emit, st.flags, st.state, cur.seed, ep, variant, param);
   else B.mat(layer, 0.5, 0.49, 0.46, VFlag.NO_GRIME, 0.3);
+  return st.emit > 0;
 }
+/** Emitter length in cm (the TUBE / DROP / SODIUM profile parameter byte). */
+const lengthCm = (m: number): number => Math.max(1, Math.min(255, Math.round(m * 100)));
 const housing = (r: number, g: number, bb: number, rough = 0): void => B.mat(Mat.METAL_PAINTED, r, g, bb, 0, rough);
 
 /** Default mount distances (m from the emitting surface to the ceiling / wall) when the ceiling is unknown. */
@@ -73,9 +82,9 @@ function tubeStrip(f: Fixture, md: number): void {
   const n = 8;
   const R = d / 2 / Math.cos(Math.PI / n); // polygon silhouette width == d
   const zc = R + 0.004;
-  // tubes (emissive), along X
-  lens(Mat.PLASTIC);
+  // tubes (emissive), along X: v = y / L in [-0.5, 0.5] along each tube (TUBE profile)
   for (const s of [-1, 1]) {
+    if (lens(Mat.PLASTIC, EP.TUBE, s < 0 ? 0 : 1, lengthCm(L))) B.uvScale(1 / L);
     B.push();
     B.translate(0, 0, s * zc);
     B.rotZ(-Math.PI / 2); // +Y -> +X
@@ -104,7 +113,8 @@ function tubeStrip(f: Fixture, md: number): void {
 
 function cageBulb(f: Fixture, md: number): void {
   const r = f.shape === 1 ? f.w / 2 : Math.sqrt(emissiveArea(f) / Math.PI);
-  lens(Mat.PLASTIC);
+  // half the cage bulbs are clear glass (a blazing filament in dim glass), the rest frosted (a hot centre)
+  lens(Mat.PLASTIC, EP.BULB, rnd(f.seed, 5) < 0.5 ? 1 : 0);
   sphere(B, r, 10, 6);
   const rc = r + 0.022; // cage radius
   const mount = Math.max(md, r + 0.1);
@@ -134,8 +144,8 @@ const CAGE_PTS: number[] = [];
 
 function highbay(f: Fixture, md: number): void {
   const r = f.shape === 1 ? f.w / 2 : Math.sqrt(emissiveArea(f) / Math.PI);
-  // emissive disk (radius r) just inside the reflector rim
-  lens(Mat.PLASTIC);
+  // emissive disk (radius r) just inside the reflector rim; uv = xz / r (HIGHBAY profile: arc lamp + reflector ring)
+  if (lens(Mat.PLASTIC, EP.HIGHBAY)) B.uvScale(1 / r);
   disk(B, r, 24, 0.001, false, 0);
   // bell reflector: inner surface (bright aluminium), rim lip, outer shell
   housing(0.55, 0.55, 0.53, 0.2);
@@ -161,7 +171,6 @@ function highbay(f: Fixture, md: number): void {
 function pendantLinear(f: Fixture, md: number): void {
   const hx = (f.shape === 0 ? f.w : Math.sqrt(emissiveArea(f) * 6)) / 2;
   const hz = emissiveArea(f) / (4 * hx);
-  lens(Mat.PANEL_LENS);
   dropLens(hx, hz);
   // extruded aluminium body with end caps. Its bottom is only a frame around the lens: a full bottom face just
   // above the lens z-fights with it beyond ~30 m (24-bit depth, near 0.05), breaking distant lenses into steps.
@@ -190,11 +199,15 @@ function pendantLinear(f: Fixture, md: number): void {
 
 /** Emissive drop diffuser of half extents (hx, hz) hanging DROP_LENS_H below y = 0: bottom face plus sides whose
  * lower vertices face down, so the vertex shaders can deepen it to 1 px on screen (a distant lens seen edge-on
- * would otherwise cover under a pixel and break up). */
+ * would otherwise cover under a pixel and break up). The bottom carries the DROP profile (one continuous opal
+ * sheet, brighter along its centre line; uv in [0, 1]^2), the 4 mm sides stay legacy. */
 function dropLens(hx: number, hz: number): void {
+  if (lens(Mat.PANEL_LENS, EP.DROP, 0, lengthCm(2 * hx))) B.uvScale(1 / (2 * hx), 1 / (2 * hz));
   B.dropLens();
   const h = -DROP_LENS_H;
   rect(B, 0, h, 0, hx, 0, 0, 0, 0, hz, 0, -1, 0);
+  lens(Mat.PANEL_LENS);
+  B.dropLens();
   // sides: top edge at the housing (normal outward), bottom edge on the lens face (normal down)
   const side = (x0: number, z0: number, x1: number, z1: number, nx: number, nz: number): void => {
     const u1 = Math.hypot(x1 - x0, z1 - z0);
@@ -210,9 +223,11 @@ function sodium(f: Fixture, md: number): void {
   const A = emissiveArea(f);
   const hx = f.shape === 0 ? f.w / 2 : Math.sqrt(A) / 2;
   const hz = A / (4 * hx);
-  // drop lens: a shallow box whose bottom face (and sides) glow orange
-  lens(Mat.PLASTIC);
+  // drop lens: a shallow box whose bottom face (the arc tube smeared by the refractor: SODIUM profile, uv in
+  // [0, 1]^2) and sides glow orange
+  if (lens(Mat.PLASTIC, EP.SODIUM, 0, lengthCm(2 * hx))) B.uvScale(1 / (2 * hx), 1 / (2 * hz));
   rect(B, 0, 0, 0, hx, 0, 0, 0, 0, hz, 0, -1, 0);
+  lens(Mat.PLASTIC);
   const dl = 0.035;
   rect(B, 0, dl / 2, -hz, hx, 0, 0, 0, dl / 2, 0, 0, 0, -1);
   rect(B, 0, dl / 2, hz, hx, 0, 0, 0, dl / 2, 0, 0, 0, 1);
@@ -312,7 +327,7 @@ function redBulb(f: Fixture, md: number): void {
     return;
   }
   const r = f.w / 2;
-  lens(Mat.PLASTIC);
+  lens(Mat.PLASTIC, EP.BULB);
   sphere(B, r, 12, 7);
   // bakelite socket + cord to the ceiling
   B.mat(Mat.PLASTIC, 0.03, 0.03, 0.03, 0, 0.35);

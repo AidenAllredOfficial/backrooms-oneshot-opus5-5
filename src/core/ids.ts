@@ -185,6 +185,11 @@ export const VFlag = {
   DECAL: 32, // shell/props variant: alpha-tested against albedo.a (grates, sign faces); decal variant: soft alpha
   FLOOR_AUX: 64, // brAux = (reflPlaneHeightAboveFloor/5cm, regionKey & 255, regionKey >> 8, water byte or 0)
   PROP_AUX: 128, // brAux = (roughness override byte (0 = none, else roughness = x / 255), thin-tube radius in 0.1 mm (0 = none; widened to >= 1 px on screen), bits: 1 = tower-periodic (wrap y for LV lookup), ceilCm/5 of the anchor cell)
+  // aux.z bits (graphics-realism C.3 contract, written by props/builder.ts): bit 0 = tower. Emissive parts
+  // (emit > 0): bits 1-4 = emitter profile (core/emitterProfile.ts EP), bits 5-7 = variant, and aux.x is the profile
+  // parameter, not a roughness override. Other PROP_AUX parts: bit 1 = clearcoat, bits 2-7 = dust 0-63, aux.x = the
+  // roughness override. Non-FLOOR_AUX, non-PROP_AUX shell faces use the same profile bits (recessed lenses: aux.x =
+  // lens size / lamp axis, aux.w = state, tint.a = seed & 255 in every state).
 } as const;
 
 /** PROP_AUX aux.y value marking a drop lens (PartBuilder.dropLens) rather than a thin-tube radius. */

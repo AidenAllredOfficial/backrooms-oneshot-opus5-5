@@ -8,10 +8,17 @@
 // - automatic triangle orientation: every triangle is wound counter-clockwise as seen from the side its vertex
 //   normals point to, so primitives only have to supply correct (outward) normals;
 // - material state per part: layer, tint (desired linear albedo / layer albedoMean), VFlag.PROP_AUX and
-//   aux = (roughnessOverride, wire radius, bits, ceilByte); emissive parts with DYN_EMIT / SHIMMER metadata;
-// - UVs in part-local metres / LAYER_DEFS[layer].repeat (or raw atlas UVs);
+//   aux = (roughnessOverride, wire radius, bits, ceilByte); emissive parts with DYN_EMIT / SHIMMER metadata and an
+//   emitter profile (aux.z contract below);
+// - UVs in part-local metres / LAYER_DEFS[layer].repeat (or raw atlas UVs, or a profile's own scale: uvScale);
+//
+// aux.z contract (core/ids.ts VFlag.PROP_AUX; graphics-realism C.3): bit 0 = tower (from the prop's auxBits).
+// Emissive parts: bits 1-4 = emitter profile (core/emitterProfile.ts EP), bits 5-7 = variant, aux.x = the profile
+// parameter. Other parts: bit 1 = clearcoat, bits 2-7 = dust 0-63 (auxBits from props/tileProps.ts), aux.x = the
+// roughness override.
 // - a counting mode (no writer) used by propTris(), which runs the identical code path.
 
+import { profileBits } from '../core/emitterProfile.ts';
 import { LAYER_DEFS } from '../core/materials.ts';
 import { DROP_LENS_AUX, VFlag } from '../core/ids.ts';
 import { packRGBA, type GeometryWriter } from '../core/writer.ts';
@@ -33,6 +40,7 @@ export class PartBuilder {
   // prop-local position + normal of every vertex of the current prop (pre-mirror), for orientation checks
   private lp = new Float64Array(6 * 2048);
   private uvS = 1;
+  private uvSv = 1;
   // per-prop constants
   private auxBits = 0;
   private ceilByte = 0;
@@ -65,11 +73,11 @@ export class PartBuilder {
 
   // ------------------------------------------------------------------ materials
   /** Opaque part. (r, g, b) = desired linear albedo (r < 0: the layer's own albedo). `rough` > 0 writes a
-   * roughness override into aux.x (0 = none; see docs/contract-changes/WP6.md). */
-  mat(layer: number, r = -1, g = -1, b = -1, extraFlags = 0, rough = 0): void {
+   * roughness override into aux.x (0 = none; see docs/contract-changes/WP6.md). `coat`: aux.z bit 1 (clearcoat). */
+  mat(layer: number, r = -1, g = -1, b = -1, extraFlags = 0, rough = 0, coat = false): void {
     const d = LAYER_DEFS[layer] ?? LAYER_DEFS[0];
     this.layer = layer;
-    this.uvS = 1 / d.repeat;
+    this.uvS = this.uvSv = 1 / d.repeat;
     const j = this.jitter;
     let tr = j, tg = j, tb = j;
     if (r >= 0) {
@@ -78,21 +86,29 @@ export class PartBuilder {
       tb = (b / Math.max(d.albedoMean[2], 1e-3)) * j;
     }
     const tint = packRGBA(byte(tr), byte(tg), byte(tb), this.seedByte);
-    const aux = packRGBA(rough > 0 ? Math.max(1, byte(rough)) : 0, 0, this.auxBits, this.ceilByte);
+    const bits = (this.auxBits & ~2) | (coat ? 2 : 0);
+    const aux = packRGBA(rough > 0 ? Math.max(1, byte(rough)) : 0, 0, bits, this.ceilByte);
     this.state(VFlag.PROP_AUX | extraFlags, tint, 0, aux);
   }
 
   /** Emissive part: tint = emitter colour (max component 1), `emit` nits. DYN_EMIT/SHIMMER parts store
-   * aux.w = state and tint.a = fixture seed & 255 (the shader's shimmer inputs). */
-  emissive(layer: number, r: number, g: number, b: number, emit: number, flags: number, state: number, fixtureSeed: number): void {
+   * aux.w = state and tint.a = fixture seed & 255 (the shader's shimmer inputs). `ep` / `variant` / `param`: the
+   * emitter profile (core/emitterProfile.ts) in aux.z bits 1-4 / 5-7 and aux.x (0-255); only the tower bit of the
+   * prop's auxBits is kept (no dust / coat bits on emitters). */
+  emissive(layer: number, r: number, g: number, b: number, emit: number, flags: number, state: number, fixtureSeed: number,
+    ep = 0, variant = 0, param = 0): void {
     const d = LAYER_DEFS[layer] ?? LAYER_DEFS[0];
     this.layer = layer;
-    this.uvS = 1 / d.repeat;
+    this.uvS = this.uvSv = 1 / d.repeat;
     const dyn = (flags & (VFlag.DYN_EMIT | VFlag.SHIMMER)) !== 0;
     const tint = packRGBA(byte(r), byte(g), byte(b), dyn ? fixtureSeed & 255 : this.seedByte);
-    const aux = packRGBA(0, 0, this.auxBits, dyn ? state & 255 : this.ceilByte);
+    const aux = packRGBA(Math.max(0, Math.min(255, Math.round(param))), 0, profileBits(ep, variant, this.auxBits), dyn ? state & 255 : this.ceilByte);
     this.state(VFlag.PROP_AUX | VFlag.NO_GRIME | flags, tint, emit, aux);
   }
+
+  /** Subsequent UVs are the part-local (u, v) times (su, sv) instead of / the layer repeat, until the next mat() /
+   * emissive() (emitter profiles with their own uv scheme, e.g. a tube's v in [-0.5, 0.5] along its length). */
+  uvScale(su: number, sv = su): void { this.uvS = su; this.uvSv = sv; }
 
   /** The following parts of the current material are thin tubes of radius `r` (m, 0.1 mm steps up to 25.5 mm):
    * cylinder / sweep sides with radial normals and no caps, straight from the builder (no scaled transform). The
@@ -116,7 +132,7 @@ export class PartBuilder {
   }
 
   /** Subsequent UVs are passed through unscaled (atlas slots: SIGNAGE, DECAL_ATLAS). */
-  rawUv(): void { this.uvS = 1; }
+  rawUv(): void { this.uvS = this.uvSv = 1; }
   get currentLayer(): number { return this.layer; }
 
   // ------------------------------------------------------------------ transforms (post-multiplied)
@@ -186,8 +202,7 @@ export class PartBuilder {
     this.lp[o] = X; this.lp[o + 1] = Y; this.lp[o + 2] = Z;
     this.lp[o + 3] = NX; this.lp[o + 4] = NY; this.lp[o + 5] = NZ;
     if (this.mirror) { Y = -Y; NY = -NY; }
-    const s = this.uvS;
-    return this.w ? this.w.vertex(X, Y, Z, NX, NY, NZ, u * s, vv * s) : this.base + k;
+    return this.w ? this.w.vertex(X, Y, Z, NX, NY, NZ, u * this.uvS, vv * this.uvSv) : this.base + k;
   }
 
   /** Triangle, automatically wound counter-clockwise as seen from its vertex normals. */

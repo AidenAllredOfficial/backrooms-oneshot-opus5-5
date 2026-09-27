@@ -98,12 +98,11 @@ const RECIPES: Partial<Record<number, Recipe>> = {
     s.ao = grid ? 1 : hole < 1 ? 0.7 : 1;
   },
   [Mat.PANEL_LENS]: (u, v, s, nz) => {
-    // uv 0..1 per 0.6 m: prism grid (4 mm), 2 cm frame (mask 0), two tube hot stripes along v
+    // uv 0..1 per 0.6 m: prism grid (4 mm), two tube hot stripes along v; one continuous sheet (no per-repeat frame)
     const pu = (u * 150) % 1, pv = (v * 150) % 1;
     s.h = 0.5 + 0.25 * (1 - Math.abs(pu - 0.5) * 2) * (1 - Math.abs(pv - 0.5) * 2);
-    const fr = Math.min(u, 1 - u) * 0.6 < 0.02 || Math.min(v % 1, 1 - (v % 1)) * 0.6 < 0.005;
     const stripe = Math.exp(-(((u - 0.3) / 0.09) ** 2)) + Math.exp(-(((u - 0.7) / 0.09) ** 2));
-    s.em = fr ? 0 : clamp01(0.55 + 0.45 * stripe);
+    s.em = clamp01(0.55 + 0.45 * stripe);
     s.rough = 0.3;
     void nz;
   },

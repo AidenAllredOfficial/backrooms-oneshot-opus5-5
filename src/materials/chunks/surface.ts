@@ -433,15 +433,45 @@ vec3 brNg = normal;
 }
 `;
 
-/** Replaces `#include <emissivemap_fragment>`. LENS_SHIMMER_GLSL (core/flicker.ts, WP11) provides brLensShimmer. */
+/** Replaces `#include <emissivemap_fragment>`. LENS_SHIMMER_GLSL (core/flicker.ts, WP11) provides brLensShimmer.
+ * Under BR_DETAIL == 1, emitters whose aux.z carries a profile (core/emitterProfile.ts; non-FLOOR_AUX faces) are
+ * shaped by brEmitterShape (chunks/emitters.ts); the others, and the lite path, keep the uniform / texture-mask
+ * emission. OFF recessed lenses carry the profile too and get a dark cavity with dead tubes. */
 export const FRAG_EMISSIVE_GLSL = /* glsl */ `
+#if BR_DETAIL == 1
+// profile inputs, taken in uniform control flow (derivatives): the uv footprint and the view vector in the
+// emitter's (u, v, n) frame. Recessed lenses are down-facing shell quads with uv along world +x / +z; props use the
+// uv cotangent frame (FRAG_NORMAL's expression, so the compiler shares it)
+int brEp = ( brF & BR_F_FLOOR_AUX ) == 0 ? ( int( brAuxB.z + 0.5 ) >> 1 ) & 15 : 0;
+float brEmFp = max( length( dFdx( vBrUv ) ), length( dFdy( vBrUv ) ) );
+vec3 brEmV = normalize( vViewPosition );
+#ifdef BR_PROPS
+mat3 brEmTbn = brTangentFrame( - vViewPosition, brNg, vBrUv );
+vec3 brEmVt = vec3( dot( brEmV, brEmTbn[ 0 ] ) * inversesqrt( max( dot( brEmTbn[ 0 ], brEmTbn[ 0 ] ), 1e-12 ) ),
+	dot( brEmV, brEmTbn[ 1 ] ) * inversesqrt( max( dot( brEmTbn[ 1 ], brEmTbn[ 1 ] ), 1e-12 ) ), dot( brEmV, brNg ) );
+#else
+vec3 brEmVw = ( vec4( brEmV, 0.0 ) * viewMatrix ).xyz;
+vec3 brEmVt = vec3( brEmVw.x, brEmVw.z, - brEmVw.y );
+#endif
+#endif
 if ( vBrEmit > 0.0 ) {
 	float brIsLens = ( brL == BR_M_PANEL_LENS || brL == BR_M_SIGNAGE ) ? 1.0 : 0.0;
 	float brDyn = ( brF & BR_F_DYN_EMIT ) != 0 ? brLuma( uFlick[ 0 ] ) : 1.0;
 	float brSh = 1.0;
 	if ( ( brF & BR_F_SHIMMER ) != 0 ) brSh = brLensShimmer( int( brAuxB.w ), floor( vBrTint.a * 255.0 + 0.5 ), uTime, uFlickerMode );
+#if BR_DETAIL == 1
+	if ( brEp != 0 ) totalEmissiveRadiance = vBrEmit * vBrTint.rgb * brEmitterShape( brEp, ( int( brAuxB.z + 0.5 ) >> 5 ) & 7,
+		int( brAuxB.x + 0.5 ), floor( vBrTint.a * 255.0 + 0.5 ), vBrUv, brEmVt, brEmFp, uTime, int( brAuxB.w + 0.5 ), brDyn, brSh,
+		( brF & BR_F_DYN_EMIT ) != 0, ( brF & BR_F_SHIMMER ) != 0 );
+	else
+#endif
 	totalEmissiveRadiance = vBrEmit * vBrTint.rgb * mix( 1.0, brOrmh.a * 1.3, brIsLens ) * brDyn * brSh;
 } else {
 	totalEmissiveRadiance = vec3( 0.0 );
+#if BR_DETAIL == 1
+	// OFF recessed lens: dark cavity and dead tubes behind it (emissivemap runs before lights_physical: re-shaded)
+	if ( brEp != 0 && brL == BR_M_PANEL_LENS && ( brF & BR_F_PROP_AUX ) == 0 ) diffuseColor.rgb *= brOffLensShade( brEp,
+		int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7, vBrUv, brEmVt, brEmFp );
+#endif
 }
 `;
