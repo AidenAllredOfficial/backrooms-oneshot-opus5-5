@@ -109,7 +109,7 @@ export interface ChunkCollision {
   boxFlags: Uint8Array; // n: SolidFlag bits (COLLIDE, WALKABLE_TOP)
   cellStart: Uint32Array; // 1025 prefix offsets into cellBoxes
   cellBoxes: Uint32Array; // box indices whose footprint overlaps the cell (expanded by PLAYER.radius)
-  ramps: Float32Array; // n*8: x0,z0,x1,z1,y0,y1,dir,unused
+  ramps: Float32Array; // n*8: x0,z0,x1,z1,y0,y1,dir,filled (1: SolidFlag.FILLED, a solid body down to the floor; 0 open)
 }
 
 export function emptyMeshBuffers(): MeshBuffers {
