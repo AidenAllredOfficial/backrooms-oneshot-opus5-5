@@ -10,7 +10,7 @@ import { CellFlag, FixtureKind, LightState, Mat, Mood, PropKind, StructureKind, 
 import { createEmptyLayout, type ChunkLayout, type Fixture, type PropPlacement } from '../../src/core/layout.ts';
 import { GeometryWriter } from '../../src/core/writer.ts';
 import { emitFixture, emitPipe, propTris } from '../../src/props/index.ts';
-import { buildTileProps, lastTilePropsStats } from '../../src/props/tileProps.ts';
+import { buildTileProps, dustLevelOf, lastTilePropsStats } from '../../src/props/tileProps.ts';
 import { bounds, fakeNeighborhood, genNb, validate, windingMismatch } from './meshUtil.ts';
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -121,6 +121,39 @@ describe('WP6 buildTileProps', () => {
     const b = bounds(m);
     expect(b[1]).toBeLessThan(-4.9); // the k = -2 replica (base -5.8, rail brackets from +0.815)
     expect(b[4]).toBeGreaterThan(4); // the k = +1 replica (base 3.2, rail at +0.9)
+  });
+
+  it('PROP_AUX dust bits 2-7 follow the anchor cell decay; bit 0 stays the tower flag; floats never gather dust', () => {
+    // monotonic in decay, a light film in fresh cells, full at the top
+    let prev = -1;
+    for (let d = 0; d <= 255; d++) {
+      const v = dustLevelOf(d);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(63);
+      prev = v;
+    }
+    expect(dustLevelOf(0)).toBe(6);
+    expect(dustLevelOf(255)).toBe(63);
+    const l = openLayout(285);
+    for (let j = 10; j < 15; j++) for (let i = 10; i < 13; i++) l.flags[cellIdx(i, j)] |= CellFlag.TOWER | CellFlag.RESERVED;
+    l.structures.push({ id: 5, kind: StructureKind.TOWER, bakeGroup: 777, i0: 10, j0: 10, i1: 13, j1: 15, rot: 0, portal: null });
+    l.decay[cellIdx(Math.floor(11.5), Math.floor(12.5))] = 200;
+    l.decay[cellIdx(5, 5)] = 20;
+    l.props.push(prop(PropKind.HANDRAIL, 11.5 * CELL, 12.5 * CELL, { y: 0.2 }), prop(PropKind.CRATE, 5.5 * CELL, 5.5 * CELL),
+      prop(PropKind.POOL_FLOAT, 2.5 * CELL, 12.5 * CELL));
+    const nb = fakeNeighborhood(l);
+    const m = buildTileProps(nb, key(0))!;
+    const seen = new Set<number>();
+    for (let i = 0; i < m.vertexCount; i++) {
+      const z = m.aux[i * 4 + 2];
+      expect(z & 2).toBe(0); // bit 1 (clearcoat) is PartBuilder's, never set by the anchor bits
+      seen.add(z);
+    }
+    expect(seen.has(1 | (dustLevelOf(200) << 2))).toBe(true); // tower handrail in a decayed cell
+    expect(seen.has(dustLevelOf(20) << 2)).toBe(true); // crate in a fresh cell
+    expect(seen.has(0)).toBe(true); // the pool float
+    expect(dustLevelOf(200)).toBeGreaterThan(dustLevelOf(20));
   });
 
   it('is deterministic (byte-identical buffers)', () => {

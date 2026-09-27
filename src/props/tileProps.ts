@@ -8,7 +8,9 @@
 //   neighbourhood, hangers reach the neighbourhood ceiling);
 // - locker banks on tall METAL_PAINTED PARTITION edges whose midpoint lies in the tile (lockers.ts).
 // PROP_AUX per part: aux = (roughness override, 0, bits, ceilByte) with bits & 1 = anchor cell is a TOWER cell
-// (the shader wraps y for its light-volume lookup) and ceilByte = clamp(ceilCm / 5) of the anchor cell.
+// (the shader wraps y for its light-volume lookup), bits 2-7 = dust level 0..63 from the anchor cell's decay (the
+// surface shader's prop dust; emissive parts drop them in PartBuilder) and ceilByte = clamp(ceilCm / 5) of the anchor
+// cell. Bit 1 is the clearcoat bit (PartBuilder.mat).
 
 import { CHUNK_CELLS, TILE_SIZE } from '../core/constants.ts';
 import { cellIdx, tileOfPoint, worldToCell, type TileKey } from '../core/grid.ts';
@@ -19,7 +21,7 @@ import type { LayoutNeighborhood } from '../core/world.ts';
 import { GeometryWriter } from '../core/writer.ts';
 import { expandPeriodicFixtures, expandPeriodicProps } from '../mesh/periodic.ts';
 import { emitFixtureInto } from './fixtures.ts';
-import { emitPropInto } from './index.ts';
+import { emitPropInto, propGathersDust } from './index.ts';
 import { emitLockerBanks, LOCKER_MIN_CM } from './lockers.ts';
 import { emitPipeInto, type PipeSolid } from './pipes.ts';
 
@@ -35,6 +37,12 @@ const inChunk = (x: number, z: number): boolean => {
   return li >= 0 && lj >= 0 && li < CHUNK_CELLS && lj < CHUNK_CELLS;
 };
 const ceilByteOf = (l: ChunkLayout, k: number): number => Math.max(0, Math.min(255, Math.round(l.ceilCm[k] / 5)));
+/** Dust level 0..63 of content anchored in a cell with decay byte `decay`: a light film (10 %) even in fresh cells,
+ * full in the most decayed (DYING / DARK) ones. Monotonic in decay. */
+export const dustLevelOf = (decay: number): number => Math.round(63 * Math.min(1, 0.1 + 0.9 * Math.pow(Math.max(0, decay) / 255, 0.8)));
+/** aux.z bits of content anchored in cell k: bit 0 = TOWER cell, bits 2-7 = dust level (0 when `dust` is false). */
+const auxBitsOf = (l: ChunkLayout, k: number, dust = true): number =>
+  (l.flags[k] & CellFlag.TOWER ? 1 : 0) | (dust ? dustLevelOf(l.decay[k]) << 2 : 0);
 /** Cheap pre-check: any tall METAL_PAINTED partition edge in the chunk. */
 const hasLockerEdges = (l: ChunkLayout): boolean => {
   for (const eg of [l.ex, l.ez]) {
@@ -60,8 +68,7 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
   for (const p of expandPeriodicProps(c)) {
     if (!inTile(p.x, p.z, q)) continue;
     const k = cellOf(p.x, p.z);
-    const bits = c.flags[k] & CellFlag.TOWER ? 1 : 0;
-    st.propTris += emitPropInto(writer(), p, ox, oz, bits, ceilByteOf(c, k));
+    st.propTris += emitPropInto(writer(), p, ox, oz, auxBitsOf(c, k, propGathersDust(p.kind)), ceilByteOf(c, k));
     st.props++;
   }
 
@@ -69,9 +76,8 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
   for (const f of expandPeriodicFixtures(c)) {
     if (isRecessedFixture(f.kind) || !inTile(f.px, f.pz, q)) continue;
     const k = cellOf(f.px, f.pz);
-    const tower = (c.flags[k] & CellFlag.TOWER) !== 0;
     const ceilY = c.flags[k] & CellFlag.NO_CEIL ? Number.NaN : c.ceilCm[k] / 100;
-    st.fixtureTris += emitFixtureInto(writer(), f, ox, oz, ceilY, tower ? 1 : 0, ceilByteOf(c, k));
+    st.fixtureTris += emitFixtureInto(writer(), f, ox, oz, ceilY, auxBitsOf(c, k), ceilByteOf(c, k));
     st.fixtures++;
   }
 
@@ -100,8 +106,7 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
     };
     for (const s of owned) {
       const k = cellOf((s.a[0] + s.b[0]) / 2, (s.a[2] + s.b[2]) / 2);
-      const bits = c.flags[k] & CellFlag.TOWER ? 1 : 0;
-      st.pipeTris += emitPipeInto(writer(), s, all, ox, oz, ceilAt, c.decay[k], bits, ceilByteOf(c, k));
+      st.pipeTris += emitPipeInto(writer(), s, all, ox, oz, ceilAt, c.decay[k], auxBitsOf(c, k), ceilByteOf(c, k));
       st.pipes++;
     }
   }
@@ -109,7 +114,7 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
   // ---- locker banks dressed onto tall METAL_PAINTED partitions (edges owned by midpoint; lines 0..31 only)
   if (hasLockerEdges(c)) {
     st.lockerTris = emitLockerBanks(writer(), nb, tile.s, tile.cx, tile.cz, (x, z) => inTile(x, z, q), ox, oz,
-      (li, lj) => (c.flags[cellIdx(li, lj)] & CellFlag.TOWER ? 1 : 0), (li, lj) => ceilByteOf(c, cellIdx(li, lj)));
+      (li, lj) => auxBitsOf(c, cellIdx(li, lj)), (li, lj) => ceilByteOf(c, cellIdx(li, lj)));
   }
 
   st.tris = st.propTris + st.fixtureTris + st.pipeTris + st.lockerTris;
