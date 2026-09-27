@@ -76,6 +76,8 @@ export interface TorchUniforms {
   uFlCol: { value: THREE.Vector3 };
   uFlRange: { value: number };
   uFlShadowRel: { value: THREE.Matrix4 };
+  /** window-depth bias x w^2 of the shadow compare (a fixed distance along the light's axis; VolumetricFog VOL) */
+  uFlShadowBias: { value: number };
   uFlCookie: { value: THREE.Texture | null };
   uFlShadow: { value: THREE.Texture | null };
 }
@@ -97,6 +99,7 @@ uniform vec2 uFlCone;
 uniform vec3 uFlCol;
 uniform float uFlRange;
 uniform mat4 uFlShadowRel;
+uniform float uFlShadowBias;
 uniform sampler2D uFlCookie;
 uniform sampler2DShadow uFlShadow;
 ${lightAtlasGlsl()}
@@ -135,7 +138,7 @@ void main() {
 		vec4 sc = uFlShadowRel * vec4( rel, 1.0 );
 		vec3 sp = sc.xyz / sc.w;
 		if ( spot * win > 0.0 && sc.w > 0.0 && all( greaterThanEqual( sp.xy, vec2( 0.0 ) ) ) && all( lessThanEqual( sp.xy, vec2( 1.0 ) ) ) ) {
-			float vis = sp.z >= 1.0 ? 1.0 : textureLod( uFlShadow, vec3( sp.xy, sp.z - 3e-4 ), 0.0 );
+			float vis = sp.z >= 1.0 ? 1.0 : textureLod( uFlShadow, vec3( sp.xy, sp.z - uFlShadowBias / ( sc.w * sc.w ) ), 0.0 );
 			vec3 ck = textureLod( uFlCookie, sp.xy, 0.0 ).rgb;
 			// rotating flakes glint now and then
 			float glint = 1.0 + 5.0 * pow( max( sin( t * ( 1.3 + 2.7 * aSeed.x ) + 6.2831853 * aSeed.y ), 0.0 ), 24.0 );

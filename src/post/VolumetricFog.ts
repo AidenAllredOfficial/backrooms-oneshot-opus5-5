@@ -47,8 +47,10 @@ export const VOL = {
   TILES_PER_ROW: 8,
   /** m: the smallest distance of a view ray from the torch in its inverse-square integral (the lamp is not a point) */
   TORCH_MIN_H: 0.1,
-  /** shadow-map depth bias of the air samples (window depth units) */
-  SHADOW_BIAS: 3e-4,
+  /** m: shadow-map depth bias of the air samples along the light's axis. The map stores perspective window depth,
+   * whose slope is near far / ((far - near) w^2) at light-view depth w, so the window bias is uFlShadowBias / w^2
+   * (a fixed window bias would grow as w^2: 3e-4 was 0.3 m at 10 m and 1.2 m at 20 m, eroding the shafts) */
+  SHADOW_BIAS_M: 0.02,
 } as const;
 
 export type VolGridName = 'high' | 'ultra';
@@ -129,6 +131,7 @@ uniform vec2 uFlCone; // cos(angle), cos(angle (1 - penumbra))
 uniform vec3 uFlCol; // colour x intensity (cd)
 uniform float uFlRange;
 uniform mat4 uFlShadowRel; // shadow matrix x translation(camera)
+uniform float uFlShadowBias; // window-depth bias x w^2 (VOL.SHADOW_BIAS_M along the light's axis)
 uniform sampler2D uFlCookie;
 uniform sampler2DShadow uFlShadow;
 ${lightAtlasGlsl()}
@@ -190,7 +193,7 @@ void main() {
 			vec4 sc = uFlShadowRel * vec4( rel, 1.0 );
 			vec3 sp = sc.xyz / sc.w;
 			if ( sc.w <= 0.0 || any( lessThan( sp.xy, vec2( 0.0 ) ) ) || any( greaterThan( sp.xy, vec2( 1.0 ) ) ) ) continue;
-			float vis = sp.z >= 1.0 ? 1.0 : textureLod( uFlShadow, vec3( sp.xy, sp.z - ${f(VOL.SHADOW_BIAS)} ), 0.0 );
+			float vis = sp.z >= 1.0 ? 1.0 : textureLod( uFlShadow, vec3( sp.xy, sp.z - uFlShadowBias / ( sc.w * sc.w ) ), 0.0 );
 			if ( vis <= 0.0 ) continue;
 			vec3 ck = textureLod( uFlCookie, sp.xy, 0.0 ).rgb;
 			float mu = dot( l, rd );
@@ -352,6 +355,7 @@ export class VolumetricFog {
       uFlCol: { value: new THREE.Vector3() },
       uFlRange: { value: 40 },
       uFlShadowRel: { value: this.shadowRel },
+      uFlShadowBias: { value: 0 },
       uFlCookie: { value: null },
       uFlShadow: { value: null },
     };
@@ -434,6 +438,8 @@ export class VolumetricFog {
       u.uFlRange.value = L.distance > 0 ? L.distance : 1e6;
       // camera-relative shadow matrix: shadow.matrix x T(camera), multiplied in float64 (Matrix4 elements are doubles)
       this.shadowRel.multiplyMatrices(L.shadow.matrix, this.tmpM.makeTranslation(cp.x, cp.y, cp.z));
+      const sn = L.shadow.camera.near, sf = L.shadow.camera.far;
+      u.uFlShadowBias.value = (VOL.SHADOW_BIAS_M * sn * sf) / Math.max(sf - sn, 1e-6);
     }
     const lin = this.lin as THREE.WebGLRenderTarget;
     const filtered = this.filtered as THREE.WebGLRenderTarget;
