@@ -103,6 +103,8 @@ and `high` for everything else.
 | Water reflections | off | on | on | on |
 | Water surface: analytic waves / ripple simulation (texels) | 0 / off | 3 / 128² | 6 / 256² | 8 / 512² |
 | Water caustics above pools, flashlight caustics through water | off | off | on | on |
+| Water refraction and water body (refracted view, per-kind media, blur, in-scatter, contact lines from depth) | off | off | on | on |
+| In-water light (flashlight beam and underwater lamps scattered in the water) | off | off | 2 lamps | 4 lamps |
 | Render scale | 0.75 | 0.9 | 1.0 | 1.5 (supersampled) |
 
 Every preset uses dynamic resolution unless you turn it off. It budgets for at least 11 ms per frame, so on a
