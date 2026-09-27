@@ -17,10 +17,12 @@
 //  - U_i, i = 0..L-2: U_(L-2) = w_(L-1) tent9(D_(L-1)) + w_(L-2) D_(L-2); U_i = tent9(U_(i+1)) + w_i D_i, the tent
 //    taps one DESTINATION texel apart. Level i then blurs with sigma ~2 * 2^i full-res px (GLARE.SIGMA0_PX) and
 //    w_i (glareWeights: tinted, summing to 1 in luma) is the PSF energy of its angular band.
-//  - star (C.5, glareStreaks): 2 axes at +-45 deg x 3 cascaded 7-tap passes (steps 1, 4, 16 texels) over the hot part
-//    (exposed luma above FLARE.STAR_T) of D1 - D2 on a buffer taller than FLARE.HI_RES_H (ultra's 1.5x supersampled
-//    buffer), which keeps the arms the same width on screen and the cost flat - the last pass with wavelength-scaled
-//    R/B offsets; axis 2 adds.
+//  - star (C.5, glareStreaks): one extract pass writes the hot part (exposed luma above FLARE.STAR_T) of D1 - D2 on a
+//    buffer taller than FLARE.HI_RES_H (ultra's 1.5x supersampled buffer), which keeps the arms the same width on
+//    screen and the cost flat - weighted toward compact sources (starCompactWeight: a level three steps coarser tells
+//    a bulb or a distant highbay from a near tube strip, whose broad X would stain the ceiling); then 2 axes at +-45 deg x 3
+//    cascaded 7-tap passes (steps 1, 4, 16 x starStepScale texels: the same on-screen length at any buffer height and
+//    dynamic-resolution scale), the last pass with wavelength-scaled R/B offsets; axis 2 adds.
 //  - ghosts (C.5, glareGhosts): one pass at the star level's half size: 5 scaled / mirrored copies of the hot part of
 //    the next level (the one after when shrunk), windowed, area-normalised, coating-tinted, with lateral colour.
 //  - Star and ghosts are folded into the last up pass (U0 += (starGain S + ghostGain G) / k), so the full-res composite
@@ -30,7 +32,7 @@
 
 import * as THREE from 'three';
 import { BlendFunction, Effect, EffectAttribute, Pass } from 'postprocessing';
-import { FLARE, GLARE, glareWeights, streakWeights } from '../glareMath.ts';
+import { FLARE, GLARE, glareWeights, starLevel, starStepScale, streakWeights } from '../glareMath.ts';
 import { MOTION_BLUR } from './MotionBlurEffect.ts';
 import type { MotionBlurState } from './MotionBlurEffect.ts';
 
@@ -128,23 +130,32 @@ void main() {
 }
 `;
 
-/** One cascaded 7-tap streak pass along uDir (uv per tap). STAR_EXTRACT: the source is a chain level; only its hot part
- * (exposed luma above STAR_T) streaks. STAR_CHROMA: R / B taps at wavelength-scaled offsets (rainbow tips). */
+/** The star's source: the hot part (exposed luma above STAR_T) of the star level, weighted toward compact sources by
+ * the hot part of the level COMPACT_LEVELS steps coarser at the same place (glareMath starCompactWeight). */
+const STAR_EXTRACT_FRAG = /* glsl */ `
+uniform sampler2D tIn;     // the star level
+uniform sampler2D tCoarse; // the level COMPACT_LEVELS steps coarser (or the last one)
+uniform float uExposure;
+varying vec2 vUv;
+void main() {
+  const vec3 Y = vec3(0.2126, 0.7152, 0.0722);
+  vec3 c = texture2D(tIn, vUv).rgb;
+  float y = dot(c, Y) * uExposure;
+  float hot = max(0.0, y - ${FLARE.STAR_T.toFixed(3)});
+  float f = max(0.0, dot(texture2D(tCoarse, vUv).rgb, Y) * uExposure - ${FLARE.STAR_T.toFixed(3)}) / max(hot, 1e-4);
+  float w = 1.0 - smoothstep(${FLARE.COMPACT[0].toFixed(4)}, ${FLARE.COMPACT[1].toFixed(4)}, f);
+  gl_FragColor = vec4(c * (hot / max(y, 1e-4) * w), 1.0);
+}
+`;
+
+/** One cascaded 7-tap streak pass along uDir (uv per tap). STAR_CHROMA: R / B taps at wavelength-scaled offsets
+ * (rainbow tips). */
 const STAR_FRAG = /* glsl */ `
 uniform sampler2D tIn;
 uniform vec2 uDir;
 uniform float uW[4]; // kernel weights for |j| = 0..3 (normalised over j = -3..3)
-uniform float uExposure;
 uniform vec2 uChroma; // R, B offset scales
 varying vec2 vUv;
-vec3 brStarIn(vec2 uv) {
-  vec3 c = texture2D(tIn, uv).rgb;
-#ifdef STAR_EXTRACT
-  float y = dot(c, vec3(0.2126, 0.7152, 0.0722)) * uExposure;
-  c *= max(0.0, y - ${FLARE.STAR_T.toFixed(3)}) / max(y, 1e-4);
-#endif
-  return c;
-}
 void main() {
   vec3 s = vec3(0.0);
   for (int j = -3; j <= 3; j++) {
@@ -155,7 +166,7 @@ void main() {
     s.g += w * texture2D(tIn, vUv + o).g;
     s.b += w * texture2D(tIn, vUv + o * uChroma.y).b;
 #else
-    s += w * brStarIn(vUv + o);
+    s += w * texture2D(tIn, vUv + o).rgb;
 #endif
   }
   gl_FragColor = vec4(s, 1.0);
@@ -221,7 +232,7 @@ export class GlareChain extends Pass {
   readonly down: THREE.WebGLRenderTarget[] = [];
   /** U_i (weighted up chain); U0 is the glare image */
   readonly up: THREE.WebGLRenderTarget[] = [];
-  star: { p: THREE.WebGLRenderTarget; q: THREE.WebGLRenderTarget; s: THREE.WebGLRenderTarget } | null = null;
+  star: { e: THREE.WebGLRenderTarget; p: THREE.WebGLRenderTarget; q: THREE.WebGLRenderTarget; s: THREE.WebGLRenderTarget } | null = null;
   ghost: THREE.WebGLRenderTarget | null = null;
   /** tinted level weights (3 per level) */
   readonly weights: Float32Array = new Float32Array(3 * 16);
@@ -232,6 +243,7 @@ export class GlareChain extends Pass {
   private readonly downMat: THREE.ShaderMaterial;
   private readonly upMat: THREE.ShaderMaterial;
   private readonly finalMat: THREE.ShaderMaterial;
+  private readonly extractMat: THREE.ShaderMaterial;
   private readonly starMats: THREE.ShaderMaterial[];
   private readonly ghostMat: THREE.ShaderMaterial;
   private readonly starW = [streakWeights(FLARE.STAR_STEPS[0]), streakWeights(FLARE.STAR_STEPS[1]), streakWeights(FLARE.STAR_STEPS[2])];
@@ -253,12 +265,13 @@ export class GlareChain extends Pass {
     this.finalMat = mat('br-glare-up0', UP_FRAG, {
       ...upU(), tStar: { value: null }, tGhost: { value: null }, uFlareW: { value: new THREE.Vector2() },
     }, { GLARE_FINAL: '1' });
+    this.extractMat = mat('br-glare-star-extract', STAR_EXTRACT_FRAG, { tIn: { value: null }, tCoarse: { value: null }, uExposure: { value: 1 } });
     const starU = (): Record<string, THREE.IUniform> => ({
-      tIn: { value: null }, uDir: { value: new THREE.Vector2() }, uW: { value: [0, 0, 0, 0] }, uExposure: { value: 1 },
+      tIn: { value: null }, uDir: { value: new THREE.Vector2() }, uW: { value: [0, 0, 0, 0] },
       uChroma: { value: new THREE.Vector2(FLARE.STAR_CHROMA[0], FLARE.STAR_CHROMA[1]) },
     });
     this.starMats = [
-      mat('br-glare-star0', STAR_FRAG, starU(), { STAR_EXTRACT: '1' }),
+      mat('br-glare-star0', STAR_FRAG, starU()),
       mat('br-glare-star1', STAR_FRAG, starU()),
       mat('br-glare-star2', STAR_FRAG, starU(), { STAR_CHROMA: '1' }),
     ];
@@ -277,7 +290,7 @@ export class GlareChain extends Pass {
   get starTexture(): THREE.Texture | null { return this.star ? this.star.s.texture : null; }
   get ghostTexture(): THREE.Texture | null { return this.ghost ? this.ghost.texture : null; }
   /** Chain level the star reads (D1; D2 on a buffer taller than FLARE.HI_RES_H); the ghosts read the next one. */
-  get starLevel(): number { return Math.min(this.levels - 1, this.h > FLARE.HI_RES_H ? 2 : 1); }
+  get starLevel(): number { return starLevel(this.h, this.levels); }
   private get ghostLevel(): number { return Math.min(this.levels - 1, this.starLevel + 1); }
 
   private allocLevels(): void {
@@ -300,6 +313,7 @@ export class GlareChain extends Pass {
     }
     if (this.star) {
       const d = this.down[this.starLevel];
+      this.star.e.setSize(d.width, d.height);
       this.star.p.setSize(d.width, d.height);
       this.star.q.setSize(d.width, d.height);
       this.star.s.setSize(d.width, d.height);
@@ -319,8 +333,11 @@ export class GlareChain extends Pass {
 
   /** Allocate / free the star and ghost targets. */
   setFlare(streaks: boolean, ghosts: boolean): void {
-    if (streaks && !this.star) this.star = { p: newRT('Glare.StarP'), q: newRT('Glare.StarQ'), s: newRT('Glare.Star') };
-    else if (!streaks && this.star) { this.star.p.dispose(); this.star.q.dispose(); this.star.s.dispose(); this.star = null; }
+    if (streaks && !this.star) this.star = { e: newRT('Glare.StarE'), p: newRT('Glare.StarP'), q: newRT('Glare.StarQ'), s: newRT('Glare.Star') };
+    else if (!streaks && this.star) {
+      this.star.e.dispose(); this.star.p.dispose(); this.star.q.dispose(); this.star.s.dispose();
+      this.star = null;
+    }
     if (ghosts && !this.ghost) this.ghost = newRT('Glare.Ghost');
     else if (!ghosts && this.ghost) { this.ghost.dispose(); this.ghost = null; }
     this.resize();
@@ -368,26 +385,33 @@ export class GlareChain extends Pass {
       (dm.uTexel.value as THREE.Vector2).set(1 / src.width, 1 / src.height);
       this.draw(renderer, this.downMat, this.down[i]);
     }
-    // 2. aperture star from the hot part of its level: two axes, three cascaded passes each; the second axis adds
+    // 2. aperture star from the compact hot part of its level: two axes, three cascaded passes each; the second axis
+    // adds. Steps scale with the buffer height (starStepScale), so the arms keep their on-screen length.
     if (star && this.star) {
-      const d1 = this.down[this.starLevel];
+      const sl = this.starLevel;
+      const d1 = this.down[sl];
       const tx = 1 / d1.width, ty = 1 / d1.height;
+      const k = starStepScale(this.h, sl);
       const st = this.star;
+      const em = this.extractMat.uniforms;
+      em.tIn.value = d1.texture;
+      em.tCoarse.value = this.down[Math.min(L - 1, sl + FLARE.COMPACT_LEVELS)].texture;
+      em.uExposure.value = exposure;
+      this.draw(renderer, this.extractMat, st.e);
       for (let a = 0; a < FLARE.STAR_ANGLES.length; a++) {
         const ang = (FLARE.STAR_ANGLES[a] * Math.PI) / 180;
         const dx = Math.cos(ang), dy = Math.sin(ang);
-        const srcs = [d1, st.p, st.q];
+        const srcs = [st.e, st.p, st.q];
         const dsts = [st.p, st.q, st.s];
         for (let p = 0; p < 3; p++) {
           const m = this.starMats[p];
           const u = m.uniforms;
-          const step = FLARE.STAR_STEPS[p];
+          const step = FLARE.STAR_STEPS[p] * k;
           u.tIn.value = srcs[p].texture;
           (u.uDir.value as THREE.Vector2).set(dx * step * tx, dy * step * ty);
           const w = this.starW[p];
           const uw = u.uW.value as number[];
           for (let j = 0; j < 4; j++) uw[j] = w[3 + j];
-          u.uExposure.value = exposure;
           if (p === 2) {
             m.blending = a === 0 ? THREE.NoBlending : THREE.CustomBlending;
             m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor; m.blendEquation = THREE.AddEquation;
@@ -430,7 +454,7 @@ export class GlareChain extends Pass {
 
   /** Every material of the chain (quality-switch warm-up). */
   materials(): THREE.ShaderMaterial[] {
-    return [this.preMat, this.downMat, this.upMat, this.finalMat, ...this.starMats, this.ghostMat];
+    return [this.preMat, this.downMat, this.upMat, this.finalMat, this.extractMat, ...this.starMats, this.ghostMat];
   }
 
   /** Compile every chain program now (boot), not on the frame a quality flag first needs it. */
