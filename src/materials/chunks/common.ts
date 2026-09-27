@@ -258,14 +258,15 @@ int brChannelSlot( int k, vec2 local, vec2 parity ) {
 	return brSlotOf( dx, dz );
 }
 
-// ---- light-volume v coordinate for a storey-relative height (LV.Y levels are not uniform)
-float brLvV( float y ) {
+// ---- light-volume v coordinate for a storey-relative height (LV.Y levels are not uniform), shifted by dk levels
+// (the props' front-side lookup, chunks/lighting.ts; TS twin lvLevel / lvLookup)
+float brLvV( float y, float dk ) {
 	y = clamp( y, BR_LV_Y[ 0 ], BR_LV_Y[ BR_LV_NYI - 1 ] );
 	float k = 0.0;
 	for ( int i = 0; i < BR_LV_NYI - 1; i ++ ) {
 		if ( y >= BR_LV_Y[ i ] ) k = float( i ) + ( y - BR_LV_Y[ i ] ) / ( BR_LV_Y[ i + 1 ] - BR_LV_Y[ i ] );
 	}
-	return ( min( k, BR_LV_NY - 1.0 ) + 0.5 ) / BR_LV_NY;
+	return ( clamp( k + dk, 0.0, BR_LV_NY - 1.0 ) + 0.5 ) / BR_LV_NY;
 }
 
 // ---- lightmap dominant direction decode (w forced to 0 for a degenerate direction)

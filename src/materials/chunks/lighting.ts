@@ -16,8 +16,38 @@
 //  - brDirVis: visibility of the baked directional light (A's contact shadow, then B's FRAG_DIRVIS_GLSL).
 //  - FRAG_BOUNCE_GLSL (F) after the ambient lines.
 
+import { CELL, LV } from '../../core/constants.ts';
 import { FRAG_BOUNCE_GLSL } from './bounce.ts';
+import { TUNE } from './params.ts';
 import { FRAG_DIRVIS_GLSL } from './pom.ts';
+
+/** Fractional LV level index of a storey-relative height (TS twin of the level search in brLvV): 0 at LV.Y[0],
+ * i + t between LV.Y[i] and LV.Y[i + 1], clamped to [0, LV.NY - 1]. */
+export function lvLevel(y: number): number {
+  const Y = LV.Y, n = LV.NY;
+  if (y <= Y[0]) return 0;
+  if (y >= Y[n - 1]) return n - 1;
+  let i = 0;
+  while (i < n - 2 && y >= Y[i + 1]) i++;
+  return i + (y - Y[i]) / (Y[i + 1] - Y[i]);
+}
+
+/**
+ * TS twin of the props' front-side light-volume lookup (FRAG_LIGHTS_GLSL, BR_LV): the lookup point of a fragment at
+ * tile-local p (storey-relative y) with unit geometric normal n, and wall-mask bits `mask` (N1 E2 S4 W8) of its own
+ * cell. Returns [x, level, z]: tile-local metres and the fractional LV level (texture v = (level + 0.5) / LV.NY).
+ * Only up-facing normals shift the level (by n.y * TUNE.LV_BIAS_LEVELS); the xz offset follows n.xz.
+ */
+export function lvLookup(p: readonly [number, number, number], n: readonly [number, number, number], mask: number): [number, number, number] {
+  let x = p[0] + n[0] * TUNE.LV_BIAS_XZ, z = p[2] + n[2] * TUNE.LV_BIAS_XZ;
+  const x0 = Math.floor(p[0] / CELL) * CELL, z0 = Math.floor(p[2] / CELL) * CELL, cl = 0.3; // BR_LV_WALL_CLAMP
+  if (mask & 1) z = Math.max(z, z0 + cl);
+  if (mask & 2) x = Math.min(x, x0 + CELL - cl);
+  if (mask & 4) z = Math.min(z, z0 + CELL - cl);
+  if (mask & 8) x = Math.max(x, x0 + cl);
+  const k = Math.min(LV.NY - 1, lvLevel(p[1]) + Math.max(n[1], 0) * TUNE.LV_BIAS_LEVELS);
+  return [x, k, z];
+}
 
 /** Replaces `#include <lights_fragment_maps>`. */
 export const FRAG_LIGHTS_GLSL = /* glsl */ `
@@ -27,21 +57,30 @@ vec4 brLmA;
 vec4 brLmB;
 vec4 brFl;
 #ifdef BR_LV
-	// props: tile light volume (32x6x32, 0.6 m), per-fragment wall clamp inside the fragment's own cell
+	// props: tile light volume (32x6x32, 0.6 m), looked up in FRONT of the surface (TS twin lvLookup). The samples
+	// under a prop's occluder boxes (a lounge chair's frame, a chair seat, a desk top) hold the light in its shadow,
+	// lit from the floor below; blended into the seat top above them they darkened it and turned its baked direction
+	// below the seat plane (dark blotches). Up-facing surfaces therefore look up n.y * BR_LV_BIAS_K levels (a seat top
+	// reads only levels at or above it). Down-facing ones keep their own height: the samples under them usually lie
+	// behind the prop's own boxes (the rear of a reclined backrest looks down at its frame), so moving down would only
+	// read that shadow in. Horizontally the lookup moves n.xz * BR_LV_BIAS_XZ out of the surface, and the wall clamp
+	// keeps it >= 0.3 m inside the fragment's own cell on every occluding side (a back panel facing a wall must not
+	// read the room behind it). brLvP: the fragment's own point (tower props: wrapped into the fundamental period).
 	vec3 brLvP = vBrLocal;
 	if ( ( brF & BR_F_PROP_AUX ) != 0 && ( int( brAuxB.z ) & 1 ) != 0 ) brLvP.y = 1.5 + mod( brLvP.y - 1.5, BR_PITCH );
+	vec2 brLvQ = brLvP.xz + brNWg.xz * BR_LV_BIAS_XZ;
 	{
 		ivec2 cell = ivec2( floor( brLvP.xz / BR_CELL ) );
 		ivec2 msz = textureSize( uVolMask, 0 );
 		int m = int( texelFetch( uVolMask, clamp( cell + 1, ivec2( 0 ), msz - 1 ), 0 ).r * 255.0 + 0.5 );
 		vec2 lo = vec2( cell ) * BR_CELL;
 		vec2 hi = lo + BR_CELL;
-		if ( ( m & 1 ) != 0 ) brLvP.z = max( brLvP.z, lo.y + BR_LV_WALL_CLAMP ); // N (-z)
-		if ( ( m & 2 ) != 0 ) brLvP.x = min( brLvP.x, hi.x - BR_LV_WALL_CLAMP ); // E (+x)
-		if ( ( m & 4 ) != 0 ) brLvP.z = min( brLvP.z, hi.y - BR_LV_WALL_CLAMP ); // S (+z)
-		if ( ( m & 8 ) != 0 ) brLvP.x = max( brLvP.x, lo.x + BR_LV_WALL_CLAMP ); // W (-x)
+		if ( ( m & 1 ) != 0 ) brLvQ.y = max( brLvQ.y, lo.y + BR_LV_WALL_CLAMP ); // N (-z)
+		if ( ( m & 2 ) != 0 ) brLvQ.x = min( brLvQ.x, hi.x - BR_LV_WALL_CLAMP ); // E (+x)
+		if ( ( m & 4 ) != 0 ) brLvQ.y = min( brLvQ.y, hi.y - BR_LV_WALL_CLAMP ); // S (+z)
+		if ( ( m & 8 ) != 0 ) brLvQ.x = max( brLvQ.x, lo.x + BR_LV_WALL_CLAMP ); // W (-x)
 	}
-	vec3 brUvw = vec3( brLvP.x / BR_TILE, brLvV( brLvP.y ), brLvP.z / BR_TILE );
+	vec3 brUvw = vec3( brLvQ.x / BR_TILE, brLvV( brLvP.y, max( brNWg.y, 0.0 ) * BR_LV_BIAS_K ), brLvQ.y / BR_TILE );
 	brLmA = texture( uVolA, brUvw );
 	brLmB = texture( uVolB, brUvw );
 	brFl = texture( uVolC, brUvw );
