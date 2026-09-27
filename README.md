@@ -373,7 +373,9 @@ gate fails.
 
 With `npm run dev` running, `http://localhost:5173/harness/index.html` links to isolated test pages:
 
-- `harness/materials.html`: the procedural texture gallery (`view=albedo|normal|ormh|lit`, `layer=N`).
+- `harness/materials.html`: the procedural texture gallery (`view=albedo|normal|ormh|lit`, `layer=N`). Its GPU
+  checks (`checks=albedo,range,seam,orient`) report layer means against the table, the per-layer albedo percentile
+  range (`stats().albedoRange`), the relief maximum against the POM tops (`heightFails`), tiling seams and arrows.
 - `harness/chunk.html`: one chunk through the real worker pipeline, with a fly camera (`seed`, `s`, `cx`, `cz`,
   `zone`, `view`, `tpc`, `bake`).
 - `harness/post.html`: the post-processing stack on synthetic scenes (`scene=panels|dark|shimmer`).
