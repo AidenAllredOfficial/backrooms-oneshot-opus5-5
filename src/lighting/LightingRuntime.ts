@@ -450,7 +450,8 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
     get bounceVpls() { return bounce.active; },
     setBounce(on: boolean) { bounceOn = on; },
     hooks,
-    get passMaterials() { return fog ? [...fog.materials] : []; },
+    // the motes compile here too: a ShaderMaterial on points and on the warm-up triangle gets the same program
+    get passMaterials() { return fog ? [...fog.materials, ...(motes ? [motes.material] : [])] : []; },
     setVolumetrics(on: boolean) { volOn = on; },
   });
   return rt;
@@ -476,7 +477,8 @@ export function lightingStats(rt: LightingRuntime): { dynamicResident: number; f
 export function lightingFrameHooks(rt: LightingRuntime): readonly FrameHook[] {
   return lightingInfo.get(rt)?.hooks ?? [];
 }
-/** The froxel pass's quad programs of the current preset (compiled ahead by boot and the quality switch). */
+/** The froxel pass's quad programs and the motes' program of the current preset (compiled ahead by boot and the
+ * quality switch). */
 export function lightingPassMaterials(rt: LightingRuntime): THREE.ShaderMaterial[] {
   return lightingInfo.get(rt)?.passMaterials ?? [];
 }
