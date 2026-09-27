@@ -184,11 +184,13 @@ describe('emitter profiles: angular behaviour', () => {
       }
       return r;
     };
-    // from below: the cells show the lamps, the blades are not seen (only the bottom edges reflect the room)
+    // from below: the cells show the lamps (over the fixture interior's dark albedo), the blades are not seen (only
+    // the bottom edges reflect the room)
     view(0);
     const below = row();
     expect(Math.max(...below.map((x) => x[1]))).toBeLessThanOrEqual(LOUVER.EDGE_ALB + 1e-9);
-    expect(below.filter((x) => x[1] > 0.05).length).toBeLessThan(6);
+    expect(Math.min(...below.map((x) => x[1]))).toBeGreaterThan(0.5 * LOUVER.CAV_OFF);
+    expect(below.filter((x) => x[1] > LOUVER.CAV_OFF + 0.01).length).toBeLessThan(6);
     // past the cutoff: the blades mirror the room (neutral albedo ALU) under a sheen that grows toward the blade top
     view(75);
     const past = row();
@@ -222,6 +224,25 @@ describe('emitter profiles: angular behaviour', () => {
     let s = 0;
     for (let i = 0; i < 40; i++) { inp.v = (2 * 0.2 + (i + 0.5) / 40 * 0.2) / LENS_TILE; s += offLouverAlbedo(inp); }
     expect(s / 40).toBeGreaterThan(0.5); // obliquely the blades (mirroring the room) fill the view
+  });
+
+  it('a lit louver whose lamps are out (flicker burst, anomaly dip) shows the dead louver\'s albedo, not black cells', () => {
+    const inp = defaultShapeInput();
+    inp.ep = EP.LOUVER; inp.variant = lensVariant(3, false); inp.param = lensParam(1, 2, 1);
+    inp.state = LightState.FLICKER; inp.dynEmit = true; inp.dyn = 0;
+    const out = [0, 0, 0, 0];
+    for (const [theta, fp] of [[0, 0.001], [50, 0.002], [75, 0.002], [80, 0.5 * 0.2 / LENS_TILE]] as const) {
+      inp.fp = fp;
+      inp.vx = 0; inp.vy = Math.sin((theta * Math.PI) / 180); inp.vz = Math.cos((theta * Math.PI) / 180);
+      for (let i = 0; i < 40; i++) {
+        inp.u = 0.3 / LENS_TILE; inp.v = (2 * 0.2 + (i + 0.5) / 40 * 0.2) / LENS_TILE;
+        emitterShape(inp, out);
+        const dead = offLouverAlbedo(inp);
+        expect(out[3], `theta ${theta} i ${i}`).toBeGreaterThan(0.5 * LOUVER.CAV_OFF);
+        // the same geometry; only the lamp silhouettes differ a little (the lit set's per-lamp gains)
+        expect(Math.abs(out[3] - dead), `theta ${theta} i ${i}`).toBeLessThan(0.02);
+      }
+    }
   });
 
   it('dynamics: a FLICKER lens that is out keeps glowing cathode ends; BUZZ scales, DYING dims one lamp', () => {

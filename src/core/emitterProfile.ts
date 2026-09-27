@@ -341,6 +341,15 @@ function louverCell(F: LensFrame, fp: number): LouverCell {
   };
 }
 
+/** brLouverAlb: diffuse albedo (absolute, neutral) of a louver lit by the room whether its lamps burn or not: through
+ * the cells the fixture interior (darker along the lamps: lamp = their area-normalised row coverage), the blades
+ * mirroring it inside the cutoff and the room past it, the bottom edges. A lit louver whose lamps flicker or are
+ * dimmed out (FLICKER, ANOMALY) thus looks like a dead one. */
+function louverAlbedo(C: LouverCell, lamp: number): number {
+  const cav = LOUVER.CAV_OFF * (1 - LOUVER.TUBE_OFF * Math.min(lamp, 1));
+  return mix(mix(mix(LOUVER.ALU, cav, C.spec), cav, C.vis), LOUVER.EDGE_ALB, C.edge);
+}
+
 function louverShape(inp: ShapeInput, out: number[]): void {
   const F = lensFrame(inp);
   const L = lampSet(inp.seed8, F.n, false, inp);
@@ -373,8 +382,8 @@ function louverShape(inp: ShapeInput, out: number[]): void {
     const lamp = refl + LOUVER.LAMP * rowBuf[6 + c];
     out[c] = mix(blade * (gm / F.n), lamp, C.vis) * (1 - LOUVER.EDGE * C.edge);
   }
-  // neutral room reflection of the blades past the cutoff and of the bottom edges (replaces the lens diffuse)
-  out[3] = mix((1 - C.vis) * (1 - C.spec) * LOUVER.ALU, LOUVER.EDGE_ALB, C.edge);
+  // neutral diffuse albedo lit by the room (replaces the lens diffuse): the blades past the cutoff mirror the room
+  out[3] = louverAlbedo(C, rowBuf[7]);
   finishRecessed(inp, F, endMask * C.vis, EP.LOUVER, out);
 }
 
@@ -528,9 +537,10 @@ export function offLouverAlbedo(inp: ShapeInput): number {
   const C = louverCell(F, fp);
   const L: Lamps = { n: F.n, uTube: false, g: [1, 1, 1, 1], c: [0, 0, 0, 0], eb: [0, 0, 0, 0], glow: [0, 0, 0, 0] };
   const hd = LOUVER.H + LOUVER.D;
-  lampRows(L, F.a - hd * C.da, F.x - hd * C.dx, 0, LOUVER.SIGMA + fp, F.La, F.Wx / F.n, PRISM.END_IN, 0, rowBuf);
-  const cav = LOUVER.CAV_OFF * (1 - LOUVER.TUBE_OFF * Math.min(rowBuf[7], 1));
-  return mix(mix(mix(LOUVER.ALU, cav, C.spec), cav, C.vis), LOUVER.EDGE_ALB, C.edge);
+  // the dead lamps' silhouettes blurred area-normalised like the lit images (far cells keep their near mean)
+  const sig = Math.sqrt(LOUVER.SIGMA * LOUVER.SIGMA + fp * fp);
+  lampRows(L, F.a - hd * C.da, F.x - hd * C.dx, 0, sig, F.La, F.Wx / F.n, PRISM.END_IN, 0, rowBuf);
+  return louverAlbedo(C, rowBuf[7] * LOUVER.SIGMA / sig);
 }
 
 // ------------------------------------------------------------------------------------------ nadir normalisation
