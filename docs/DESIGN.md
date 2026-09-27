@@ -86,7 +86,7 @@ The authoritative values live in `src/core/constants.ts` (§4.3). This section e
 - **Photometry.** Luminance in nits (cd/m²), illuminance in lux, point intensity in candela.
   - Lightmaps store **irradiance in lux**.
   - Emissive panels are in nits, e.g. a Level 0 troffer is 3300 nits.
-  - The flashlight is 2000 cd (R2-post; was 600).
+  - The flashlight peaks at 3000 cd on its axis (package F optics, `lighting/flashlightOptics.ts`; R2-post 2000, was 600).
 - **Axes.** Right-handed, **+Y up, +X east, −Z north** (three.js default).
 - **Camera.** Euler order `'YXZ'`.
   - **yaw 0 looks along −Z**; **positive yaw turns left** (counter-clockwise seen from above).
@@ -2606,7 +2606,7 @@ export interface TextureSet {
   ormh: THREE.Texture; // sampler2DArray RGBA8: r AO(cavity), g roughness, b metal, a emissive mask
   grime: THREE.Texture; // 512^2 tileable RGBA8: r tide/stain rings, g speckle/mould, b scuff, a drip streaks
   waterNormals: THREE.Texture; // 512^2 tileable RG normal
-  cookie: THREE.Texture; // 256^2 flashlight cookie
+  cookie: THREE.Texture; // 512^2 RGBA16F flashlight cookie (package F)
   dispose(): void;
 }
 
@@ -2729,6 +2729,9 @@ export interface WorldQuery extends CollisionWorld {
   losClear(ax: number, ay: number, az: number, bx: number, by: number, bz: number): boolean;
   /** Distance to the first occluder along a horizontal ray at height y (capped at maxDist). */
   rayDistance(x: number, y: number, z: number, dx: number, dz: number, maxDist: number): number;
+  /** Package F: 3D ray (unit direction) against the 2.5D world plus collision boxes; true on a hit within maxDist,
+   * with the distance, surface normal and albedo written to out. */
+  raycast?(x: number, y: number, z: number, dx: number, dy: number, dz: number, maxDist: number, out: RaycastHit): boolean;
   /** audio passability of the edge between global cells: 'x' = line x=gi between (gi-1,gj)|(gi,gj). 0..1 */
   edgeSound(axis: 'x' | 'z', gi: number, gj: number): number;
   cellWalkable(gi: number, gj: number): boolean;
@@ -4072,7 +4075,7 @@ export const NOISE_GLSL: string; // periodic value/gradient/worley(F1,F2,id)/fbm
    - **Orientation (core `DecalPlacement` convention):** each slot's "up" is +v and every arrow (CHALK_ARROW, EXIT_LEFT/RIGHT, ARROW_UP) points +v. Canvas y runs down, so the canvas is uploaded with `flipY` such that the top of the glyph lands at high v (checked in the harness by sampling the arrow tip).
 7. **Grime** (512², tileable RGBA8, 2D): r = tide rings (iso-lines of warped fbm), g = speckle/mould, b = scuff, a = vertical drip streaks.
    **Water normals** (512², RG): 2 octaves of periodic gradient noise.
-   **Cookie** (256²): hot centre, 2–3 soft rings, lens-dirt noise, falloff to 0 at the edge.
+   **Cookie** (512², RGBA16F; package F): the beam profile of `lighting/flashlightOptics.ts` (`beamProfileGlsl`: a softly square LED-die core, a dark ring, a yellow phosphor ring, corona, flat spill, reflector lip, crisp rim) times lens dirt and a thumb smudge, cool core / warm spill. The texture spans `CONE × MAP_FOCUS` (see WP11 §4).
 
 **Recipes** (`uv.x` ∈ [0,1) spans `repeat` metres and `uv.y` spans `layerRepeatY` metres, so layers with `repeatY` are authored in a non-square frame; all noise is periodic with an integer period, so every layer tiles). Output `Surf{ albedo (linear), alpha, height, rough, metal, ao, emissive }`.
 - **Sampling limits.** Every periodic feature spans ≥ 3 texels at 1024² (and at 512² on low), or is supersampled 4× inside the generator (box-filtered), so no moiré is baked into the texture.
@@ -4370,6 +4373,7 @@ export function createTexturePool(renderer: THREE.WebGLRenderer): TexturePool;
   - `floorAt`: the cell floor (layout), the highest WALKABLE_TOP box top ≤ `feetY + stepMax`, and ramp planes (from `ChunkCollision`). `NaN` if the chunk layout is not loaded.
   - `boxesNear`: collision boxes from the cell buckets.
   - `losClear`/`rayDistance`: 2D DDA with height, using `edgeOccludesAt` and SOLID cells.
+  - `raycast` (package F): 2D DDA over the cells along the ray; per cell the floor / ceiling planes (none in TOWER, VOID, NO_CEIL cells), steps and soffits met on a cell line, the cell's collision boxes (walls with their thickness, jambs, posts, SOLID masses, blockers, props; slab test) and the chunk's ramps. The nearest hit inside a cell's span is final. Albedo: `LAYER_DEFS[mat].albedoMean` of the floor / ceiling material, the edge's `matNeg`/`matPos` face material for wall pieces, the floor material on blocker and riser tops, the cell's `wallMat` on SOLID cover faces, 0.3 for props.
   - `edgeSound`: `EDGE_SOUND[kind]`, or 0.
   - `fixturesNear`/`emittersNear` scan layouts; tower fixtures are expanded (replicas share the base id).
   - `portalAt`: structures' portals; `portalsNear(x, z, r, out)`: portals whose trigger footprint is within r (towers, elevators, pits, glitch walls).
@@ -4464,17 +4468,22 @@ export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, s
    - target = `ATMOSPHERES[world.zoneAt(eye)]` modified by `MOOD_MODS[world.moodAt(eye)]` (cell-based: stair towers and elevators report `STRUCTURE_ZONE`/NORMAL in every storey, so nothing crossfades at a storey switch), crossfaded over 1.5 s;
    - `camIrradiance` from the player tile's `volA` (the CPU `Uint16Array` via `texture.image.data`, `fromHalf`, trilinear; in TOWER cells y is wrapped like tower props);
    - `farColor = meanIrradiance·hazeAlbedo/π·hazeTint·FAR_WARM` × `FAR_FRACTION` (0.14; `meanIrradiance` = the camera irradiance smoothed over 3 s, `FAR_WARM` = (1.0, 0.9, 0.74)): the streaming edge falls into a warm grey-brown gloom (R2-post);
-   - `atmosphere.flashlight` (1 while on) and `atmosphere.flickerMode` (0/1/2) are set for the post stack (R2-post, optional fields);
+   - `atmosphere.flashlight` (`FLASH_METER_FOCUS` 0.6 while on: spot metering on the small hot core would crush the spill) and `atmosphere.flickerMode` (0/1/2) are set for the post stack (R2-post, optional fields);
    - `edgeFog = [EDGE_FOG.START, EDGE_FOG.END]·streamRadius·CHUNK_SIZE` (0.55R–0.8R).
 
    Write `globals.hazeDensity/hazeTint/hazeAlbedo/edgeFog/farColor/flickerMode`, and set `scene.background = farColor`.
 4. **Flashlight.**
-   - `SpotLight(0xfff4e0, intensity 2000 cd, distance 25, angle 0.35, penumbra 0.45, decay 2)`, `map = textures.cookie`; aimed at the view centre 3 m ahead (R2-post).
-   - **castShadow = true always.** `shadow.mapSize = q.flashlightShadow`, `shadow.radius = 3`, `shadow.normalBias = 0.02`, `shadow.camera.far = 25` (**equal to `distance`**: outside the shadow frustum three reports "lit", which would light surfaces through walls).
-   - Parented to a rig at the eye with offset (0.15, −0.2, 0) and a lagged rotation spring (ω 12).
+   - Package F optics: every constant comes from `FLASHLIGHT_OPTICS` (`lighting/flashlightOptics.ts`, the single source for all flashlight consumers): `SpotLight(0xfff4e0, intensity PEAK_CD 3000 cd, distance RANGE 40, angle CONE 0.62 (35.5°), penumbra 0.06, decay 2)`, `map = textures.cookie`; aimed at the view centre 3 m ahead (R2-post). The beam profile I(θ) (core, shoulder, dark ring, phosphor ring, corona, spill ~7 % of the peak, lip, rim, ripple; `beamProfile` in TS, `beamProfileGlsl` in GLSL, ~430 lm) lives in the cookie; three's own penumbra ramp sits inside its rim. The analytic airlight (`BR_AIRLIGHT`) weights its samples by `brBeamSoft`, the smooth twin of the profile.
+   - **castShadow = true always.** `shadow.mapSize = q.flashlightShadow`, `shadow.radius = 3`, `shadow.normalBias = 0.02`, `shadow.camera.far = 40` (**equal to `distance`**: outside the shadow frustum three reports "lit", which would light surfaces through walls). `shadow.focus = MAP_FOCUS` (1.1): three looks the cookie up at the normal-biased position, which reads a larger angle than the surface point on near walls; outside the map it skips the cookie, so the map (and the cookie layout) spans the cone plus this margin.
+   - Parented to a rig at the eye with offset (0.15, −0.2, 0) and a lagged rotation spring (ω 12). A hand sway (`handSway`: breathing at 0.23 Hz scaled by fatigue, a stride-locked gait swing, a small tremor; < 0.012 rad) moves the aim only; it runs on live frames (0 < dt) and its clock advances only when dt ≤ 0.25, so frozen-time captures never sway.
    - Off: `intensity = 0` and `shadow.autoUpdate = false`. On: `autoUpdate = true`.
    - The light is never removed, so the light count is constant.
    - The renderer uses `PCFShadowMap` (PCFSoft was removed in r186).
+5. **Flashlight bounce** (package F, `lighting/FlashlightBounce.ts`, `chunks/bounce.ts`; `QualityConfig.flashlightBounce` 0/1/4/8 VPLs, URL `bounce=0` off).
+   - The beam is split into angular bins (4 rays: the core + 3 sectors; 8 rays: an inner (0–16°) and an outer (16–35.5°) sector per quadrant). One `WorldQuery.raycast` per bin along its flux-weighted mean direction finds the lit surface (walls with their thickness, floors, ceilings, SOLID cells, blockers, props, ramps; albedo from `LAYER_DEFS`). Rays become VPL slots through fixed groups (`LAYOUT`, `mergeTargets`: flux-weighted centre, the hits' spread as its size, a shorter mean normal plus an isotropic share `uFbN.w` of the same flux): medium merges the 4 rays into its one VPL (its light lands where the beam's flux does rather than where the axis happens to hit), high keeps 4, ultra merges each quadrant's pair into 4 (a VPL costs ~0.07 ms per frame at the 3840 × 2160 ultra buffer); the shader loops over those slots only (`BR_FB_SLOTS`: 1 / 4 / 4 for `BR_BOUNCE_N` 1 / 4 / 8).
+   - Each hit becomes a Lambertian VPL 5 cm off the surface: C = bin flux (rendered profile, lm) × light colour × albedo × the bake's multi-bounce gain × three's range window / π. Its patch radius² eps2 = t²·Ω/(π·cos i) (≥ 0.09 m²) softens the fill like a disc source. A flood fill of ≤ 5 steps from the lit cell (doorways and partitions cost 3) gives the room's xz box: an edge passes when the line between the cell centres is clear 1.2 m above the higher of the two floors (stair heads, pit edges) or 0.25 m below the lower ceiling (over partitions and half walls). The shader cuts the fill at the box's walls within their thickness; frozen and hitched frames rebuild the box instead of taking it from the cache, so a capture never uses a box built while a neighbour chunk was still streaming in.
+   - Smoothing: position, normal, flux and eps2 follow exponentially (τ 0.08 s) and snap on jumps > 1.5 m, on the first frame and on frozen / hitched frames. Uniforms `uFbP/uFbN/uFbC/uFbBox` (8 each) are camera-relative world (relative to this frame's eye); `uFbOn` gates the whole loop, and reflection passes skip it.
+   - Shader: `E += C·max(N·l, 0)·(max(N_k·−l, 0) + iso_k)·(1 − (d/6)⁴)²·box / (d² + eps2)`, added to the diffuse irradiance × `brSsC` after the ambient lines; `view=bounce` shows it (1.0 = 30 lux).
 
 **Initial atmosphere table** (tunable; EV ranges are clamps that keep dark areas dark):
 
@@ -4963,7 +4972,7 @@ realDt = min(now − last, 0.1);  t += frozen ? 0 : realDt;  dt = frozen ? 0 : r
  2. player.update(dt, inputState, streamer.query, bus, frozen)   (120 Hz substeps; traversal may call host.switchStorey/prefetch)
  3. streamer.update(player.x, player.z, viewDirX, viewDirZ, camera, frame)
  4. streamer.processUploads(renderer, q.uploadBudgetMs)           (≤ 1 residency step)
- 5. lighting.update(t, dt, streamer.tiles(), player.state, camera, streamer.query)  (flicker uniforms, atmosphere globals, flashlight)
+ 5. lighting.update(t, dt, streamer.tiles(), player.state, camera, streamer.query)  (flicker uniforms, atmosphere globals, flashlight, bounce VPLs)
  6. anomalyDirector.update(t, dt, player.state, streamer.query)
  7. materials.globals.time.value = t
  8. player.applyToCamera(camera, fov)
@@ -5023,6 +5032,7 @@ storey switch:  prefetch(target) = layout jobs (target storey's query data) + bu
 | Hum voices / HRTF | 4 / no | 8 / yes | 10 / yes | 12 / yes |
 | Upload budget | 2 ms | 2.5 ms | 3 ms | 3 ms |
 | Flashlight airlight in haze | off | off | on | on |
+| Flashlight bounce rays / VPLs (package F) | 0 | 4 / 1 | 4 / 4 | 8 / 4 |
 
 `setQuality` at runtime:
 - **radius:** re-desires the tile set.

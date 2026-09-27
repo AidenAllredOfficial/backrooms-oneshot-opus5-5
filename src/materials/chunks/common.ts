@@ -6,6 +6,7 @@
 // world noise is integer-periodic over NOISE_WRAP horizontally and over STOREY_PITCH vertically.
 
 import { CELL } from '../../core/constants.ts';
+import { beamSoftGlsl } from '../../lighting/flashlightOptics.ts';
 import { f, glslConstants } from './params.ts';
 
 /** Uniforms shared by every surface / water material (MaterialGlobals + shared texture set + layer table). Every
@@ -387,6 +388,9 @@ export function fragmentCommon(): string {
  * brHazeTerms() is separate so the premultiplied water shader can apply the same maths.
  */
 export const HAZE_FUNCS_GLSL = /* glsl */ `
+#if defined( BR_AIRLIGHT ) && NUM_SPOT_LIGHTS > 0
+${beamSoftGlsl()}
+#endif
 vec3 brAirlight( vec3 viewPos, float d ) {
 #if defined( BR_AIRLIGHT ) && NUM_SPOT_LIGHTS > 0
 	SpotLight sl = spotLights[ 0 ];
@@ -406,7 +410,9 @@ vec3 brAirlight( vec3 viewPos, float d ) {
 		vec3 p = r * ( tc + h * tan( th ) );
 		vec3 L = sl.position - p;
 		float ld = max( length( L ), 1e-3 );
-		float att = getSpotAttenuation( sl.coneCos, sl.penumbraCos, dot( L / ld, sl.direction ) );
+		// the beam's angular profile (the smooth twin of the cookie, whose rim is the cone: 6 samples cannot resolve the
+		// die image)
+		float att = brBeamSoft( dot( L / ld, sl.direction ) );
 		att *= getDistanceAttenuation( ld, sl.distance, sl.decay ) * ld * ld; // keep only the range window
 		acc += att;
 	}

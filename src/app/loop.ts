@@ -7,6 +7,7 @@ import type { TeleportTarget } from '../core/debug.ts';
 import type { GameEvents } from '../core/events.ts';
 import type { MoodId, StoreyId, ZoneId } from '../core/ids.ts';
 import type { PlayerInput } from '../core/player.ts';
+import { setFlashlightBounce } from '../lighting/LightingRuntime.ts';
 import { DEFAULT_CONTROLLER, type PlayerInputExt } from '../player/controller.ts';
 import type { AppCore, GateOptions, ReadyGate } from './appState.ts';
 import { applyLaunchToggles } from './boot.ts';
@@ -276,7 +277,8 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       // 4. uploads
       const burst = core.gate.active && core.params.bake === 'full';
       s.streamer.processUploads(r, burst ? BURST_UPLOAD_MS : s.q.uploadBudgetMs, burst);
-      // 5. lighting
+      // 5. lighting (package F reads its URL toggle bounce= from the launch features)
+      setFlashlightBounce(s.lighting, s.features.bounce);
       s.lighting.update(t, dt, s.streamer.tiles(), st, core.camera, query);
       // 6. anomalies
       s.anomaly.update(t, dt, st, query);

@@ -91,7 +91,8 @@ export interface QualityConfig {
   volumetrics: 'off' | 'high' | 'ultra';
   /** F: dust motes (points on LAYER_LATE); final 0/0/3000/6000 */
   dustMotes: number;
-  /** F: flashlight bounce VPLs (0 = off); final 0/1/4/8 */
+  /** F: flashlight bounce layout (0 = off; 1 / 4 / 8 = FlashlightBounce LAYOUT: rays 4 / 4 / 8 into 1 / 4 / 4 VPLs);
+   * final 0/1/4/8 */
   flashlightBounce: number;
   /** F: bake near-field gather rays (0 = off; BakeQuality.nearRays); final 0/0/16/32 */
   bakeNearRays: number;
@@ -159,7 +160,7 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     waterVolumetrics: 0,
     volumetrics: 'off',
     dustMotes: 0,
-    flashlightBounce: 0,
+    flashlightBounce: 1,
     bakeNearRays: 0,
   },
   high: {
@@ -191,7 +192,7 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     waterVolumetrics: 0,
     volumetrics: 'off',
     dustMotes: 0,
-    flashlightBounce: 0,
+    flashlightBounce: 4,
     bakeNearRays: 16,
   },
   ultra: {
@@ -227,7 +228,7 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     waterVolumetrics: 0,
     volumetrics: 'off',
     dustMotes: 0,
-    flashlightBounce: 0,
+    flashlightBounce: 8,
     bakeNearRays: 32,
   },
 };
