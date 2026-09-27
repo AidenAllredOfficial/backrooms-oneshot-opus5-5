@@ -127,16 +127,16 @@ if ( ( brF & BR_F_UNDERWATER ) != 0 && brSubInfo.x > 0.0 && brNWg.y > ( BR_DETAI
 #ifdef BR_CAUSTICS_FULL
 // Above pool water (ceilings and walls of tiles with pool water, uTileWater bit 0; still flood water focuses nothing):
 // light reflected and refracted by the wavy surface dances on them. Coverage from the 4 nearest wall-mask cells
-// (chunks/water.ts brWaterCover); the net is softer (width 0.18), magnified with the height above the water and
-// slower; zero-mean, so the baked average (which already holds the pool bounce and the underwater lights' up-light)
-// is kept. Not in the mirror pass (the reflected ceiling is seen through the wavy surface anyway).
+// (chunks/water.ts brWaterCover); the net is softer (width 0.18), magnified in steps with the height above the water
+// (brCausticsAbove) and slower; zero-mean, so the baked average (which already holds the pool bounce and the
+// underwater lights' up-light) is kept. Not in the mirror pass (the reflected ceiling is seen through the wavy surface anyway).
 else if ( ( int( uTileWater + 0.5 ) & 1 ) != 0 && brNWg.y < 0.5 && uBrReflPass < 0.5 ) {
 	float brCwy;
 	float brCov = brWaterCover( vBrLocal.xz + brNWg.xz * 0.05, brCwy );
 	float brH = vBrLocal.y - brCwy;
 	if ( brCov > 0.0 && brH > 0.02 ) {
 		vec2 brXs = vBrLocal.xz - brNWg.xz * ( brH * 0.3 );
-		float brC = brCausticsW( brXs + uNoiseOrigin.xz, uTime * 0.7, 0.0, 1.0 + brH * BR_CAUSTIC_MAGNIFY, 0.18 );
+		float brC = brCausticsAbove( brXs + uNoiseOrigin.xz, uTime * 0.7, 1.0 + brH * BR_CAUSTIC_MAGNIFY );
 		float brStr = brNWg.y < - 0.5 ? BR_CAUSTIC_CEIL : BR_CAUSTIC_ABOVE_WALL;
 		irradiance += brE * ( brStr * ( brC - brCausticMeanW( 0.18 ) ) * brCov / ( 1.0 + BR_CAUSTIC_FADE * brH ) );
 	}

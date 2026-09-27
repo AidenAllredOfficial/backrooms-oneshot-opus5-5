@@ -19,7 +19,8 @@ import type { MaterialGlobals } from '../../core/runtime.ts';
 import { RIPPLE_LERP } from '../WaterMaterial.ts';
 import {
   buildRippleMask, collectDrips, courant2, dampOf, dropsBetween, footstepImpulse, maskCell0, nearestWaterPlane, RIPPLE,
-  rippleWindow, swayDue, wakeImpulses, type DripSource, type Impulse, type RippleWindow, type RippleWorld,
+  rippleWindow, simulatedPlane, swayDue, wakeImpulses,
+  type DripSource, type Impulse, type RippleWindow, type RippleWorld,
 } from './rippleSources.ts';
 
 export interface WaterRippleStats {
@@ -309,7 +310,7 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
         const wp = nearestWaterPlane(world, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), RIPPLE.NEAR_M + 2);
         scanPlane = wp ? { y: wp.y, kind: wp.kind } : null;
       }
-      const np = st.waterDepth > 0.001 ? st.y + st.waterDepth : scanPlane ? scanPlane.y : null;
+      const np = simulatedPlane(st.y, st.waterDepth, scanPlane ? scanPlane.y : null);
       const nk = scanPlane && np !== null && Math.abs(scanPlane.y - np) < 0.03 ? scanPlane.kind : kind;
       const oi = win.i0, oj = win.j0;
       rippleWindow(res, texel, st.eyeX, st.eyeZ, win);

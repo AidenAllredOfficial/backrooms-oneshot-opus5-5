@@ -9,7 +9,8 @@ import { createEmptyLayout, type ChunkLayout } from '../../src/core/layout.ts';
 import { QUALITY, QUALITY_NAMES } from '../../src/core/quality.ts';
 import {
   buildRippleMask, collectDrips, courant2, dampOf, dripTiming, dropsBetween, footOffset, footstepImpulse, maskCell0,
-  nearestWaterPlane, RIPPLE, rippleWindow, swayDue, wakeImpulses, type DripSource, type Impulse, type RippleWindow,
+  nearestWaterPlane, RIPPLE, rippleWindow, simulatedPlane, swayDue, wakeImpulses, type DripSource, type Impulse,
+  type RippleWindow,
 } from '../../src/materials/water/rippleSources.ts';
 
 /** One chunk at (0, 0): a room of 10 x 10 cells with a pool (water -10 cm) in cells 2..7 x 2..7. */
@@ -176,5 +177,18 @@ describe('nearest water plane', () => {
     expect(nearestWaterPlane(w, 4, -0.5, 4, 1, 0, 40)).toBeNull();
     // within 6 m only
     expect(nearestWaterPlane(w, 0.6, 1.6, 20, 0, -1, 6)).toBeNull();
+  });
+
+  it('the simulated plane: the water the player stands in, bit-stable while the feet move (else the scanned one)', () => {
+    // feet on a pool floor / its steps at many heights under a -10 cm surface: y + depth must give one value, or the
+    // window mask would be rebuilt every frame
+    const seen = new Set<number>();
+    for (let i = 0; i < 190; i++) {
+      const y = -1.5 + i * 0.007123;
+      seen.add(simulatedPlane(y, Math.max(0, -0.1 - y), 0.5)!);
+    }
+    expect([...seen]).toEqual([-0.1]);
+    expect(simulatedPlane(0, 0, -0.1)).toBe(-0.1);
+    expect(simulatedPlane(0, 0, null)).toBeNull();
   });
 });

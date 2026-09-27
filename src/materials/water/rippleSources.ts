@@ -95,6 +95,12 @@ export function wakeImpulses(x: number, z: number, yaw: number, vx: number, vz: 
   return 4;
 }
 
+/** The plane to simulate: the water the player stands in (feet y + depth, snapped to the layout's whole cm: y + depth
+ * is not bit-stable while the feet move over steps and slopes, and the window's cell mask is rebuilt whenever the
+ * plane value changes), else the scanned nearest plane (null: none). */
+export const simulatedPlane = (y: number, waterDepth: number, scanY: number | null): number | null =>
+  waterDepth > 0.001 ? Math.round((y + waterDepth) * 100) / 100 : scanY;
+
 /** Idle sway while standing in water: true when a sway pulse falls in (t0, t1]. */
 export const swayDue = (t0: number, t1: number): boolean => Math.floor(t1 / RIPPLE.SWAY_PERIOD) > Math.floor(t0 / RIPPLE.SWAY_PERIOD);
 

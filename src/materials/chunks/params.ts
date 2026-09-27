@@ -333,6 +333,9 @@ export const WATER_CAUSTICS = {
    * 1 / (1 + FADE h) */
   MAGNIFY: 0.33,
   FADE: 0.15,
+  /** ratio of the discrete magnification levels the above-water net steps through (chunks/water.ts
+   * brCausticsAbove: a continuously varying scale would slide the world-anchored net into noise) */
+  LEVEL: 1.3,
   /** flashlight caustic through the surface: 1 + GAIN * (pattern - mean) */
   SPOT_GAIN: 1.2,
 } as const;
@@ -352,6 +355,7 @@ const float BR_WM_BLUR[3] = float[3](${M.BLUR.map(f).join(', ')});
 #define BR_CAUSTIC_ABOVE_WALL ${f(C.ABOVE_WALL)}
 #define BR_CAUSTIC_MAGNIFY ${f(C.MAGNIFY)}
 #define BR_CAUSTIC_FADE ${f(C.FADE)}
+#define BR_CAUSTIC_LEVEL ${f(C.LEVEL)}
 #define BR_CAUSTIC_SPOT_GAIN ${f(C.SPOT_GAIN)}
 `;
 }

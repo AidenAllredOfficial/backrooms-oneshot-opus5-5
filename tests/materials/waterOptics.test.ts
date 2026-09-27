@@ -5,8 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import { NOISE_WRAP } from '../../src/core/constants.ts';
 import { HELPERS_GLSL } from '../../src/materials/chunks/common.ts';
-import { WATER_MEDIA, waterMediaGlsl } from '../../src/materials/chunks/params.ts';
-import { WATER_SURFACE, waveAmplitudes, waveLattice, waveOmega, waterWavesGlsl } from '../../src/materials/chunks/water.ts';
+import { FRAG_LIGHTS_GLSL } from '../../src/materials/chunks/lighting.ts';
+import { WATER_CAUSTICS, WATER_MEDIA, waterMediaGlsl } from '../../src/materials/chunks/params.ts';
+import { WATER_SURF_GLSL, WATER_SURFACE, waveAmplitudes, waveLattice, waveOmega, waterWavesGlsl } from '../../src/materials/chunks/water.ts';
 
 // ---------------------------------------------------------------- caustic twin (chunks/common.ts brCausticsW)
 
@@ -68,6 +69,32 @@ describe('caustic pattern', () => {
       for (let i = 0; i < N; i++) s += causticsW(rnd() * 400, rnd() * 400, rnd() * 100, wd, sc, w0);
       expect(Math.abs(s / N - meanW(w0 + wd)), `w0 ${w0} wd ${wd} sc ${sc}`).toBeLessThan(0.015);
     }
+  });
+  it('the above-water net stays continuous where the height above the water varies (stepped magnification)', () => {
+    // twin of chunks/water.ts brCausticLevel / brCausticsAbove
+    const level = (k: number): number => 2048 / (4 * Math.floor(512 / Math.pow(WATER_CAUSTICS.LEVEL, k) + 0.5));
+    const above = (x: number, z: number, t: number, sc: number): number => {
+      const L = Math.log2(Math.max(sc, 1)) / Math.log2(WATER_CAUSTICS.LEVEL), k = Math.floor(L), w = sstep(0.3, 0.7, L - k);
+      return (w < 1 ? (1 - w) * causticsW(x, z, t, 0, level(k), 0.18) : 0) + (w > 0 ? w * causticsW(x, z, t, 0, level(k + 1), 0.18) : 0);
+    };
+    for (let k = 0; k < 8; k++) {
+      const n = 2048 / level(k);
+      expect(Math.abs(n - Math.round(n))).toBeLessThan(1e-9);
+      expect(Math.round(n) % 4).toBe(0); // the lattices and their period-4 warp tile NOISE_WRAP
+    }
+    // a wall at |pw| ~ 600 m of the world-periodic origin, 1 mm steps of height: the stepped net changes smoothly,
+    // the continuously scaled one (the previous formula) jumps by whole cells per millimetre
+    let maxStep = 0, maxCont = 0;
+    const x = 612.3, z = 287.9;
+    for (let h = 0.05; h < 4; h += 0.037) {
+      const sc0 = 1 + h * WATER_CAUSTICS.MAGNIFY, sc1 = 1 + (h + 0.001) * WATER_CAUSTICS.MAGNIFY;
+      maxStep = Math.max(maxStep, Math.abs(above(x, z, 3, sc1) - above(x, z, 3, sc0)));
+      maxCont = Math.max(maxCont, Math.abs(causticsW(x, z, 3, 0, sc1, 0.18) - causticsW(x, z, 3, 0, sc0, 0.18)));
+    }
+    expect(maxStep).toBeLessThan(0.02);
+    expect(maxCont).toBeGreaterThan(0.2);
+    expect(FRAG_LIGHTS_GLSL).toMatch(/brCausticsAbove\( brXs \+ uNoiseOrigin\.xz, uTime \* 0\.7, 1\.0 \+ brH \* BR_CAUSTIC_MAGNIFY \)/);
+    expect(WATER_SURF_GLSL).toContain('float brCausticsAbove( vec2 xz, float t, float sc )');
   });
   it('the pool-floor pattern keeps its own mean (brCaustics = brCausticsW with width 0.26 + depth / 2)', () => {
     expect(HELPERS_GLSL).toContain('return brCausticsW( xz, t, 0.5 * depth, sc, 0.26 )');
