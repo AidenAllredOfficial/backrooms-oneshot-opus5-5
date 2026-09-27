@@ -11,7 +11,7 @@
 import { CELL, DOOR_W, WALL_T } from '../core/constants.ts';
 import { edgeOccludesAt } from '../core/edges.ts';
 import { CellFlag } from '../core/ids.ts';
-import { DDA_EPS_Y, type VisGrid } from './visgrid.ts';
+import { DDA_EPS_Y, MAT_PROP, type VisGrid } from './visgrid.ts';
 
 const EPS_Y = DDA_EPS_Y;
 const POST = WALL_T / 2 / CELL; // post half-width in cell units
@@ -391,6 +391,106 @@ export function traceHit(g: VisGrid, ax: number, ay: number, az: number, dx: num
       }
       cj = ncj; t0 = tz;
       tz = (sz > 0 ? cj + 1 - az : cj - az) * iz;
+    }
+  }
+}
+
+/** The far hit of `traceHit2`. */
+export const hitFar: HitRecord = { kind: 0, t: 0, x: 0, y: 0, z: 0, cell: 0, dir: 0, mat: 0, wet: false, box: -1 };
+
+/**
+ * `traceHit` into `hit`, plus the first hit with the prop boxes (MAT_PROP) entered before `skipT` transparent into
+ * `hitFar` (the probes' far field without the props next to them, probes.ts), in one walk: past a near prop the
+ * walk goes on for the far hit only. Both records equal what separate traceHit walks (the second one ignoring those
+ * prop entries) would return; when the first hit is not such a prop, hitFar = hit. Counts as one ray.
+ */
+export function traceHit2(g: VisGrid, ax: number, ay: number, az: number, dx: number, dy: number, dz: number, group: number, skipT: number): void {
+  rayStats.rays++;
+  rayStats.byKind[RAY_PROBE]++;
+  const n = g.n;
+  let ci = Math.floor(ax), cj = Math.floor(az);
+  const sx = dx > 0 ? 1 : dx < 0 ? -1 : 0, sz = dz > 0 ? 1 : dz < 0 ? -1 : 0;
+  const ix = dx !== 0 ? 1 / dx : 0, iz = dz !== 0 ? 1 / dz : 0;
+  let tx = sx > 0 ? (ci + 1 - ax) * ix : sx < 0 ? (ci - ax) * ix : Infinity;
+  let tz = sz > 0 ? (cj + 1 - az) * iz : sz < 0 ? (cj - az) * iz : Infinity;
+  let t0 = 0;
+  hit.kind = HIT_NONE; hit.wet = false; hit.box = -1;
+  hitFar.kind = HIT_NONE; hitFar.wet = false; hitFar.box = -1;
+  let nearDone = false; // `hit` is final (a near prop box); only the far hit is still searched
+  for (;;) {
+    if (ci < 0 || cj < 0 || ci >= n || cj >= n) return;
+    const c = cj * n + ci;
+    const t1 = tx < tz ? (tx < 1 ? tx : 1) : (tz < 1 ? tz : 1);
+    let best = 2, kind = HIT_NONE, dir = 0, mat = 0, hb = -1; // (props included)
+    let bestF = 2, kindF = HIT_NONE, dirF = 0, matF = 0, hbF = -1; // (near props transparent)
+    if (dy < 0) {
+      const top = g.blockTop[c] > g.dFloor[c] ? g.blockTop[c] : g.dFloor[c];
+      const tf = (top - ay) / dy;
+      if (tf >= t0 && tf <= t1) { best = bestF = tf; kind = kindF = HIT_FLOOR; mat = matF = g.floorMat[c]; }
+    } else if (dy > 0) {
+      const tc = (g.dCeil[c] - ay) / dy;
+      if (tc >= t0 && tc <= t1) {
+        best = bestF = tc; kind = kindF = HIT_CEIL;
+        mat = matF = (g.flags[c] & CellFlag.NO_CEIL) !== 0 || g.ceilKind[c] === 3 /* OPEN_DARK */ ? MAT_PLENUM : g.ceilMat[c];
+      }
+    }
+    const ya = ay + t0 * dy, yb = ay + t1 * dy;
+    if ((ya > yb ? ya : yb) >= g.cBoxLo[c] - 1e-9 && (ya < yb ? ya : yb) <= g.cBoxHi[c] + 1e-9) for (let k = g.boxStart[c], ke = g.boxStart[c + 1]; k < ke; k++) {
+      const b = g.boxList[k];
+      if (g.boxGroup[b] !== group) continue;
+      const te = boxEntry(g, b, ax, ay, az, dx, dy, dz, t0 - 1e-12, t1);
+      if (te < 0) continue;
+      const bk = boxFace === 1 ? HIT_BOX_TOP : boxFace === 2 ? HIT_BOX_BOTTOM : HIT_BOX_SIDE;
+      if (te < best) { best = te; mat = g.boxMat[b]; hb = b; kind = bk; dir = boxDir; }
+      if (te < bestF && (te >= skipT || g.boxMat[b] !== MAT_PROP)) { bestF = te; matF = g.boxMat[b]; hbF = b; kindF = bk; dirF = boxDir; }
+    }
+    if (!nearDone && kind !== HIT_NONE) {
+      hit.kind = kind; hit.t = best; hit.dir = dir; hit.mat = mat; hit.cell = c; hit.box = kind >= HIT_BOX_TOP ? hb : -1;
+      hit.x = ax + best * dx; hit.y = ay + best * dy; hit.z = az + best * dz;
+      hit.wet = kind === HIT_FLOOR && (g.flags[c] & CellFlag.WET) !== 0;
+      nearDone = true;
+    }
+    if (kindF !== HIT_NONE) {
+      hitFar.kind = kindF; hitFar.t = bestF; hitFar.dir = dirF; hitFar.mat = matF; hitFar.cell = c; hitFar.box = kindF >= HIT_BOX_TOP ? hbF : -1;
+      hitFar.x = ax + bestF * dx; hitFar.y = ay + bestF * dy; hitFar.z = az + bestF * dz;
+      hitFar.wet = kindF === HIT_FLOOR && (g.flags[c] & CellFlag.WET) !== 0;
+      return;
+    }
+    if (t1 >= 1) return;
+    let wk = HIT_NONE, wt = 0, wdir = 0, wm = 0, wx = 0, wy = 0, wz = 0;
+    if (tx < tz) {
+      const X = sx > 0 ? ci + 1 : ci;
+      const along = (az - cj) + tx * dz, y = ay + tx * dy;
+      const e = cj * (n + 1) + X;
+      const nci = ci + sx;
+      let blocked = crossX(g, X, cj, along, y);
+      let m = sx > 0 ? g.exMatN[e] : g.exMatP[e];
+      if (!blocked && nci >= 0 && nci < n) {
+        const nc = cj * n + nci;
+        if (g.group[nc] !== group || (g.flags[nc] & SOLID) !== 0 || y < g.dFloor[nc] || y > g.dCeil[nc]) blocked = true;
+        else if (y < g.blockTop[nc]) { blocked = true; m = g.floorMat[nc]; }
+      }
+      if (blocked) { wk = HIT_WALL; wt = tx; wdir = sx > 0 ? 1 : 0; wm = m; wx = X; wy = y; wz = cj + along; }
+      else { ci = nci; t0 = tx; tx = (sx > 0 ? ci + 1 - ax : ci - ax) * ix; }
+    } else {
+      const Z = sz > 0 ? cj + 1 : cj;
+      const along = (ax - ci) + tz * dx, y = ay + tz * dy;
+      const e = Z * n + ci;
+      const ncj = cj + sz;
+      let blocked = crossZ(g, Z, ci, along, y);
+      let m = sz > 0 ? g.ezMatN[e] : g.ezMatP[e];
+      if (!blocked && ncj >= 0 && ncj < n) {
+        const nc = ncj * n + ci;
+        if (g.group[nc] !== group || (g.flags[nc] & SOLID) !== 0 || y < g.dFloor[nc] || y > g.dCeil[nc]) blocked = true;
+        else if (y < g.blockTop[nc]) { blocked = true; m = g.floorMat[nc]; }
+      }
+      if (blocked) { wk = HIT_WALL; wt = tz; wdir = sz > 0 ? 3 : 2; wm = m; wx = ci + along; wy = y; wz = Z; }
+      else { cj = ncj; t0 = tz; tz = (sz > 0 ? cj + 1 - az : cj - az) * iz; }
+    }
+    if (wk !== HIT_NONE) {
+      if (!nearDone) { hit.kind = wk; hit.t = wt; hit.dir = wdir; hit.mat = wm; hit.cell = c; hit.x = wx; hit.y = wy; hit.z = wz; }
+      hitFar.kind = wk; hitFar.t = wt; hitFar.dir = wdir; hitFar.mat = wm; hitFar.cell = c; hitFar.x = wx; hitFar.y = wy; hitFar.z = wz;
+      return;
     }
   }
 }

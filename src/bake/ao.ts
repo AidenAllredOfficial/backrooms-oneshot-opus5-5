@@ -8,7 +8,9 @@
 // plus contact AO under every COLLIDE prop footprint: strength 0.5 at (and under) the footprint edge, falling off
 // smoothly to 0 at 0.3 m beyond it. AO multiplies the indirect term only and is stored in irr.a.
 // Full bakes with the near-field gather (nearfield.ts, bakeNearRays > 0) leave out the prop part boxes and the
-// contact AO of footprints whose prop has part boxes (`skipProps`): the traced rays see those boxes exactly.
+// contact AO of footprints whose prop has a part box standing on the floor (`skipProps`, VisGrid.contactBox): the
+// traced rays see those boxes exactly. Chairs, the lounge chair and pallets (all boxes float above untraced legs,
+// star bases and stringers) keep their contact AO.
 // The light volume uses a spherical variant (no hemisphere test, strength 0.35).
 // Side results: `aoOut.wall` (product over walls only, for the grime mask) and `aoOut.wallDist` (m).
 // Wall faces are accumulated per wall LINE (axis + line index; a receiver sees one side of a line): the edge
@@ -130,8 +132,8 @@ function buildCandidates(job: BakeJob, c: number): void {
 
 /**
  * AO at (x, y, z) (halo cells / m), unit normal n, owner cell c. `spherical`: light-volume variant. `skipProps`:
- * leave out the prop boxes and the contact AO of footprints with prop boxes (the near-field gather traces them).
- * Result in aoOut.
+ * leave out the prop boxes and the contact AO of footprints with a prop box standing on the floor (the near-field
+ * gather traces them). Result in aoOut.
  */
 export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, group: number, spherical: boolean, skipProps = false): void {
   const g = job.g, n = g.n;

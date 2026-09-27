@@ -8,9 +8,11 @@
 // spherical AO, with per-channel multi-bounce (indirect.ts). Near-field samples (full bake with q.nearRays > 0, a
 // prop box within NEAR.R, nearfield.ts): lights a box could cut off (or hide from the bitset's cell-centre point)
 // get one DDA ray from the sample itself instead of the cell bitset (a chair under a desk is in the desk's shadow,
-// a monitor above it is not), the probe SH is corrected by q.nearRays traced sphere rays (prop faces replace the far
-// field they hide), and the stored AO drops by the rays' box-hit fraction; full bakes with q.nearRays > 0 leave
-// out the analytic AO of prop boxes. Encoding (consistent with the shell lightmap decode in WP9):
+// a monitor above it is not), the probe SH blends towards the probes' far field and is corrected by q.nearRays
+// traced sphere rays (prop faces replace the far field they hide), and the stored AO drops by the rays' box-hit
+// fraction; full bakes with q.nearRays > 0 leave out the analytic AO of prop boxes. The other full bakes (low /
+// medium) use the same per-light rays in cells whose bitset point lies inside a box (a filing cabinet or vending
+// machine around the cell centre was black). Encoding (consistent with the shell lightmap decode in WP9):
 //   a.rgb = total irradiance on a surface facing the dominant direction's light (sum of the light deltas' E plus
 //           the L0 (direction-averaged) indirect irradiance), a.a = spherical AO;
 //   b.xyz = normalized luminance-weighted dominant direction * 0.5 + 0.5 (direct deltas + the indirect L1 vector),
@@ -52,8 +54,9 @@ const clampH = (v: number): number => toHalf(v > HALF_MAX ? HALF_MAX : v < 0 ? 0
 
 export interface VolumeOut { a: Uint16Array; b: Uint8Array; c: Uint16Array | null; wallMask: Uint8Array }
 
-/** `nearRays`: the full bake's near-field rays (0 = off, and for preview bakes). */
-export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null, dyn: DynInfo | null, term: BakeTerm, nearRays = 0): VolumeOut {
+/** `nearRays`: the full bake's near-field rays (0 = off, and for preview bakes); `full`: a full bake (per-sample
+ * light rays in cells whose bitset point is inside a box, at every preset). */
+export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null, dyn: DynInfo | null, term: BakeTerm, nearRays = 0, full = false): VolumeOut {
   const g = job.g, n = g.n, L = job.L;
   const NX = LV.NX, NY = LV.NY, NZ = LV.NZ;
   const ns = NX * NY * NZ;
@@ -86,13 +89,17 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
         if (doDirect) {
           const m = selectLights(job, x, y, z, 0, 0, 0, c, group, 0, tower ? FILTER_NONE : FILTER_CELL, sel);
           const layer = tower ? 0 : nearestBit(job, c, y);
+          // per-sample light rays: near-field samples (q.nearRays > 0); in the other full bakes (low / medium) the
+          // samples of cells whose bitset point lies inside a box (filing cabinets, vending machines, crates: the
+          // cell bitset sees nothing from there and the prop came out black)
+          const nearL = near || (full && !tower && insideBox(g, c, Math.floor(x) + 0.5, job.cellY[c * 5 + layer], Math.floor(z) + 0.5, group));
           if (!tower) { // K_MAX tail: weak lights as omni point deltas with bitset visibility
             tailSum(job, x, y, z, 0, 0, 0, c, 1 << layer, P === null);
             er += tail.r; eg += tail.g; eb += tail.b; vx += tail.vx; vy += tail.vy; vz += tail.vz;
           }
           for (let q = 0; q < m; q++) {
             const l = sel[q];
-            const e = near ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
+            const e = nearL ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
             if (e <= 0) continue;
             const o = l * 3;
             er += e * L.rad[o]; eg += e * L.rad[o + 1]; eb += e * L.rad[o + 2];
@@ -107,7 +114,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
               const ch = L.channel[l];
               if ((seen & (1 << ch)) !== 0) throw new Error(`bakeTile: two dynamic lights of flicker channel ${ch} reach the same light-volume sample`);
               seen |= 1 << ch;
-              const e = near ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
+              const e = nearL ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
               if (e > 0) F[s * 4 + ch] += e * L.radLum[l];
             }
           }
@@ -116,7 +123,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
         if (doInd) {
           dyn4.fill(0);
           if (P) {
-            if (interpolateProbes(job, P, x, y, z, c, true, false)) {
+            if (interpolateProbes(job, P, x, y, z, c, true, false, near ? nw : 0)) {
               if (P.dyn) dynIndirectL0(dyn4);
               if (near) {
                 aoDyn = ao * (1 - nearSphereCorrect(job, x, y, z, group, nearRays, k, interp.sh, nw));

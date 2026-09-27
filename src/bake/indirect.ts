@@ -20,8 +20,11 @@ import { luma } from './util.ts';
 import type { VisGrid } from './visgrid.ts';
 
 /** Interpolated SH (12), ambient cube (18), dynamic channel cubes (24, when the ProbeSet has them) and RGB rho of
- * the last `interpolateProbes` call. */
-export const interp = { sh: new Float64Array(12), cube: new Float64Array(18), dcube: new Float64Array(24), rho3: new Float64Array(3), w: 0 };
+ * the last `interpolateProbes` call (farSh / farCube / farDcube: scratch of the probes' far field, see `farW`). */
+export const interp = {
+  sh: new Float64Array(12), cube: new Float64Array(18), dcube: new Float64Array(24), rho3: new Float64Array(3), w: 0,
+  farSh: new Float64Array(12), farCube: new Float64Array(18), farDcube: new Float64Array(24),
+};
 
 /** Multi-bounce gain of one channel's (or the luma) probe albedo. */
 export const multiBounce = (rho: number): number => 1 / (1 - Math.min(0.6, 0.55 * rho));
@@ -71,8 +74,9 @@ export function cellsLinked(g: VisGrid, a: number, b: number, x: number, y: numb
 const cw = new Float64Array(4);
 const cp = new Int32Array(4);
 
-/** What `interpolateProbes` accumulates: the SH (light volume) and / or the ambient cube (texels). */
-let wantSh = true, wantCube = true;
+/** What `interpolateProbes` accumulates: the SH (light volume) and / or the ambient cube (texels), and the far
+ * field of both (near-field receivers). */
+let wantSh = true, wantCube = true, wantFar = false;
 
 /** Horizontal interpolation at one layer; adds weight * SH into interp (scaled by `lw`). Returns false if empty. */
 function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, layer: number, lw: number): boolean {
@@ -111,7 +115,13 @@ function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, 
     const f = cw[k] * s;
     if (wantSh) { const o = cp[k] * 12; for (let j = 0; j < 12; j++) interp.sh[j] += f * P.sh[o + j]; }
     if (wantCube) { const oc = cp[k] * 18; for (let j = 0; j < 18; j++) interp.cube[j] += f * P.cube[oc + j]; }
+    if (wantFar && P.farSh && P.farCube) {
+      const o = cp[k] * 12, oc = cp[k] * 18, fs = P.farSh, fc = P.farCube;
+      if (wantSh) for (let j = 0; j < 12; j++) interp.farSh[j] += f * fs[o + j];
+      if (wantCube) for (let j = 0; j < 18; j++) interp.farCube[j] += f * fc[oc + j];
+    }
     if (P.dyn) { const od = cp[k] * 24, d = P.dyn; for (let j = 0; j < 24; j++) interp.dcube[j] += f * d[od + j]; }
+    if (wantFar && P.farDyn) { const od = cp[k] * 24, d = P.farDyn; for (let j = 0; j < 24; j++) interp.farDcube[j] += f * d[od + j]; }
     const r = interp.rho3, o3 = cp[k] * 3;
     r[0] += f * P.rho[o3]; r[1] += f * P.rho[o3 + 1]; r[2] += f * P.rho[o3 + 2];
   }
@@ -122,10 +132,13 @@ function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, 
 const clampT = (t: number): number => (t < 0.02 ? 0.02 : t > CELL - 0.02 ? CELL - 0.02 : t);
 
 /** Interpolate the probe SH (`sh`) and / or ambient cube (`cube`) at (x, y, z) (halo cells / m) owned by cell c
- * into `interp` (the other one is left zero). Returns false if none. */
-export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, c: number, sh = true, cube = true): boolean {
+ * into `interp` (the other one is left zero). `farW` > 0 (a near-field receiver's nearWeight, when the ProbeSet has
+ * the far field): the result (dynamic cubes included) blends towards the probes' far field (prop boxes next to the
+ * probe transparent) by farW. Returns false if none. */
+export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, c: number, sh = true, cube = true, farW = 0): boolean {
   interp.sh.fill(0); interp.cube.fill(0); interp.dcube.fill(0); interp.rho3.fill(0); interp.w = 0;
-  wantSh = sh; wantCube = cube;
+  wantSh = sh; wantCube = cube; wantFar = farW > 0 && P.farSh !== null;
+  if (wantFar) { interp.farSh.fill(0); interp.farCube.fill(0); interp.farDcube.fill(0); }
   const g = job.g;
   const h = job.cellH;
   const h0 = h[c * 3], h1 = h[c * 3 + 1], h2 = h[c * 3 + 2];
@@ -158,7 +171,18 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
     for (let j = 0; j < 18; j++) interp.cube[j] *= s;
     for (let j = 0; j < 24; j++) interp.dcube[j] *= s;
     interp.rho3[0] *= s; interp.rho3[1] *= s; interp.rho3[2] *= s;
+    if (wantFar) {
+      for (let j = 0; j < 12; j++) interp.farSh[j] *= s;
+      for (let j = 0; j < 18; j++) interp.farCube[j] *= s;
+      for (let j = 0; j < 24; j++) interp.farDcube[j] *= s;
+    }
     interp.w = 1;
+  }
+  if (wantFar) {
+    const fw = farW > 1 ? 1 : farW;
+    for (let j = 0; j < 12; j++) interp.sh[j] += fw * (interp.farSh[j] - interp.sh[j]);
+    for (let j = 0; j < 18; j++) interp.cube[j] += fw * (interp.farCube[j] - interp.cube[j]);
+    if (P.farDyn) for (let j = 0; j < 24; j++) interp.dcube[j] += fw * (interp.farDcube[j] - interp.dcube[j]);
   }
   return true;
 }
@@ -172,11 +196,12 @@ export const dynIndirect = new Float64Array(4);
 export const indirectOut = { mb: new Float64Array(3), mbL: 0 };
 
 /** Indirect irradiance (RGB, lux, with multi-bounce) at a texel; writes out[0..2] (and `dynIndirect`,
- * `indirectOut`). `keepSh`: also interpolate the probe SH (left in `interp.sh`, for the near-field gather). */
-export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, out: Float64Array, keepSh = false): void {
+ * `indirectOut`). `keepSh`: also interpolate the probe SH (left in `interp.sh`, for the near-field gather); `farW`:
+ * the texel's nearWeight (blend towards the probes' far field, see interpolateProbes). */
+export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, out: Float64Array, keepSh = false, farW = 0): void {
   dynIndirect.fill(0);
   const mbo = indirectOut.mb;
-  if (!interpolateProbes(job, P, x, y, z, c, keepSh, true)) { out[0] = 0; out[1] = 0; out[2] = 0; mbo.fill(0); indirectOut.mbL = 0; return; }
+  if (!interpolateProbes(job, P, x, y, z, c, keepSh, true, farW)) { out[0] = 0; out[1] = 0; out[2] = 0; mbo.fill(0); indirectOut.mbL = 0; return; }
   const rho = interp.rho3;
   const m0 = multiBounce(rho[0]), m1 = multiBounce(rho[1]), m2 = multiBounce(rho[2]);
   mbo[0] = m0; mbo[1] = m1; mbo[2] = m2;

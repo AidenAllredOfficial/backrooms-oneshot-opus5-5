@@ -8,9 +8,12 @@
 //   - per edge line: kind, hA, hB, ySill (max adjacent floor), face materials;
 //   - occluder boxes bucketed per cell: OCCLUDE solids (boxes, ramps), the PROP_OCCLUDERS part boxes of props that
 //     have a part list (which takes precedence over `occlude`; chair backs only near a quarter-turn yaw) and the
-//     whole footprint of the other OCCLUDE props (yaw snapped to 90 degrees);
-//   - COLLIDE prop footprints (contact AO; `contactBox` marks those whose prop added occluder boxes, which the
-//     near-field gather traces instead) and ceiling leaks (surface mask).
+//     whole footprint of the other OCCLUDE props (yaw snapped to 90 degrees); prop boxes that abut exactly with the
+//     same cross-section (neighbouring racks' uprights) are merged into one;
+//   - COLLIDE prop footprints (contact AO; `contactBox` marks those whose prop added an occluder box standing on
+//     the floor, which the near-field gather traces instead; props whose part boxes all float above it -- chair
+//     seats over their star bases, the lounge chair frame, the pallet deck -- keep the analytic contact AO for the
+//     untraced legs and bases) and ceiling leaks (surface mask).
 
 import { CELL, CHUNK_CELLS } from '../core/constants.ts';
 import { cellIdx, exIdx, ezIdx, type TileKey } from '../core/grid.ts';
@@ -27,6 +30,8 @@ import { HALO, HALO_OFF, INV_CELL, growF64, growI32, quant } from './util.ts';
 export const PERIODIC_EXTRA_K = 2;
 /** Generic albedo layer marker for prop boxes (no material data in the layout). */
 export const MAT_PROP = 255;
+/** A prop part box whose bottom is at most this far (m) above the prop base stands on the floor (`contactBox`). */
+export const CONTACT_GROUND = 0.05;
 /** DDA floor/ceiling of tower cells for their own group: periodic geometry is unbounded in y. */
 const Y_INF = 1e9;
 /** The DDA's floor / ceiling tolerance (m). */
@@ -86,8 +91,8 @@ export interface VisGrid {
   contact: Float64Array;
   contactY: Float64Array;
   contactGroup: Int32Array;
-  /** per contact footprint: 1 when its prop added at least one occluder box (the near-field gather traces those
-   * boxes, so it skips the footprint's analytic contact AO) */
+  /** per contact footprint: 1 when its prop added at least one occluder box standing on the floor (bottom within
+   * CONTACT_GROUND of the base: the near-field gather traces it, so it skips the footprint's analytic contact AO) */
   contactBox: Uint8Array;
   contactStart: Int32Array; // per cell (footprint + 0.3 m margin)
   contactList: Int32Array;
@@ -304,7 +309,7 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
         const x0 = px + quant(rb[0] * INV_CELL), x1 = px + quant(rb[3] * INV_CELL);
         const z0 = pz + quant(rb[2] * INV_CELL), z1 = pz + quant(rb[5] * INV_CELL);
         if (x1 <= x0 || z1 <= z0) return;
-        added = 1; // (also when outside the halo: contactBox must not depend on the halo frame)
+        if (rb[1] <= CONTACT_GROUND) added = 1; // (also when outside the halo: contactBox must not depend on the halo frame)
         if (x1 < lo || x0 > hi || z1 < lo || z0 > hi) return;
         pushBox(bb, x0, p.y + rb[1], z0, x1, p.y + rb[4], z1, g, MAT_PROP, -1, 0, 0, 0);
       };
@@ -338,6 +343,8 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
       nLeak++;
     }
   }
+
+  mergeAbutting(bb);
 
   // ---- bucket boxes per cell (CSR)
   const nBox = bb.n;
@@ -403,6 +410,53 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
     contactBox: Uint8Array.from(contactBox.subarray(0, nContact)), contactStart, contactList,
     nLeak, leak: leak.slice(0, nLeak * 4), leakId: leakId.slice(0, nLeak),
   };
+}
+
+/**
+ * Merge prop part boxes that abut exactly along x or z and have identical extents on the other two axes, in place:
+ * the uprights of neighbouring racks in a row (two 8 cm C-channels touching on the rack pair line) become one box.
+ * The union is the same solid, so every ray, probe and gather sees the same geometry with fewer boxes to test (a
+ * warehouse rack row had 4 upright boxes per rack, now 2 per rack line). Ramps and non-prop boxes are left alone;
+ * the result depends only on the set of boxes (chains merge in coordinate order).
+ */
+function mergeAbutting(bb: BoxBuild): void {
+  const n = bb.n, B = bb.box;
+  const cand: number[] = [];
+  for (let i = 0; i < n; i++) if (bb.mat[i] === MAT_PROP && bb.ramp[i] < 0) cand.push(i);
+  if (cand.length < 2) return;
+  const alive = new Uint8Array(n).fill(1);
+  let merged = 0;
+  for (let axis = 0; axis < 2; axis++) {
+    const a0 = axis === 0 ? 0 : 2, a1 = a0 + 3, o0 = axis === 0 ? 2 : 0, o1 = o0 + 3; // merge along a, same o and y
+    // (group, y0, y1, o0, o1) runs sorted by a0: a box abutting the previous one of its run extends it; only boxes
+    // with a possible partner (an end coordinate equal to some box's start, or the reverse) are sorted
+    const starts = new Set<number>(), ends = new Set<number>();
+    for (const i of cand) if (alive[i] !== 0) { starts.add(B[i * 6 + a0]); ends.add(B[i * 6 + a1]); }
+    const list = cand.filter((i) => alive[i] !== 0 && (starts.has(B[i * 6 + a1]) || ends.has(B[i * 6 + a0])));
+    list.sort((p, q) => bb.group[p] - bb.group[q] || B[p * 6 + 1] - B[q * 6 + 1] || B[p * 6 + 4] - B[q * 6 + 4] ||
+      B[p * 6 + o0] - B[q * 6 + o0] || B[p * 6 + o1] - B[q * 6 + o1] || B[p * 6 + a0] - B[q * 6 + a0] || p - q);
+    let run = -1;
+    for (const i of list) {
+      if (run >= 0 && bb.group[i] === bb.group[run] && B[i * 6 + 1] === B[run * 6 + 1] && B[i * 6 + 4] === B[run * 6 + 4] &&
+        B[i * 6 + o0] === B[run * 6 + o0] && B[i * 6 + o1] === B[run * 6 + o1] && B[i * 6 + a0] === B[run * 6 + a1]) {
+        B[run * 6 + a1] = B[i * 6 + a1];
+        alive[i] = 0;
+        merged++;
+      } else run = i;
+    }
+  }
+  if (merged === 0) return;
+  let w = 0;
+  for (let i = 0; i < n; i++) {
+    if (alive[i] === 0) continue;
+    if (w !== i) {
+      for (let k = 0; k < 6; k++) B[w * 6 + k] = B[i * 6 + k];
+      for (let k = 0; k < 3; k++) bb.rampY[w * 3 + k] = bb.rampY[i * 3 + k];
+      bb.group[w] = bb.group[i]; bb.mat[w] = bb.mat[i]; bb.ramp[w] = bb.ramp[i];
+    }
+    w++;
+  }
+  bb.n = w;
 }
 
 /** Occlusion interval of one edge (see VisGrid.exLo): equivalent to core/edges.ts edgeOccludesAt. */

@@ -1,7 +1,8 @@
 // tests/bake/propOccluders.test.ts — prop part occluders (core/props.ts PROP_OCCLUDERS, bake/visgrid.ts): every part
 // box lies inside its prop's footprint, part lists take precedence over `occlude` (cars stand on wheels, racks let
 // light through between their decks), chair backs only near a quarter-turn yaw, contactBox marks footprints with
-// boxes.
+// a box standing on the floor (chairs keep their contact AO), neighbouring racks' touching uprights merge into one
+// box with the same solid.
 
 import { describe, expect, it } from 'vitest';
 import { CELL } from '../../src/core/constants.ts';
@@ -85,16 +86,40 @@ describe('VisGrid part boxes', () => {
     expect(propBoxes(PropKind.CRATE, 0)).toBe(1);
   });
 
-  it('contactBox marks the footprints of props with boxes', () => {
+  it('contactBox marks the footprints of props with a box standing on the floor', () => {
     const l = solidLayout({ s: 0, cx: 0, cz: 0 });
     carveRoom(l, 1, 1, 15, 15);
     l.props.push({ kind: PropKind.DESK, variant: 0, x: 4.2, y: 0, z: 4.2, yaw: 0, scale: 1, flags: 0, seed: 1 });
     l.props.push({ kind: PropKind.CONE, variant: 0, x: 9.6, y: 0, z: 9.6, yaw: 0, scale: 1, flags: 0, seed: 2 });
+    l.props.push({ kind: PropKind.OFFICE_CHAIR, variant: 0, x: 13.2, y: 0, z: 13.2, yaw: 0, scale: 1, flags: 0, seed: 3 });
+    l.props.push({ kind: PropKind.CAR_SEDAN, variant: 0, x: 15.6, y: 0, z: 4.8, yaw: 0, scale: 1, flags: 0, seed: 4 });
     const g = buildVisGrid(handNeighborhood(l), TILE);
-    expect(g.nContact).toBe(2);
-    const byX = [0, 1].sort((a, b) => g.contact[a * 4] - g.contact[b * 4]);
-    expect(g.contactBox[byX[0]]).toBe(1); // desk
+    expect(g.nContact).toBe(4);
+    const byX = [0, 1, 2, 3].sort((a, b) => g.contact[a * 4] - g.contact[b * 4]);
+    expect(g.contactBox[byX[0]]).toBe(1); // desk: side panels on the floor
     expect(g.contactBox[byX[1]]).toBe(0); // cone: no part boxes, keeps its analytic contact AO
+    expect(g.contactBox[byX[2]]).toBe(0); // office chair: the seat floats over the untraced star base
+    expect(g.contactBox[byX[3]]).toBe(1); // car: on its wheels
+  });
+
+  it("neighbouring racks' touching uprights merge into one box; rays see the same solid", () => {
+    const row = (n: number): ReturnType<typeof buildVisGrid> => {
+      const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+      carveRoom(l, 1, 1, 15, 15);
+      for (let k = 0; k < n; k++) l.props.push({ kind: PropKind.SHELF_RACK, variant: 0, x: 4.8 + 2.4 * k, y: 0, z: 8.4 + 0.6, yaw: 0, scale: 1, flags: 0, seed: 1 + k });
+      return buildVisGrid(handNeighborhood(l), TILE);
+    };
+    const count = (g: ReturnType<typeof buildVisGrid>): number => { let c = 0; for (let b = 0; b < g.nBox; b++) if (g.boxMat[b] === MAT_PROP) c++; return c; };
+    expect(count(row(1))).toBe(7);
+    expect(count(row(3))).toBe(3 * 7 - 2 * 2); // 2 rack lines x 2 upright pairs
+    const g = row(3);
+    // the merged upright spans both racks' channels (0.16 m wide on the rack line x = 6.0 m)
+    let wide = 0;
+    for (let b = 0; b < g.nBox; b++) {
+      const o = b * 6;
+      if (g.boxMat[b] === MAT_PROP && Math.abs((g.box[o + 3] - g.box[o]) * CELL - 0.16) < 1e-6 && g.box[o + 4] - g.box[o + 1] > 4) wide++;
+    }
+    expect(wide).toBe(4);
   });
 });
 
