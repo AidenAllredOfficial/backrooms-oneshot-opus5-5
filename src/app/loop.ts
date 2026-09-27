@@ -22,6 +22,7 @@ const ATTRACT_MAX_SPEED = 1.0;
 const WALK_SPEED = DEFAULT_CONTROLLER.walk;
 const WATER_SCAN_INTERVAL = 6; // frames
 const WATER_MAX_DIST = 40; // m (PlanarReflection renders planes within 40 m)
+const WATER_FILM_PENALTY = 8; // m: a film (kind 2) ranks this much farther than a pool / flooded plane
 /** Upload budget while an automation ready gate (bake 'full') is closed: nobody watches, so uploads may take most
  * of the frame and skip the fade-in (processUploads burst). */
 const BURST_UPLOAD_MS = 50;
@@ -201,7 +202,8 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
     const s = core.sys;
     if (!s || s.q.planarReflectionScale <= 0) { waterY = null; return; }
     const st = s.player.state;
-    const wp = nearestWaterPlane(s.streamer.query, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), WATER_MAX_DIST);
+    // package E: a film under the player ranks WATER_FILM_PENALTY m farther (the pool beside the deck takes the mirror)
+    const wp = nearestWaterPlane(s.streamer.query, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), WATER_MAX_DIST, WATER_FILM_PENALTY);
     waterY = wp ? wp.y : null;
   };
 

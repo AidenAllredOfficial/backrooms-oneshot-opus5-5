@@ -42,7 +42,7 @@ const FINAL: Record<QualityName, Partial<QualityConfig>> = {
 
 const ALL_ON: QualityDefines = {
   floorRefl: true, airlight: true, lite: false, ssr: true, probe: true, ssao: true, cs: 8, puddles: true, detail: true, pom: 2,
-  sheen: true, coat: true, specAA: true, waterRefract: true, waterWaves: 8, waterRipple: true, waterDebris: true,
+  sheen: true, coat: true, specAA: true, waterRefract: 10, waterWaves: 8, waterRipple: true, waterDebris: true,
   causticsFull: true, waterVolLight: 4, volumetric: true, bounce: 8,
 };
 

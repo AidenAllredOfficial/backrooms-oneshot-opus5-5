@@ -271,9 +271,6 @@ export const TUNE = {
   PLANE_EPS: 0.02, // m, planar reflection plane match
   REFL_DISTORT: 0.02,
   // --- submerged surfaces
-  WATER_SIGMA: [0.45, 0.09, 0.06] as const, // 1/m absorption
-  WATER_INSCATTER: 0.02,
-  WATER_INSCATTER_TINT: [0.3, 0.75, 0.8] as const,
   CAUSTIC_STRENGTH: 1.1,
   CAUSTIC_FLOOD: 0.12, // strength multiplier for flooded rooms (WaterRect kind 1; film kind 2: none)
   CAUSTIC_FLOOD_SCALE: 2, // flooded rooms: caustic cells x this (shallow water focuses far below its surface)
@@ -281,13 +278,7 @@ export const TUNE = {
   CAUSTIC_SRC_TAN: 0.35, // tan of the light sources' angular half size (troffers): softens deep caustics
   CAUSTIC_DEPTH_K: 0.35, // 1/m
   // --- water surface
-  WATER_F0: 0.02,
-  WATER_ROUGH: 0.06,
-  WATER_NORMAL_A: 2.4, // m per repeat (512 per NOISE_WRAP)
-  WATER_NORMAL_B: 1.2,
-  WATER_NORMAL_STRENGTH: 0.16,
   WATER_ENV_ALBEDO: 0.45, // room-average reflectance used for the uniform-environment reflection
-  WATER_ENV_TINT: [0.85, 0.97, 1.0] as const,
   WATER_EMIT_PLANE_H: 3.4, // m above the water: emitter plane assumed for emission-map reflections on water
   // --- airlight (flashlight beam in haze)
   AIRLIGHT_STEPS: 6,
@@ -435,22 +426,13 @@ export function glslConstants(): string {
 #define BR_REFL_LOD ${f(TUNE.REFL_LOD_PER_ROUGH)}
 #define BR_PLANE_EPS ${f(TUNE.PLANE_EPS)}
 #define BR_REFL_DISTORT ${f(TUNE.REFL_DISTORT)}
-#define BR_WATER_SIGMA ${v3(TUNE.WATER_SIGMA)}
-#define BR_WATER_INSCATTER ${f(TUNE.WATER_INSCATTER)}
-#define BR_WATER_INSCATTER_TINT ${v3(TUNE.WATER_INSCATTER_TINT)}
 #define BR_CAUSTIC_STRENGTH ${f(TUNE.CAUSTIC_STRENGTH)}
 #define BR_CAUSTIC_DEPTH_K ${f(TUNE.CAUSTIC_DEPTH_K)}
 #define BR_CAUSTIC_FLOOD ${f(TUNE.CAUSTIC_FLOOD)}
 #define BR_CAUSTIC_FLOOD_SCALE ${f(TUNE.CAUSTIC_FLOOD_SCALE)}
 #define BR_CAUSTIC_FLOOD_SPEED ${f(TUNE.CAUSTIC_FLOOD_SPEED)}
 #define BR_CAUSTIC_SRC_TAN ${f(TUNE.CAUSTIC_SRC_TAN)}
-#define BR_WATER_F0 ${f(TUNE.WATER_F0)}
-#define BR_WATER_ROUGH ${f(TUNE.WATER_ROUGH)}
-#define BR_WATER_NA ${f(TUNE.WATER_NORMAL_A)}
-#define BR_WATER_NB ${f(TUNE.WATER_NORMAL_B)}
-#define BR_WATER_NS ${f(TUNE.WATER_NORMAL_STRENGTH)}
 #define BR_WATER_ENV_ALBEDO ${f(TUNE.WATER_ENV_ALBEDO)}
-#define BR_WATER_ENV_TINT ${v3(TUNE.WATER_ENV_TINT)}
 #define BR_WATER_EMIT_H ${f(TUNE.WATER_EMIT_PLANE_H)}
 #define BR_AIR_STEPS ${TUNE.AIRLIGHT_STEPS}
 #define BR_AIR_MIN_H ${f(TUNE.AIRLIGHT_MIN_H)}
@@ -468,20 +450,78 @@ ${waterMediaGlsl()}`;
 // ---------------------------------------------------------------- package E: water media and caustics
 
 /** Per-kind water media, indexed by WaterRect kind (0 pool, 1 flooded room, 2 film); SI units (1/m).
- * SA absorption, SS scattering, G the Henyey-Greenstein asymmetry, TINT the in-scatter colour, BLUR the
- * forward-scatter blur factor (the refraction pass). The legacy submerged-surface path (chunks/haze.ts) attenuates
- * along the refracted view path with the transport coefficient SA + (1 - G) SS: without the blur of the refraction
- * pass the forward-scattered light arrives along the view ray, so it is kept. */
+ * SA absorption, SS scattering, G the forward Henyey-Greenstein lobe of the dual phase function (phaseWater: a BACK
+ * share of a backward lobe G_BACK), TINT the scatterers' colour, BLUR the forward-scatter blur factor of the
+ * refraction pass. Pool: pure-water absorption (red goes first: the tile turns cyan, then blue with depth) and a
+ * little fine scattering. Flooded Level 0 rooms: dissolved organic matter (humic stains absorb blue: yellow-brown
+ * with depth) and silt that scatters strongly forward but backscatters little, so the water body stays dark and the
+ * carpet shows through near the camera, blurred and browned. Film: the same water, 1-2 cm of it.
+ * The legacy submerged-surface path (chunks/haze.ts; medium, low, the mirror pass) attenuates along the refracted
+ * view path with the transport coefficient SA + (1 - G) SS: without the blur of the refraction pass the
+ * forward-scattered light arrives along the view ray. */
 export const WATER_MEDIA = {
-  SA: [[0.35, 0.065, 0.03], [0.6, 0.9, 1.8], [0.6, 0.9, 1.8]],
-  SS: [0.04, 1.6, 1.2],
-  G: [0.9, 0.85, 0.85],
-  TINT: [[0.55, 0.85, 0.95], [1.0, 0.85, 0.58], [1.0, 0.9, 0.7]],
-  BLUR: [0, 0.06, 0.02],
+  SA: [[0.35, 0.065, 0.03], [0.9, 1.6, 3.4], [0.9, 1.6, 3.4]],
+  SS: [0.12, 1.2, 1.0],
+  G: [0.9, 0.92, 0.9],
+  BACK: [0.1, 0.07, 0.05],
+  G_BACK: -0.3,
+  TINT: [[0.85, 0.96, 1.0], [1.0, 0.88, 0.66], [1.0, 0.9, 0.72]],
+  BLUR: [0, 0.035, 0.02],
   /** downwelling attenuation of the baked light reaching a submerged surface: exp(-DOWN * kappa * depth),
    * kappa = SA + (1 - G) SS; DOWN < 1.25 because part of the floor light comes from the pool's own wall lights */
   DOWN: 0.8,
+  IOR: 1.333,
 } as const;
+
+/** Henyey-Greenstein phase (1/sr) at mu = cos(scattering angle). */
+export const phaseHG = (mu: number, g: number): number => (1 - g * g) / (4 * Math.PI * Math.pow(1 + g * g - 2 * g * mu, 1.5));
+/** The water's dual-lobe phase function (1/sr; integrates to 1): the forward lobe G[kind] plus a BACK[kind] share of
+ * a backward lobe (a local copy until package F's phase.ts lands; GLSL twin brPhaseW). */
+export const phaseWater = (mu: number, kind: number): number =>
+  (1 - WATER_MEDIA.BACK[kind]) * phaseHG(mu, WATER_MEDIA.G[kind]) + WATER_MEDIA.BACK[kind] * phaseHG(mu, WATER_MEDIA.G_BACK);
+
+/** Exact dielectric Fresnel reflectance air -> water (unpolarised) at the cosine of incidence ci (GLSL twin
+ * brFresnelW: F(1) = 0.0204, 1 at grazing). */
+export function fresnelWater(ci: number): number {
+  const n = WATER_MEDIA.IOR;
+  const c = Math.min(Math.max(ci, 0), 1);
+  const ct = Math.sqrt(Math.max(1 - (1 - c * c) / (n * n), 0));
+  const rs = (c - n * ct) / (c + n * ct), rp = (n * c - ct) / (n * c + ct);
+  return 0.5 * (rs * rs + rp * rp);
+}
+
+/**
+ * Phase share of diffuse downwelling light for a view ray going up through the water at cosV (to the vertical):
+ * the in-scattered source is SS * PHI * E / pi. A diffuse field of radiance E / pi above the surface enters the water
+ * compressed into Snell's window (the 48.6 deg cone around the nadir) with radiance n^2 (1 - F) E / pi, so
+ * PHI = n^2 * integral over the window of (1 - F) phase(mu) d omega. A viewer above the water sees that light
+ * backscattered (the phase past 90 deg), which the dual lobe keeps small for silt: dark murky water, not milk.
+ * Numeric (Simpson in theta, midpoint in phi).
+ */
+export function downwellPhi(kind: number, cosV: number, nt = 96, np = 96): number {
+  const n = WATER_MEDIA.IOR, n2 = n * n;
+  const thc = Math.asin(1 / n);
+  const sv = Math.sqrt(Math.max(1 - cosV * cosV, 0));
+  const h = thc / nt;
+  let acc = 0;
+  for (let i = 0; i <= nt; i++) {
+    const th = i * h;
+    const wS = i === 0 || i === nt ? 1 : i & 1 ? 4 : 2;
+    const sT = Math.sin(th), cT = Math.cos(th);
+    const tr = 1 - fresnelWater(Math.sqrt(Math.max(1 - n2 * sT * sT, 0))); // the air-side angle has sin = n sin(th)
+    let ring = 0;
+    for (let j = 0; j < np; j++) {
+      const ph = ((j + 0.5) / np) * 2 * Math.PI;
+      ring += phaseWater(sT * Math.cos(ph) * sv - cT * cosV, kind); // down (sT cos ph, -cT, sT sin ph) . up (sv, cosV, 0)
+    }
+    acc += wS * tr * ring * ((2 * Math.PI) / np) * sT;
+  }
+  return (n2 * acc * h) / 3;
+}
+
+/** PHI per kind as the shaders use it (a typical view, 25 deg off the vertical in the water: PHI varies < 10 %
+ * over the refracted view cone). */
+export const WATER_PHI: readonly number[] = [0, 1, 2].map((k) => downwellPhi(k, Math.cos((25 * Math.PI) / 180)));
 
 /** Caustic strengths (package E; the pattern is chunks/common.ts brCausticsW): submerged walls (x the floors'
  * CAUSTIC_STRENGTH), and the zero-mean modulation of ceilings / walls above pool water. */
@@ -496,26 +536,44 @@ export const WATER_CAUSTICS = {
   /** ratio of the discrete magnification levels the above-water net steps through (chunks/water.ts
    * brCausticsAbove: a continuously varying scale would slide the world-anchored net into noise) */
   LEVEL: 1.3,
-  /** flashlight caustic through the surface: 1 + GAIN * (pattern - mean) */
-  SPOT_GAIN: 1.2,
+  /** flashlight caustic through the surface, mean-preserving: 1 + SPOT_CONTRAST * (pattern / mean - 1). A torch is
+   * not a point: its 3-4 cm reflector and the beam's own spread fill the cells, so the floor between the filaments
+   * keeps 1 - SPOT_CONTRAST of the mean (it went black at 1 - 1.2 mean before) */
+  SPOT_CONTRAST: 0.4,
 } as const;
 
-/** GLSL constants of WATER_MEDIA / WATER_CAUSTICS (const arrays indexed by kind). */
+/** GLSL constants and helpers of WATER_MEDIA / WATER_CAUSTICS (const arrays indexed by kind; brFresnelW,
+ * brPhaseW). */
 export function waterMediaGlsl(): string {
   const v3 = (c: readonly number[]): string => `vec3(${c.map(f).join(', ')})`;
   const M = WATER_MEDIA, C = WATER_CAUSTICS;
+  const n = M.IOR;
   return `const vec3 BR_WM_SA[3] = vec3[3](${M.SA.map(v3).join(', ')});
 const float BR_WM_SS[3] = float[3](${M.SS.map(f).join(', ')});
 const float BR_WM_G[3] = float[3](${M.G.map(f).join(', ')});
+const float BR_WM_BACK[3] = float[3](${M.BACK.map(f).join(', ')});
 const vec3 BR_WM_TINT[3] = vec3[3](${M.TINT.map(v3).join(', ')});
 const float BR_WM_BLUR[3] = float[3](${M.BLUR.map(f).join(', ')});
+const float BR_WM_PHI[3] = float[3](${WATER_PHI.map((x) => f(Number(x.toPrecision(5)))).join(', ')});
+#define BR_WM_GB ${f(M.G_BACK)}
 #define BR_WM_DOWN ${f(M.DOWN)}
+// exact dielectric Fresnel air -> water at the cosine of incidence ci (params.ts fresnelWater: F(1) = 0.0204)
+float brFresnelW( float ci ) {
+	float c = clamp( ci, 0.0, 1.0 );
+	float ct = sqrt( max( 1.0 - ( 1.0 - c * c ) * ${f(1 / (n * n))}, 0.0 ) );
+	float rs = ( c - ${f(n)} * ct ) / ( c + ${f(n)} * ct );
+	float rp = ( ${f(n)} * c - ct ) / ( ${f(n)} * c + ct );
+	return 0.5 * ( rs * rs + rp * rp );
+}
+// the water's dual-lobe phase function (1/sr) at mu = cos(scattering angle) (params.ts phaseWater)
+float brHGW( float mu, float g ) { float d = 1.0 + g * g - 2.0 * g * mu; return ( 1.0 - g * g ) / ( 12.566371 * d * sqrt( d ) ); }
+float brPhaseW( float mu, int kind ) { return mix( brHGW( mu, BR_WM_G[ kind ] ), brHGW( mu, BR_WM_GB ), BR_WM_BACK[ kind ] ); }
 #define BR_CAUSTIC_WALL ${f(C.WALL)}
 #define BR_CAUSTIC_CEIL ${f(C.CEIL)}
 #define BR_CAUSTIC_ABOVE_WALL ${f(C.ABOVE_WALL)}
 #define BR_CAUSTIC_MAGNIFY ${f(C.MAGNIFY)}
 #define BR_CAUSTIC_FADE ${f(C.FADE)}
 #define BR_CAUSTIC_LEVEL ${f(C.LEVEL)}
-#define BR_CAUSTIC_SPOT_GAIN ${f(C.SPOT_GAIN)}
+#define BR_CAUSTIC_SPOT_CONTRAST ${f(C.SPOT_CONTRAST)}
 `;
 }

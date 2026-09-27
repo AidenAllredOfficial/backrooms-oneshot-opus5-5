@@ -81,7 +81,7 @@ export interface QualityDefines {
   sheen: boolean;
   coat: boolean; // props clearcoat fields (never on lite)
   specAA: boolean;
-  waterRefract: boolean;
+  waterRefract: number; // refraction march steps of the split-frame water (0 = the legacy premultiplied water)
   waterWaves: number;
   waterRipple: boolean;
   waterDebris: boolean;
@@ -108,7 +108,7 @@ export const qualityDefinesOf = (q: QualityConfig): QualityDefines => {
     sheen: q.clothSheen,
     coat: !lite,
     specAA: q.specularAA,
-    waterRefract: q.colorPyramidScale > 0 && q.waterRefractionSteps > 0,
+    waterRefract: q.colorPyramidScale > 0 ? Math.max(0, Math.round(q.waterRefractionSteps)) : 0,
     waterWaves: q.waterWaves,
     waterRipple: q.waterRippleRes > 0,
     waterDebris: q.waterDebris,

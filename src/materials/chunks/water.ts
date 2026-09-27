@@ -12,7 +12,8 @@
 // capillary detail. BR_WATER_WAVES 0 (low): the two texture layers only (today's cost).
 // All world-anchored lookups use vBrLocal + uNoiseOrigin (§2.2 precision rules).
 
-import { NOISE_WRAP } from '../../core/constants.ts';
+import { NOISE_WRAP, WALL_T } from '../../core/constants.ts';
+import { beamSoftGlsl } from '../../lighting/flashlightOptics.ts';
 import { f } from './params.ts';
 
 /** Water surface tuning (package E). Index = WaterRect kind: 0 pool, 1 flooded room, 2 film. */
@@ -27,9 +28,9 @@ export const WATER_SURFACE = {
   RMS: [0.012, 0.004, 0.0015],
   /** amplitude split: slope amplitude ~ lambda^SPLIT */
   SPLIT: 0.5,
-  /** GGX alpha of the surface itself (still water is a near-perfect mirror; film: carpet pile tips break it); the
-   * unresolved waves add to it with distance */
-  ALPHA0: [0.004, 0.003, 0.012],
+  /** GGX alpha of the surface itself (still water is a near-perfect mirror; film: the carpet pile tips break it, so
+   * lamps reflect as glossy streaks, like wet asphalt); the unresolved waves add to it with distance */
+  ALPHA0: [0.004, 0.003, 0.035],
   ALPHA_MAX: 0.5,
   G: 9.81, // m/s^2
   SIGMA_RHO: 7.3e-5, // m^3/s^2, surface tension / density
@@ -51,11 +52,27 @@ export const WATER_SURFACE = {
   DRIP_WAVELENGTH: 0.022, // m
   FOAM_ALB: [[0.85, 0.88, 0.9], [0.62, 0.56, 0.44], [0.7, 0.66, 0.58]],
   // ---- surface matter (waterDebris)
-  FILM: [0.1, 0.8, 0.4], // dust / oil film coverage weight
+  FILM: [0.1, 0.55, 0.4], // dust / oil film coverage weight
+  /** a dust film barely roughens still water (GGX alpha it adds at full coverage); it dulls it instead: FILM_DULL of
+   * the reflection is scattered diffusely under full coverage */
+  FILM_ROUGH: 0.012,
+  FILM_DULL: 0.3,
   SCUM_ALB: [[0.8, 0.82, 0.8], [0.42, 0.36, 0.24], [0.5, 0.45, 0.35]],
   FLECK_CELL: 0.24, // m (5120 per NOISE_WRAP)
   FLECK_P: [0.004, 0.05, 0.03], // fraction of lattice cells with a fleck
   WETBAND: [0.03, 0.07, 0.015], // m above the water line
+  // ---- contact lines (waterDebris): where the water meets a wall, a pillar, a chair leg, the pool's rim
+  /** width (m) and strength of the scum / foam line floating against what stands in the water: pools barely any
+   * (circulation), flooded rooms a ragged brown band of dust, lint and soaked paper */
+  SCUM_W: [0.012, 0.11, 0.04],
+  SCUM_K: [0.25, 0.9, 0.55],
+  /** meniscus: the water climbs a wetted surface by ~2-3 mm (capillary length 2.7 mm); pixel-averaged slope and its
+   * width (m; never under 1.2 px, so it reads as a thin bright line at any distance) */
+  MENISCUS: 0.8,
+  MENISCUS_W: 0.003,
+  /** the water right at a contact is shaded by the wall above it (fraction lost within CONTACT_W m) */
+  CONTACT_SHADOW: 0.3,
+  CONTACT_W: 0.03,
 } as const;
 
 export interface Wave { mx: number; mz: number; kx: number; kz: number; k: number; lambda: number; phase: number }
@@ -223,7 +240,7 @@ vec2 brRippleSlope( vec2 rp, float wyW, float fp, out float h, out float foam ) 
 `;
 }
 
-/** Surface matter (water shader, BR_WATER_DEBRIS): the dust / oil film and floating flecks. */
+/** Surface matter (water shader, BR_WATER_DEBRIS): the dust / oil film, floating flecks and the contact lines. */
 export function waterFilmGlsl(): string {
   const W = WATER_SURFACE;
   const fp = Math.round(NOISE_WRAP / W.FLECK_CELL);
@@ -232,6 +249,47 @@ export function waterFilmGlsl(): string {
 const float BR_WFILM[3] = float[3](${W.FILM.map(f).join(', ')});
 const vec3 BR_WSCUM[3] = vec3[3](${W.SCUM_ALB.map(v3).join(', ')});
 const float BR_FLECK_P[3] = float[3](${W.FLECK_P.map(f).join(', ')});
+const float BR_WSCUM_W[3] = float[3](${W.SCUM_W.map(f).join(', ')});
+const float BR_WSCUM_K[3] = float[3](${W.SCUM_K.map(f).join(', ')});
+#define BR_WFILM_ROUGH ${f(W.FILM_ROUGH)}
+#define BR_WFILM_DULL ${f(W.FILM_DULL)}
+#define BR_WMENISCUS ${f(W.MENISCUS)}
+#define BR_WMENISCUS_W ${f(W.MENISCUS_W)}
+#define BR_WCONTACT_SHADOW ${f(W.CONTACT_SHADOW)}
+#define BR_WCONTACT_W ${f(W.CONTACT_W)}
+#define BR_WALL_T ${f(WALL_T)}
+// Distance (m) from p (tile-local xz) to the nearest side of its cell that bounds this water (surface wy): a wall
+// (wall-mask bit; its face WALL_T / 2 in front of the edge line) or a neighbour cell without water at this plane (the
+// pool's rim, a step, a SOLID block). n = the unit horizontal direction away from that side (into the water).
+// Works on every preset (one 18x18 mask, 5 texel fetches); objects smaller than a cell need the pyramid depth.
+float brWaterEdge( vec2 p, float wy, out vec2 n ) {
+	ivec2 c = ivec2( floor( p / BR_CELL ) );
+	vec2 fr = p - vec2( c ) * BR_CELL;
+	int bits = brWallBits( c );
+	float e = 1e3;
+	n = vec2( 0.0 );
+	for ( int k = 0; k < 4; k ++ ) {
+		// N1 (-z), E2 (+x), S4 (+z), W8 (-x)
+		ivec2 d = k == 0 ? ivec2( 0, - 1 ) : k == 1 ? ivec2( 1, 0 ) : k == 2 ? ivec2( 0, 1 ) : ivec2( - 1, 0 );
+		bool wall = ( bits & ( 1 << k ) ) != 0;
+		float wyn;
+		int kn;
+		if ( ! wall && brWaterCell( c + d, wyn, kn ) && abs( wyn - wy ) < 0.03 ) continue;
+		float dist = k == 0 ? fr.y : k == 1 ? BR_CELL - fr.x : k == 2 ? BR_CELL - fr.y : fr.x;
+		if ( wall ) dist -= 0.5 * BR_WALL_T;
+		if ( dist < e ) { e = dist; n = - vec2( d ); }
+	}
+	return max( e, 0.0 );
+}
+// Scum / foam line floating against a contact at horizontal distance e (m): a ragged band BR_WSCUM_W wide (its edge
+// wanders with 0.3 m noise) made of clumps (7.5 cm and 0.6 m noise; slow drift), x the kind's strength
+float brWaterScum( vec2 pw, float e, int kind, float t ) {
+	float w = BR_WSCUM_W[ kind ];
+	if ( e > 2.0 * w ) return 0.0;
+	float band = 1.0 - smoothstep( 0.15 * w, w, e + ( brVNoise( pw / 0.3, ivec2( 4096 ), 921u ) - 0.5 ) * 0.9 * w );
+	float clumps = smoothstep( 0.35, 0.7, 0.6 * brVNoise( pw / 0.075 + 0.004 * t, ivec2( 16384 ), 922u ) + 0.4 * brVNoise( pw / 0.6, ivec2( 2048 ), 923u ) );
+	return band * clumps * BR_WSCUM_K[ kind ];
+}
 // dust / oil film coverage: slow-drifting patches (1.2 m and 0.3 m value noise, periods divide NOISE_WRAP)
 float brWaterFilm( vec2 pw, float t, int kind ) {
 	float n = 0.7 * brVNoise( pw / 1.2 + 0.01 * t, ivec2( 1024 ), 913u ) + 0.3 * brVNoise( pw / 0.3 - 0.013 * t, ivec2( 4096 ), 914u );
@@ -272,6 +330,200 @@ vec4 brWaterFlecks( vec2 pw, float t, int kind, float fpx ) {
 	}
 	return acc;
 }
+#endif
+`;
+}
+
+/**
+ * The water body seen through the surface (water shader, BR_WATER_REFRACT = march steps; split frames only). The
+ * submerged surfaces were drawn into package A's ColorPyramid without the view-path optics (chunks/haze.ts brDefer:
+ * only the downwelling attenuation of their light), so here: the refracted view ray is marched against the pyramid's
+ * linear depth, and what it reaches is seen through the medium: unscattered (sharp), forward-scattered (the same
+ * scene, blurred through the pyramid's mips) and the ambient light scattered into the path (closed form, with the
+ * downwelling attenuation at the depth s cos(theta_t)); plus, with BR_WATER_VOLLIGHT, the flashlight beam and the
+ * nearest UNDERWATER lamps scattered toward the eye (6-sample integrals, the dual-lobe phase brPhaseW).
+ */
+export function waterVolumeGlsl(): string {
+  return /* glsl */ `
+#ifdef BR_WATER_REFRACT
+// view-space point -> pyramid uv (the pyramid spans the whole view at any scale)
+vec2 brWProj( vec3 X ) { vec4 c = projectionMatrix * vec4( X, 1.0 ); return c.xy / c.w * 0.5 + 0.5; }
+// linear view depth of the opaque scene at uv: the nearest level-0 texel (never filtered)
+float brWSceneZ( vec2 uv ) {
+	ivec2 s = textureSize( uSceneColor, 0 );
+	return texelFetch( uSceneColor, clamp( ivec2( uv * vec2( s ) ), ivec2( 0 ), s - 1 ), 0 ).a;
+}
+// view-space point at pyramid uv and linear depth z (perspective)
+vec3 brWViewPos( vec2 uv, float z ) {
+	vec2 n = uv * 2.0 - 1.0;
+	return vec3( ( n + vec2( projectionMatrix[ 2 ][ 0 ], projectionMatrix[ 2 ][ 1 ] ) ) * z / vec2( projectionMatrix[ 0 ][ 0 ], projectionMatrix[ 1 ][ 1 ] ), - z );
+}
+bool brWOnScreen( vec2 uv ) { return all( greaterThanEqual( uv, vec2( 0.0 ) ) ) && all( lessThanEqual( uv, vec2( 1.0 ) ) ); }
+
+// The refracted view ray from P (view space, on the surface) along Tv (unit); Lf = the path to the rect's flat floor
+// (D / cos theta_t; rects are single-depth), upV = world up in view space. Returns the path length L in the water to
+// what the ray reaches and its pyramid uv (uvH); hit = 0 when the ray left the screen or passed behind something
+// above the water (the deck lip, a lounger: no data behind it; the floor under a near rim is only visible through
+// the refraction), then uvH morphs toward the straight-through view and L is the flat-floor path.
+float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, out vec2 uvH, out float hit ) {
+	// fast path: the flat floor, unless something in front of it covers that point
+	vec3 Xf = P + Tv * Lf;
+	vec2 uvf = brWProj( Xf );
+	if ( brWOnScreen( uvf ) && abs( brWSceneZ( uvf ) + Xf.z ) < 0.01 - 0.012 * Xf.z ) { uvH = uvf; hit = 1.0; return Lf; }
+	// linear march (1.2 Lf: floors lower than the rect's own under steps and ladders), 2 bisections, then the secant
+	float tA = 0.0, dA = 1.0, tB = - 1.0, dB = 0.0, tH = - 1.0;
+	uvH = brWProj( P );
+	hit = 0.0;
+	for ( int i = 1; i <= BR_WATER_REFRACT; i ++ ) {
+		float t = 1.2 * Lf * float( i ) / float( BR_WATER_REFRACT );
+		vec3 X = P + Tv * t;
+		vec2 uv = brWProj( X );
+		if ( ! brWOnScreen( uv ) ) { tH = t; break; }
+		float zs = brWSceneZ( uv );
+		float d = zs + X.z; // > 0: the ray is still in front of the scene
+		if ( d <= 0.0 ) {
+			// hidden behind something above the water?
+			if ( dot( brWViewPos( uv, zs ) - P, upV ) > 0.01 ) { tH = t; break; }
+			tB = t;
+			dB = d;
+			break;
+		}
+		tA = t;
+		dA = d;
+		uvH = uv;
+	}
+	if ( tB < 0.0 ) {
+		// hidden (or off screen) after a fraction f of the path (2 bisections find where): morph from the
+		// straight-through view (f = 0, next to the rim) to the last visible sample (f -> 1): continuous with the
+		// refracted neighbours, no smear toward one boundary line
+		if ( tH > 0.0 ) {
+			for ( int k = 0; k < 2; k ++ ) {
+				float tm = 0.5 * ( tA + tH );
+				vec3 X = P + Tv * tm;
+				vec2 uv = brWProj( X );
+				float zs = brWSceneZ( uv );
+				if ( brWOnScreen( uv ) && zs + X.z > 0.0 ) { tA = tm; uvH = uv; } else tH = tm;
+			}
+		}
+		float f = clamp( tA / Lf, 0.0, 1.0 );
+		uvH = mix( brWProj( P ), uvH, f );
+		return Lf;
+	}
+	for ( int k = 0; k < 2; k ++ ) {
+		float tm = 0.5 * ( tA + tB );
+		vec3 X = P + Tv * tm;
+		float d = brWSceneZ( brWProj( X ) ) + X.z;
+		if ( d <= 0.0 ) { tB = tm; dB = d; } else { tA = tm; dA = d; }
+	}
+	float t = tA + ( tB - tA ) * dA / max( dA - dB, 1e-5 );
+	uvH = brWProj( P + Tv * t );
+	hit = 1.0;
+	return t;
+}
+
+// Radiance leaving the water body toward the surface (before the interface): the scene at uvH through the medium of
+// the kind over the refracted path L (cosT = its cosine to the vertical), lit ambiently by irr (lux). st = the
+// extinction (for the in-water light integrals).
+vec3 brWVolume( vec2 uvH, float L, float cosT, int kind, vec3 irr, out vec3 st ) {
+	vec3 sa = BR_WM_SA[ kind ];
+	float ss = BR_WM_SS[ kind ];
+	st = sa + ss;
+	vec3 kap = sa + ( 1.0 - BR_WM_G[ kind ] ) * ss; // transport: what forward scattering keeps in the beam
+	vec3 Tu = exp( - st * L ); // unscattered: sharp
+	vec3 Tf = max( exp( - kap * L ) - Tu, vec3( 0.0 ) ); // scattered forward: arrives blurred
+	vec4 cs = textureLod( uSceneColor, uvH, 0.0 );
+	vec3 Cb = cs.rgb;
+	float blur = BR_WM_BLUR[ kind ];
+	if ( blur > 0.0 ) {
+		// the forward-scattered spread (a random walk: blur sqrt(ss L) L metres) seen at the hit's depth, in pyramid
+		// texels -> the mip
+		float r = blur * sqrt( ss * L ) * L;
+		float px = r / max( cs.a, 0.05 ) * 0.5 * projectionMatrix[ 1 ][ 1 ] / uSceneInvSize.y;
+		vec4 cb = textureLod( uSceneColor, uvH, clamp( log2( max( px, 1.0 ) ), 0.0, 6.0 ) );
+		// the mips average across silhouettes (the deck beside the water): fall back where their depth disagrees
+		Cb = mix( cs.rgb, cb.rgb, 1.0 - smoothstep( 0.1, 0.35, abs( cb.a - cs.a ) / max( cs.a, 0.05 ) ) );
+	}
+	// ambient light scattered into the path: source ss PHI E / pi, attenuated on the way down to the depth s cos(theta_t)
+	// (1.25 kappa per metre of depth: diffuse downwelling) and on the way back up to the surface; closed form
+	vec3 k = st + 1.25 * kap * cosT;
+	vec3 Lin = ss * BR_WM_PHI[ kind ] * BR_WM_TINT[ kind ] * irr / BR_PI * ( 1.0 - exp( - k * L ) ) / k;
+	return cs.rgb * Tu + Cb * Tf + Lin;
+}
+
+// Contact from the pyramid depth at the own pixel (uv0): the straight view ray (V toward the eye) meets something
+// standing in the water (a wall, a pillar, a chair leg) much sooner than the floor, D / cos below the surface: its
+// horizontal distance (m) from the fragment, and nAway = the view-space horizontal direction from it to the fragment.
+float brWContact( vec3 P, vec3 V, float D, vec3 upV, vec2 uv0, out vec3 nAway ) {
+	vec3 S0 = brWViewPos( uv0, brWSceneZ( uv0 ) );
+	vec3 dv = S0 - P;
+	float tau = max( dot( dv, - V ), 0.0 );
+	nAway = vec3( 0.0 );
+	if ( tau > 0.5 * D / max( dot( V, upV ), 0.05 ) ) return 1e3;
+	float h0 = max( - dot( dv, upV ), 0.0 );
+	vec3 hz = - dv + upV * dot( dv, upV ); // horizontal, from the contact to the fragment
+	nAway = hz / max( length( hz ), 1e-5 );
+	return sqrt( max( tau * tau - h0 * h0, 0.0 ) );
+}
+
+#ifdef BR_WATER_VOLLIGHT
+#if NUM_SPOT_LIGHTS > 0
+#define brBeamSoft brBeamSoftW
+${beamSoftGlsl()}
+#undef brBeamSoft
+// The flashlight beam scattered toward the eye inside the water (silty water glows where the beam enters): 6 samples
+// on the refracted view segment [0, L] below P. The beam reaches a sample X at depth s cos(theta_t) along its own
+// refracted path (transport-attenuated), its intensity is the smooth beam profile (flashlightOptics.ts) x three's
+// cone and range window, and the scattered light returns to the surface through the medium. vis = the beam's shadow
+// at the surface point (stops it leaking through walls).
+vec3 brWaterTorch( vec3 P, vec3 Tv, float L, float cosT, vec3 upV, vec3 st, int kind, float vis ) {
+	SpotLight sl = spotLights[ 0 ];
+	if ( dot( sl.color, sl.color ) <= 0.0 || vis <= 0.0 ) return vec3( 0.0 );
+	vec3 kap = BR_WM_SA[ kind ] + ( 1.0 - BR_WM_G[ kind ] ) * BR_WM_SS[ kind ];
+	vec3 acc = vec3( 0.0 );
+	for ( int j = 0; j < 6; j ++ ) {
+		float s = ( float( j ) + 0.5 ) / 6.0 * L;
+		vec3 X = P + Tv * s;
+		vec3 Ld = sl.position - X;
+		float r = length( Ld );
+		vec3 l = Ld / max( r, 1e-4 );
+		float ca = dot( l, sl.direction );
+		float I = brBeamSoftW( ca ) * getSpotAttenuation( sl.coneCos, sl.penumbraCos, ca ) * getDistanceAttenuation( r, sl.distance, sl.decay );
+		float ly = dot( l, upV );
+		float cb = sqrt( max( 1.0 - ( 1.0 - ly * ly ) * 0.5625, 0.0 ) ); // the refracted beam's cosine to the vertical
+		acc += I * brPhaseW( dot( l, Tv ), kind ) * exp( - kap * ( s * cosT / max( cb, 0.3 ) ) - st * s );
+	}
+	return sl.color * ( BR_WM_SS[ kind ] * vis * L / 6.0 ) * acc;
+}
+#endif
+// The nearest UNDERWATER lamps (water/underwaterLights.ts: camera-relative position, facing, colour x cd) scattered
+// toward the eye along [0, L]: Lambertian lamps; the substitution s = tc + h tan(th) makes the inverse-square
+// integrand smooth (as brAirlight), 6 samples per lamp; lamps farther than 2.5 m from the segment are skipped (their
+// glow there is under ~1 % of the lit pool floor).
+vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
+	vec3 acc = vec3( 0.0 );
+	mat3 R = mat3( viewMatrix );
+	for ( int i = 0; i < BR_WATER_VOLLIGHT; i ++ ) {
+		if ( i >= uNUw ) break;
+		vec3 Q = R * uUwPos[ i ].xyz;
+		vec3 n = R * uUwDir[ i ].xyz;
+		float tc = dot( Q - P, Tv );
+		float h = max( length( Q - P - Tv * tc ), uUwDir[ i ].w );
+		if ( h > 2.5 ) continue;
+		float a0 = atan( - tc / h ), a1 = atan( ( L - tc ) / h );
+		vec3 sum = vec3( 0.0 );
+		for ( int j = 0; j < 6; j ++ ) {
+			float th = mix( a0, a1, ( float( j ) + 0.5 ) / 6.0 );
+			float s = tc + h * tan( th );
+			vec3 w = P + Tv * s - Q;
+			float r = length( w );
+			vec3 wn = w / max( r, 1e-4 );
+			sum += max( dot( n, wn ), 0.0 ) * brPhaseW( dot( wn, - Tv ), kind ) * exp( - st * ( r + s ) );
+		}
+		acc += uUwCol[ i ].rgb * sum * ( ( a1 - a0 ) / ( 6.0 * h ) );
+	}
+	return BR_WM_SS[ kind ] * acc;
+}
+#endif
 #endif
 `;
 }
@@ -368,8 +620,9 @@ export const WATER_SPOT_GLSL = /* glsl */ `
 #if NUM_SPOT_LIGHTS > 0
 // the flashlight on a submerged fragment (sub = brSubInfo): the beam's in-water path attenuates it (transport
 // coefficient, refracted path; chunks/haze.ts later applies the downwelling factor of the baked light to all lit
-// radiance, so it is divided out here) and the wavy surface focuses a point source into a sharp, fine caustic net
-// (width 0.08, half-size cells, no source-size blur); turbid flood water scatters the net away, films have none
+// radiance, so it is divided out here) and the wavy surface focuses the small source into a sharp, fine caustic net
+// (width 0.08, half-size cells), mean-preserving with a floor between the filaments (BR_CAUSTIC_SPOT_CONTRAST: the
+// reflector's size and the beam's spread fill the cells); turbid flood water scatters the net away, films have none
 void brSpotInfoW( const in SpotLight spotLight, const in vec3 geometryPosition, out IncidentLight light, const in vec4 sub ) {
 	getSpotLightInfo( spotLight, geometryPosition, light );
 #ifdef BR_CAUSTICS_FULL
@@ -380,13 +633,13 @@ void brSpotInfoW( const in SpotLight spotLight, const in vec3 geometryPosition, 
 	float ct = max( sqrt( max( 1.0 - st2, 0.0 ) ), 0.2 );
 	vec3 kap = BR_WM_SA[ k ] + ( 1.0 - BR_WM_G[ k ] ) * BR_WM_SS[ k ];
 	light.color *= exp( - kap * ( sub.x * ( 1.0 / ct - BR_WM_DOWN ) ) );
-	float ks = k == 0 ? 1.0 : k == 1 ? 0.3 * exp( - BR_WM_SS[ 1 ] * sub.x ) : 0.0;
+	float ks = k == 0 ? 1.0 : k == 1 ? 0.1 * exp( - BR_WM_SS[ 1 ] * sub.x ) : 0.0;
 	if ( ks > 0.0 ) {
 		vec2 hd = lw.xz / max( length( lw.xz ), 1e-4 );
 		vec2 xe = vBrLocal.xz + uNoiseOrigin.xz + hd * ( sqrt( st2 ) / ct ) * sub.x; // where the beam entered
 		float wd = 0.15 * sub.x;
 		float c = brCausticsW( xe, uTime, wd, 0.5, 0.08 );
-		light.color *= max( 1.0 + BR_CAUSTIC_SPOT_GAIN * ks * ( c - brCausticMeanW( 0.08 + wd ) ), 0.0 );
+		light.color *= 1.0 + BR_CAUSTIC_SPOT_CONTRAST * ks * ( c / brCausticMeanW( 0.08 + wd ) - 1.0 );
 	}
 #endif
 }

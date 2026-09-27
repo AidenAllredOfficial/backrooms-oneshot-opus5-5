@@ -191,4 +191,29 @@ describe('nearest water plane', () => {
     expect(simulatedPlane(0, 0, -0.1)).toBe(-0.1);
     expect(simulatedPlane(0, 0, null)).toBeNull();
   });
+
+  it('a film-covered deck beside a pool: the pool takes the mirror and the ripple window, not the film underfoot', () => {
+    const l = poolLayout();
+    // 2 cm of film over the dry deck row z 0..2 cells (the DEEP_END deck)
+    l.water.push({ x0: 0, z0: 0, x1: 10 * CELL, z1: 2 * CELL, y: 0.02, floorY: 0, kind: 2 });
+    const w = worldOf(l);
+    // standing on the film at (0.6, 0.6) looking along +x: the film is nearest
+    const near = nearestWaterPlane(w, 0.6, 1.62, 0.6, 1, 0, 40);
+    expect(near!.kind).toBe(2);
+    // with the film ranked 8 m farther (app loop) the pool wins; the ripple window's penalty always prefers it
+    const mirror = nearestWaterPlane(w, 0.6, 1.62, 0.6, 1, 0, 40, 8);
+    expect(mirror!.kind).toBe(0);
+    expect(mirror!.y).toBeCloseTo(-0.1, 9);
+    expect(nearestWaterPlane(w, 0.6, 1.62, 0.6, 1, 0, RIPPLE.NEAR_M + 2, RIPPLE.FILM_PENALTY)!.kind).toBe(0);
+    // film only (no pool in range): the film is still found
+    const filmOnly = poolLayout();
+    filmOnly.water.length = 0;
+    filmOnly.water.push({ x0: 0, z0: 0, x1: 10 * CELL, z1: 2 * CELL, y: 0.02, floorY: 0, kind: 2 });
+    expect(nearestWaterPlane(worldOf(filmOnly), 0.6, 1.62, 0.6, 1, 0, 40, 8)!.kind).toBe(2);
+    // the player stands in the film (2 cm): the scanned pool is simulated; in the pool's own water: that plane
+    expect(simulatedPlane(0, 0.02, -0.1, 0)).toBe(-0.1);
+    expect(simulatedPlane(0, 0.02, 0.02, 2)).toBe(0.02);
+    expect(simulatedPlane(-1.5, 1.4, -0.1, 0)).toBe(-0.1);
+    expect(simulatedPlane(0, 0.02, null)).toBe(0.02);
+  });
 });

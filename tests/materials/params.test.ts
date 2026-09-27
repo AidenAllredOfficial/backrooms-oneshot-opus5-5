@@ -147,8 +147,8 @@ describe('WP9 parameters', () => {
   });
 
   it('world-noise lattices are periodic over NOISE_WRAP (xz) and STOREY_PITCH (y)', () => {
-    for (const c of [TUNE.MACRO_CELL, TUNE.MACRO_CELL * 2, TUNE.GRIME_SCALE_A, TUNE.GRIME_SCALE_B, TUNE.FEATURE_CELL, TUNE.WATER_NORMAL_A,
-      TUNE.WATER_NORMAL_B, 0.6, 0.3 /* caustic cells */, 0.6 * 4, 0.3 * 4 /* caustic warp period */]) {
+    for (const c of [TUNE.MACRO_CELL, TUNE.MACRO_CELL * 2, TUNE.GRIME_SCALE_A, TUNE.GRIME_SCALE_B, TUNE.FEATURE_CELL,
+      0.6, 0.3 /* caustic cells */, 0.6 * 4, 0.3 * 4 /* caustic warp period */]) {
       expect(divides(c, NOISE_WRAP), `${c} | NOISE_WRAP`).toBe(true);
     }
     for (const c of [TUNE.MACRO_CELL_Y, TUNE.GRIME_SCALE_Y_A, TUNE.GRIME_SCALE_Y_B, TUNE.FEATURE_CELL_Y]) {
@@ -250,7 +250,7 @@ describe('WP9 parameters', () => {
     const switches = new Set(['BR_SHELL', 'BR_PROPS', 'BR_DECAL', 'BR_LV', 'BR_FLOOR_REFL', 'BR_AIRLIGHT', 'BR_WATER', 'BR_LITE',
       'BR_SSR', 'BR_PROBE', 'BR_SSAO', 'BR_CS_STEPS', 'BR_PUDDLES', 'BR_DETAIL_MAPS', 'BR_POM', 'BR_SPEC_AA', 'BR_WATER_VOL',
       'BR_WATER_WETBAND', 'BR_CAUSTICS_FULL', 'BR_VOLUMETRIC', 'BR_BOUNCE_N', 'BR_WATER_WAVES', 'BR_WATER_RIPPLE',
-      'BR_WATER_DEBRIS']);
+      'BR_WATER_DEBRIS', 'BR_WATER_REFRACT', 'BR_WATER_VOLLIGHT']);
     for (const src of [buildSurfaceFragment(ShaderLib.physical.fragmentShader), waterFragmentGlsl()]) {
       const used = new Set(src.match(/\bBR_[A-Z0-9_]+\b/g) ?? []);
       const defined = new Set([...(src.match(/#define (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.slice(8)),

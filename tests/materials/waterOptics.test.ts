@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { NOISE_WRAP } from '../../src/core/constants.ts';
 import { HELPERS_GLSL } from '../../src/materials/chunks/common.ts';
 import { FRAG_LIGHTS_GLSL } from '../../src/materials/chunks/lighting.ts';
-import { WATER_CAUSTICS, WATER_MEDIA, waterMediaGlsl } from '../../src/materials/chunks/params.ts';
+import { downwellPhi, f, fresnelWater, phaseHG, phaseWater, WATER_CAUSTICS, WATER_MEDIA, WATER_PHI, waterMediaGlsl } from '../../src/materials/chunks/params.ts';
 import { WATER_SURF_GLSL, WATER_SURFACE, waveAmplitudes, waveLattice, waveOmega, waterWavesGlsl } from '../../src/materials/chunks/water.ts';
 
 // ---------------------------------------------------------------- caustic twin (chunks/common.ts brCausticsW)
@@ -208,7 +208,94 @@ describe('in-water optics', () => {
     expect(WATER_MEDIA.SA[0][0]).toBeGreaterThan(WATER_MEDIA.SA[0][2]);
     expect(WATER_MEDIA.SA[1][2]).toBeGreaterThan(WATER_MEDIA.SA[1][0]);
     expect(g).toContain('const vec3 BR_WM_SA[3] = vec3[3](vec3(0.35, 0.065, 0.03)');
-    expect(g).toMatch(/const float BR_WM_SS\[3\] = float\[3\]\(0\.04, /);
+    expect(g).toContain(`const float BR_WM_SS[3] = float[3](${WATER_MEDIA.SS.map(f).join(', ')});`);
     expect(g).toMatch(/#define BR_WM_DOWN /);
+    for (let k = 0; k < 3; k++) {
+      expect(WATER_MEDIA.BACK[k]).toBeGreaterThanOrEqual(0);
+      expect(WATER_MEDIA.BACK[k]).toBeLessThan(0.5);
+    }
+  });
+
+  it('exact dielectric Fresnel: F(1) = 0.0204, rising monotonically to 1 at grazing; the GLSL twin uses the same IOR', () => {
+    expect(fresnelWater(1)).toBeCloseTo(0.0204, 4);
+    expect(fresnelWater(0)).toBeCloseTo(1, 9);
+    let last = fresnelWater(1);
+    for (let c = 0.99; c >= 0; c -= 0.01) {
+      const F = fresnelWater(c);
+      expect(F).toBeGreaterThanOrEqual(last - 1e-12);
+      last = F;
+    }
+    // Schlick with F0 0.02 (the old approximation) is within 0.06 everywhere (worst near 80 deg: exact is higher)
+    for (let c = 0; c <= 1; c += 0.05) expect(Math.abs(fresnelWater(c) - (0.02 + 0.98 * Math.pow(1 - c, 5)))).toBeLessThan(0.06);
+    const g = waterMediaGlsl();
+    expect(g).toContain('float brFresnelW( float ci )');
+    expect(g).toContain(`( c - ${WATER_MEDIA.IOR} * ct )`);
+  });
+
+  it('the dual-lobe phase integrates to 1 over the sphere; flood silt backscatters little (dark water, not milk)', () => {
+    for (let k = 0; k < 3; k++) {
+      let all = 0, back = 0;
+      const n = 40000;
+      for (let i = 0; i < n; i++) {
+        const mu = -1 + ((i + 0.5) / n) * 2;
+        const p = phaseWater(mu, k) * 2 * Math.PI * (2 / n);
+        all += p;
+        if (mu < 0) back += p;
+      }
+      expect(all).toBeCloseTo(1, 3);
+      expect(back).toBeLessThan(0.1);
+    }
+    expect(phaseHG(1, 0.9)).toBeGreaterThan(phaseHG(-1, 0.9) * 100);
+    expect(waterMediaGlsl()).toContain('float brPhaseW( float mu, int kind )');
+  });
+
+  it('PHI (downwelling backscatter share) matches an independent sphere integral and barely varies with the view', () => {
+    // independent: sum the phase over a fine latitude-longitude grid of the whole sphere of propagation directions,
+    // keeping those inside Snell's window (going down within asin(1 / n) of the nadir), with n^2 (1 - F) radiance
+    const n = WATER_MEDIA.IOR;
+    const brute = (kind: number, cosV: number): number => {
+      const sv = Math.sqrt(1 - cosV * cosV);
+      const N = 600, M = 300;
+      let acc = 0;
+      for (let i = 0; i < N; i++) {
+        const th = ((i + 0.5) / N) * Math.PI; // polar angle from the nadir
+        if (th > Math.asin(1 / n)) break;
+        const st = Math.sin(th), ct = Math.cos(th);
+        const tr = 1 - fresnelWater(Math.sqrt(Math.max(1 - n * n * st * st, 0)));
+        for (let j = 0; j < M; j++) {
+          const ph = ((j + 0.5) / M) * 2 * Math.PI;
+          acc += phaseWater(st * Math.cos(ph) * sv - ct * cosV, kind) * tr * st * (Math.PI / N) * ((2 * Math.PI) / M);
+        }
+      }
+      return n * n * acc;
+    };
+    for (let k = 0; k < 3; k++) {
+      expect(Math.abs(WATER_PHI[k] - brute(k, Math.cos((25 * Math.PI) / 180))) / WATER_PHI[k]).toBeLessThan(0.02);
+      const lo = downwellPhi(k, 0.66), hi = downwellPhi(k, 1);
+      expect(Math.abs(hi - lo) / WATER_PHI[k]).toBeLessThan(0.25);
+      // the old in-scatter used an effective share of ~1 (x the tint): milky flood water
+      expect(WATER_PHI[k]).toBeLessThan(0.1);
+    }
+    expect(waterMediaGlsl()).toMatch(/const float BR_WM_PHI\[3\] = float\[3\]\(/);
+  });
+
+  it('refracting water: unscattered + forward-scattered = the transport transmittance; closed-form in-scatter', () => {
+    for (let k = 0; k < 3; k++) {
+      const ss = WATER_MEDIA.SS[k], g = WATER_MEDIA.G[k];
+      for (let c = 0; c < 3; c++) {
+        const sa = WATER_MEDIA.SA[k][c], st = sa + ss, kap = sa + (1 - g) * ss;
+        for (const L of [0.02, 0.3, 2.5]) {
+          const Tu = Math.exp(-st * L), Tf = Math.max(Math.exp(-kap * L) - Tu, 0);
+          expect(Tu + Tf).toBeCloseTo(Math.exp(-kap * L), 12);
+          // brWVolume: source ss PHI E / pi at depth s cosT (downwelling 1.25 kappa per metre), back up with st
+          const cosT = 0.8, K = st + 1.25 * kap * cosT;
+          const closed = (ss * WATER_PHI[k] * (1 - Math.exp(-K * L))) / K;
+          let num = 0;
+          const n = 20000;
+          for (let i = 0; i < n; i++) { const s = ((i + 0.5) / n) * L; num += ss * WATER_PHI[k] * Math.exp(-1.25 * kap * s * cosT) * Math.exp(-st * s) * (L / n); }
+          expect(Math.abs(closed - num) / num).toBeLessThan(1e-3);
+        }
+      }
+    }
   });
 });

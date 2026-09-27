@@ -64,7 +64,7 @@ const keyFor = (name: keyof typeof QUALITY): string => expectedKey(qualityDefine
 /** Every define on (numbers at their largest planned values). */
 const ALL_ON: QualityDefines = {
   floorRefl: true, airlight: true, lite: false, ssr: true, probe: true, ssao: true, cs: 8, puddles: true, detail: true, pom: 2,
-  sheen: true, coat: true, specAA: true, waterRefract: true, waterWaves: 8, waterRipple: true, waterDebris: true,
+  sheen: true, coat: true, specAA: true, waterRefract: 10, waterWaves: 8, waterRipple: true, waterDebris: true,
   causticsFull: true, waterVolLight: 4, volumetric: true, bounce: 8,
 };
 
@@ -203,7 +203,7 @@ describe('WP9 material factory', () => {
     expect(a.vertexShader).toBe(b.vertexShader);
   });
 
-  it('variant render state: FrontSide, opaque shell/props, premultiplied decal, blended water; no three maps', () => {
+  it('variant render state: FrontSide, opaque shell/props, premultiplied decal, opaque refracting water; no three maps', () => {
     sys = createMaterialSystem(fakeRenderer, fakeTextures(), QUALITY.high);
     const t = sys.createTileMaterials(true);
     for (const m of surfaces(t)) {
@@ -232,13 +232,21 @@ describe('WP9 material factory', () => {
     expect(d.polygonOffset).toBe(true);
     expect(d.polygonOffsetFactor).toBe(-1);
     expect(d.polygonOffsetUnits).toBe(-4);
+    // package E: high refracts (split frames): the water is opaque and writes depth; the premultiplied blend stays for
+    // the legacy path of tiles fading in
     const w = t.water as THREE.ShaderMaterial;
-    expect(w.transparent).toBe(true);
-    expect(w.depthWrite).toBe(false);
+    expect(w.transparent).toBe(false);
+    expect(w.depthWrite).toBe(true);
+    expect(w.defines).toMatchObject({ BR_WATER_REFRACT: '8', BR_WATER_VOLLIGHT: '2' });
     expect(w.blending).toBe(THREE.CustomBlending);
     expect(w.blendSrc).toBe(THREE.OneFactor);
     expect(w.blendDst).toBe(THREE.OneMinusSrcAlphaFactor);
     expect(w.lights).toBe(true);
+    // medium: the premultiplied water blended over the submerged surfaces (they absorb in their own shader)
+    sys.setQuality(QUALITY.medium);
+    expect(w.transparent).toBe(true);
+    expect(w.depthWrite).toBe(false);
+    expect(w.defines).not.toHaveProperty('BR_WATER_REFRACT');
   });
 
   it('quality defines follow the preset and change only in setQuality', () => {
@@ -322,7 +330,13 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
       if (d.waterWaves > 0) wd.BR_WATER_WAVES = String(d.waterWaves);
       if (d.waterRipple) wd.BR_WATER_RIPPLE = '';
       if (d.waterDebris) wd.BR_WATER_DEBRIS = '';
+      if (d.waterRefract > 0) {
+        wd.BR_WATER_REFRACT = String(d.waterRefract);
+        if (d.waterVolLight > 0) wd.BR_WATER_VOLLIGHT = String(d.waterVolLight);
+      }
+      if (d.probe) wd.BR_PROBE = '';
       expect((t.water as THREE.ShaderMaterial).defines, name).toEqual(wd);
+      expect((t.water as THREE.ShaderMaterial).depthWrite, name).toBe(d.waterRefract > 0);
       expect((t.water as THREE.ShaderMaterial).uniforms.uBrRippleLerp, name).toBe(RIPPLE_LERP);
       expect(definesKey(d)).toBe(expectedKey(d));
     }
@@ -375,11 +389,13 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
     const v0 = t.shell.version;
     sys.setQuality({ ...QUALITY.high });
     expect(t.shell.version).toBe(v0);
-    // floorRefl and airlight unchanged: the old early return skipped this
-    const q: QualityConfig = { ...QUALITY.high, detailMaps: true, flashlightBounce: 4 };
+    // floorRefl and airlight unchanged: the old early return skipped this (high already has the detail maps and 4
+    // bounce VPLs since the wave-1 flips: change them the other way)
+    const q: QualityConfig = { ...QUALITY.high, detailMaps: false, flashlightBounce: 8 };
     sys.setQuality(q);
     expect(t.shell.version).toBeGreaterThan(v0);
-    expect(t.shell.defines).toMatchObject({ BR_DETAIL_MAPS: '', BR_BOUNCE_N: '4' });
+    expect(t.shell.defines).toMatchObject({ BR_BOUNCE_N: '8' });
+    expect(t.shell.defines).not.toHaveProperty('BR_DETAIL_MAPS');
     expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|${expectedKey(qualityDefinesOf(q))}`);
     expect(keyOf(t.water!)).toBe(`br-water-v2|${expectedKey(qualityDefinesOf(q))}`);
   });

@@ -9,6 +9,7 @@
 // frozen (time=), so captures stay deterministic (__backrooms.water.poke / step drive it there). Drips outside the
 // window become analytic rings in the water shader (uDrips). Only the water shader samples the result (uRipple:
 // the surface programs have no free sampler). The water shader interpolates the last two steps (RIPPLE_LERP).
+// It also drives the in-water lamp picker (underwaterLights.ts) on the same frame and world.
 
 import * as THREE from 'three';
 import { CELL } from '../../core/constants.ts';
@@ -22,10 +23,13 @@ import {
   rippleWindow, simulatedPlane, swayDue, wakeImpulses,
   type DripSource, type Impulse, type RippleWindow, type RippleWorld,
 } from './rippleSources.ts';
+import { createUnderwaterLights } from './underwaterLights.ts';
 
 export interface WaterRippleStats {
   enabled: boolean; on: boolean; plane: number | null; kind: number; res: number; texel: number; span: number;
   origin: [number, number]; steps: number; impulses: number; drips: number; dripsSim: number; maskCells: number; maskBuilds: number;
+  /** in-water lamps picked for the water shader (underwaterLights.ts) */
+  lamps: number;
 }
 
 export interface WaterRipples {
@@ -158,6 +162,7 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
   const pending: Impulse[] = []; // one-shot height impulses (world)
   const pendingFoam: Impulse[] = [];
   const stepImp: Impulse[] = [];
+  const uw = createUnderwaterLights(globals);
   const drips: DripSource[] = [];
   let dripsSim = 0;
   let eyeX = 0, eyeZ = 0, yaw = 0;
@@ -195,6 +200,8 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
   }
 
   function applyQuality(nq: QualityConfig): void {
+    // in-water lamps: integrated only by the refracting water of split frames
+    uw.setMax(nq.colorPyramidScale > 0 && nq.waterRefractionSteps > 0 ? nq.waterVolumetrics : 0);
     const nr = Math.max(0, Math.floor(nq.waterRippleRes)), nt = nq.waterRippleTexel;
     if (nr === res && nt === texel) return;
     disposeTargets();
@@ -297,6 +304,7 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
       renderer = r;
       frame++;
       eyeX = st.eyeX; eyeZ = st.eyeZ; yaw = st.yaw;
+      uw.update(world, st.eyeX, st.eyeY, st.eyeZ, st.camYaw);
       if (res <= 0) return;
       // the simulation clock jumped (time= / setTime at the ready gate, a new seed): restart from still water, so
       // frozen-time captures never depend on how many steps ran while booting
@@ -307,10 +315,10 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
       // the simulated plane: the water the player stands in, else the nearest one within NEAR_M of the eye
       if (--scanWait <= 0) {
         scanWait = RIPPLE.SCAN_FRAMES;
-        const wp = nearestWaterPlane(world, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), RIPPLE.NEAR_M + 2);
+        const wp = nearestWaterPlane(world, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), RIPPLE.NEAR_M + 2, RIPPLE.FILM_PENALTY);
         scanPlane = wp ? { y: wp.y, kind: wp.kind } : null;
       }
-      const np = simulatedPlane(st.y, st.waterDepth, scanPlane ? scanPlane.y : null);
+      const np = simulatedPlane(st.y, st.waterDepth, scanPlane ? scanPlane.y : null, scanPlane ? scanPlane.kind : 2);
       const nk = scanPlane && np !== null && Math.abs(scanPlane.y - np) < 0.03 ? scanPlane.kind : kind;
       const oi = win.i0, oj = win.j0;
       rippleWindow(res, texel, st.eyeX, st.eyeZ, win);
@@ -387,7 +395,7 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
       return {
         enabled: res > 0, on: active && targets !== null, plane, kind, res, texel, span: win.span,
         origin: [Math.round(win.originX * 1000) / 1000, Math.round(win.originZ * 1000) / 1000], steps,
-        impulses: pending.length, drips: globals.nDrips.value, dripsSim, maskCells, maskBuilds,
+        impulses: pending.length, drips: globals.nDrips.value, dripsSim, maskCells, maskBuilds, lamps: globals.nUw.value,
       };
     },
     setQuality(nq) { applyQuality(nq); },
@@ -403,6 +411,7 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
       scanWait = 0;
       maskCi = maskCj = maskPlane = NaN;
       globals.nDrips.value = 0;
+      uw.reset();
       clearTargets();
       publish();
     },
@@ -410,6 +419,7 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
       offFoot();
       offTeleport();
       disposeTargets();
+      uw.reset();
       mask.dispose();
       material.dispose();
       geo.dispose();
