@@ -94,6 +94,7 @@ and `high` for everything else.
 |---|---|---|---|---|
 | Streaming radius (chunks of 38.4 m) | 1 | 2 | 2 | 3 |
 | Lightmap texels per 1.2 m cell | 8 | 8 | 12 | 12 |
+| Near-field bake rays around props | off | off | 16 | 32 |
 | Texture size | 512 | 1024 | 1024 | 1024 |
 | Ambient occlusion (half resolution, samples per texel) | off | 10 | 12 | 16 |
 | Anti-aliasing | off | SMAA | SMAA | SMAA |
@@ -177,8 +178,11 @@ and shaders are not built twice. Under XWayland the loss does not happen, and `n
   ends.
 - **Content.** 38 landmark kinds (for example SKYLIGHT_HALL, LOCKER_ROOM, CHAIR_CATHEDRAL, FLOODED_HALL, RED_ROOM),
   13 small vignettes (a chair facing a wall, a ringing phone, an open car), anomalies, and props.
-- **Lighting.** A worker pool bakes the lighting per tile: direct light from every fixture, indirect light via probes,
-  and ambient occlusion. A fast preview bake appears first and the full bake replaces it. The flashlight is the only
+- **Lighting.** A worker pool bakes the lighting per tile: direct light from every fixture, indirect light via probes
+  (coloured multi-bounce), ambient occlusion and, on high and ultra, a ray-traced near-field gather that darkens the
+  floor under desks, cars and racks and lights the props from their own sub-patches. Furniture, cars (on their
+  wheels) and warehouse racks (uprights and decks) are baked as part boxes. A fast preview bake appears first and the
+  full bake replaces it. The flashlight is the only
   runtime light. Flickering fixtures are driven by shader uniforms on top of the baked result.
 - **Audio.** All sound is synthesized: fluorescent hum, footsteps by surface, room reverb, and sounds that bend
   around doorways.
@@ -365,7 +369,8 @@ node tools/workerbench.ts 7 42                                                # 
 ```
 
 `tools/map.ts` also accepts `--force ZONE`, `--mood MOOD`, `--landmark NAME` and `--scene NAME`. `tools/bakebench.ts`
-bakes a 3 x 3 chunk neighbourhood of each listed zone. It reports per-tile preview and full bake times, and the
+bakes a 3 x 3 chunk neighbourhood of each listed zone. It reports per-tile preview and full bake times (with the
+near-field texels and milliseconds and the light-volume milliseconds), and the
 time-to-ready on worker threads (`--workers N`, `--no-ttr`, `--json out.json`). It exits with code 1 when a timing
 gate fails.
 

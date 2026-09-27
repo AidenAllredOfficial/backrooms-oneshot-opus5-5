@@ -7,6 +7,8 @@
 //   - occluder box faces (solids and PROP_OCCLUDERS parts) within 0.6 m;
 // plus contact AO under every COLLIDE prop footprint: strength 0.5 at (and under) the footprint edge, falling off
 // smoothly to 0 at 0.3 m beyond it. AO multiplies the indirect term only and is stored in irr.a.
+// Full bakes with the near-field gather (nearfield.ts, bakeNearRays > 0) leave out the prop part boxes and the
+// contact AO of footprints whose prop has part boxes (`skipProps`): the traced rays see those boxes exactly.
 // The light volume uses a spherical variant (no hemisphere test, strength 0.35).
 // Side results: `aoOut.wall` (product over walls only, for the grime mask) and `aoOut.wallDist` (m).
 // Wall faces are accumulated per wall LINE (axis + line index; a receiver sees one side of a line): the edge
@@ -17,6 +19,7 @@ import { CELL, WALL_T } from '../core/constants.ts';
 import { EDGE_OCCLUDES, edgeOccludesAt, edgeThickness } from '../core/edges.ts';
 import { CellFlag } from '../core/ids.ts';
 import { AO_STRIDE, type BakeJob } from './job.ts';
+import { MAT_PROP } from './visgrid.ts';
 
 export const aoOut = { ao: 1, wall: 1, wallDist: 10 };
 
@@ -31,7 +34,12 @@ let bxJob: BakeJob | null = null;
 let bxStart = new Int32Array(0); // per cell: -1 = not built, else offset into bxList (count at bxList[offset])
 let bxList = new Int32Array(1024);
 let bxLen = 0;
-function boxesAround(job: BakeJob, c: number): number {
+/** The list `boxesAround` offsets point into (read it after the call: building a list may reallocate it). */
+export const boxesAroundList = (): Int32Array => bxList;
+/** Offset into `boxesAroundList()` of cell c's list of the occluder boxes bucketed in its 3x3 cells, each once
+ * (count at the offset, box indices after it). Every box a segment from inside cell c can reach within 1 cell
+ * is on it. */
+export function boxesAround(job: BakeJob, c: number): number {
   const g = job.g, n = g.n;
   if (bxJob !== job) {
     bxJob = job;
@@ -121,10 +129,11 @@ function buildCandidates(job: BakeJob, c: number): void {
 }
 
 /**
- * AO at (x, y, z) (halo cells / m), unit normal n, owner cell c. `spherical`: light-volume variant.
+ * AO at (x, y, z) (halo cells / m), unit normal n, owner cell c. `spherical`: light-volume variant. `skipProps`:
+ * leave out the prop boxes and the contact AO of footprints with prop boxes (the near-field gather traces them).
  * Result in aoOut.
  */
-export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, group: number, spherical: boolean): void {
+export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, group: number, spherical: boolean, skipProps = false): void {
   const g = job.g, n = g.n;
   const s = spherical ? 0.35 : 0.5;
   let ao = 1, wall = 1, wd = 10;
@@ -203,7 +212,7 @@ export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, 
     const at = boxesAround(job, c), bl = bxList;
     for (let k = at + 1, ke = at + 1 + bl[at]; k < ke; k++) {
       const b = bl[k];
-      if (g.boxGroup[b] !== group) continue;
+      if (g.boxGroup[b] !== group || (skipProps && g.boxMat[b] === MAT_PROP)) continue;
       const o = b * 6;
       const qx = x < g.box[o] ? g.box[o] : x > g.box[o + 3] ? g.box[o + 3] : x;
       const qz = z < g.box[o + 2] ? g.box[o + 2] : z > g.box[o + 5] ? g.box[o + 5] : z;
@@ -222,7 +231,7 @@ export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, 
   if (!spherical && ny > 0.9) {
     for (let k = g.contactStart[c], ke = g.contactStart[c + 1]; k < ke; k++) {
       const b = g.contactList[k];
-      if (g.contactGroup[b] !== group) continue;
+      if (g.contactGroup[b] !== group || (skipProps && g.contactBox[b] !== 0)) continue;
       if (Math.abs(g.contactY[b] - (y - 0.02)) > 0.3) continue;
       const o = b * 4;
       const dx = x < g.contact[o] ? g.contact[o] - x : x > g.contact[o + 2] ? x - g.contact[o + 2] : 0;

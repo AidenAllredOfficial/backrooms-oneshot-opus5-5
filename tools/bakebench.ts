@@ -35,6 +35,8 @@ import { createWorldGen } from '../src/world/worldgen.ts';
 export interface BenchZone { name: string; opts: WorldGenOptions; s: StoreyId; cx: number; cz: number }
 export interface TileRow {
   key: string; variant: 'preview' | 'full'; warm: boolean; ms: number; texels: number; rays: number;
+  /** near-field gather: texels and ms (lightmap part), light-volume ms */
+  nearTexels: number; nearMs: number; volumeMs: number;
   lights: number; dynLights: number; tailMean: number; tailMax: number; patches: number; visBits: number; nonDynFlicker: number;
 }
 export interface ZoneResult {
@@ -111,7 +113,8 @@ function prepareChunk(j: ChunkJob, memo?: Map<string, ChunkLayout>): { nb: Layou
 function row(key: string, variant: 'preview' | 'full', warm: boolean): TileRow {
   const r = lastBake;
   return {
-    key, variant, warm, ms: r.ms.total, texels: r.texels, rays: r.rays, lights: r.staticLights, dynLights: r.dynamicLights,
+    key, variant, warm, ms: r.ms.total, texels: r.texels, rays: r.rays, nearTexels: r.nearTexels, nearMs: r.ms.near, volumeMs: r.ms.volume,
+    lights: r.staticLights, dynLights: r.dynamicLights,
     tailMean: r.receivers > 0 ? r.dropSum / r.receivers : 0, tailMax: r.dropMax, patches: r.patches, visBits: r.visBits,
     nonDynFlicker: r.nonDynamicFlicker,
   };
@@ -136,7 +139,7 @@ export function benchZoneTiles(z: BenchZone, q: BakeQuality, log: (s: string) =>
         bakeTile(nb, tiles[k], surfaces[k], 'full', q, 'all', cache);
         const r = row(`${job.s}:${job.cx}:${job.cz}:${k}`, 'full', k > 0);
         rows.push(r);
-        log(`  ${r.key.padEnd(12)} full ${r.warm ? 'warm' : 'cold'} ${r.ms.toFixed(0).padStart(5)} ms  texels ${String(r.texels).padStart(6)}  rays ${String(r.rays).padStart(8)}  lights ${r.lights}+${r.dynLights}dyn  K_MAX tail mean ${(100 * r.tailMean).toFixed(2)}% max ${(100 * r.tailMax).toFixed(1)}%  patches ${r.patches}  vis ${r.visBits}  | preview ${pms[k].toFixed(0)} ms`);
+        log(`  ${r.key.padEnd(12)} full ${r.warm ? 'warm' : 'cold'} ${r.ms.toFixed(0).padStart(5)} ms  texels ${String(r.texels).padStart(6)}  near ${String(r.nearTexels).padStart(5)} ${r.nearMs.toFixed(0).padStart(3)} ms  volume ${r.volumeMs.toFixed(0).padStart(3)} ms  rays ${String(r.rays).padStart(8)}  lights ${r.lights}+${r.dynLights}dyn  K_MAX tail mean ${(100 * r.tailMean).toFixed(2)}% max ${(100 * r.tailMax).toFixed(1)}%  patches ${r.patches}  vis ${r.visBits}  | preview ${pms[k].toFixed(0)} ms`);
       }
     }
   }
@@ -253,7 +256,7 @@ export async function runBench(o: BenchOptions): Promise<ZoneResult[]> {
   const out: ZoneResult[] = [];
   for (const name of o.zones) {
     const z = benchZone(name, o.seed);
-    log(`== ${z.name} (s ${z.s}, centre chunk ${z.cx},${z.cz}, quality ${o.quality}: tpc ${q.tpc}, ${q.shadowSamples} samples, ${q.probeRays} rays)`);
+    log(`== ${z.name} (s ${z.s}, centre chunk ${z.cx},${z.cz}, quality ${o.quality}: tpc ${q.tpc}, ${q.shadowSamples} samples, ${q.probeRays} rays, ${q.nearRays ?? 0} near-field rays)`);
     const rows = o.ttrOnly ? [] : benchZoneTiles(z, q, log);
     const full = rows.filter((r) => r.variant === 'full'), prev = rows.filter((r) => r.variant === 'preview');
     let ttr: { ms: number; workers: number } | null = null;

@@ -6,19 +6,25 @@
 // test decides alone), across floor steps > 0.5 m, and for invalid probes; renormalised. Diagonal neighbours need
 // one open L-shaped path. Linear interpolation between the height layers (tower cells: periodic in y with the
 // fundamental-period layers). Irradiance from the probes' ambient cube at the texel normal (SH-L1 rings for
-// strongly directional fields; the light volume keeps SH-L1 for its direction), then multi-bounce
-// E /= (1 - rho_probe * 0.55) with rho_probe the probe-weighted albedo of the probes' own hits.
+// strongly directional fields; the light volume keeps SH-L1 for its direction), then multi-bounce per colour
+// channel, E_c /= (1 - min(0.6, 0.55 * rho_c)) with rho the probe-weighted RGB albedo of the probes' own hits: each
+// extra bounce is tinted by the surroundings again, so enclosed coloured rooms keep (and deepen) their colour in
+// the shadows. The dynamic (luminance) channels use the luma of rho.
 
 import { CELL } from '../core/constants.ts';
 import { EDGE_OCCLUDES, edgeOccludesAt } from '../core/edges.ts';
 import { CellFlag } from '../core/ids.ts';
 import type { BakeJob } from './job.ts';
 import type { ProbeSet } from './probes.ts';
+import { luma } from './util.ts';
 import type { VisGrid } from './visgrid.ts';
 
-/** Interpolated SH (12), ambient cube (18), dynamic channel cubes (24, when the ProbeSet has them) and rho of the
- * last `interpolateProbes` call. */
-export const interp = { sh: new Float64Array(12), cube: new Float64Array(18), dcube: new Float64Array(24), rho: 0, w: 0 };
+/** Interpolated SH (12), ambient cube (18), dynamic channel cubes (24, when the ProbeSet has them) and RGB rho of
+ * the last `interpolateProbes` call. */
+export const interp = { sh: new Float64Array(12), cube: new Float64Array(18), dcube: new Float64Array(24), rho3: new Float64Array(3), w: 0 };
+
+/** Multi-bounce gain of one channel's (or the luma) probe albedo. */
+export const multiBounce = (rho: number): number => 1 / (1 - Math.min(0.6, 0.55 * rho));
 
 const exOcc = (g: VisGrid, X: number, row: number, t: number, y: number): boolean => {
   const e = row * (g.n + 1) + X;
@@ -53,6 +59,13 @@ function linked(g: VisGrid, a: number, b: number, y: number, tEx: number, tEz: n
   const m1 = aj * n + bi, m2 = bj * n + ai; // L-paths via (bi, aj) and (ai, bj)
   const half = CELL / 2;
   return (link4(g, a, m1, y, half) && link4(g, m1, b, y, half)) || (link4(g, a, m2, y, half) && link4(g, m2, b, y, half));
+}
+
+/** Can a smooth field at (x, y, z) (halo cells / m) of owner cell a be interpolated with cell b's (probe links:
+ * same room / group, no occluding edge between at y, floor steps <= 0.5 m, diagonals through an open L-path)? */
+export function cellsLinked(g: VisGrid, a: number, b: number, x: number, y: number, z: number): boolean {
+  const hi = a % g.n, hj = (a - hi) / g.n;
+  return linked(g, a, b, y, clampT((z - hj) * CELL), clampT((x - hi) * CELL));
 }
 
 const cw = new Float64Array(4);
@@ -99,7 +112,8 @@ function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, 
     if (wantSh) { const o = cp[k] * 12; for (let j = 0; j < 12; j++) interp.sh[j] += f * P.sh[o + j]; }
     if (wantCube) { const oc = cp[k] * 18; for (let j = 0; j < 18; j++) interp.cube[j] += f * P.cube[oc + j]; }
     if (P.dyn) { const od = cp[k] * 24, d = P.dyn; for (let j = 0; j < 24; j++) interp.dcube[j] += f * d[od + j]; }
-    interp.rho += f * P.rho[cp[k]];
+    const r = interp.rho3, o3 = cp[k] * 3;
+    r[0] += f * P.rho[o3]; r[1] += f * P.rho[o3 + 1]; r[2] += f * P.rho[o3 + 2];
   }
   interp.w += lw;
   return true;
@@ -110,7 +124,7 @@ const clampT = (t: number): number => (t < 0.02 ? 0.02 : t > CELL - 0.02 ? CELL 
 /** Interpolate the probe SH (`sh`) and / or ambient cube (`cube`) at (x, y, z) (halo cells / m) owned by cell c
  * into `interp` (the other one is left zero). Returns false if none. */
 export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, c: number, sh = true, cube = true): boolean {
-  interp.sh.fill(0); interp.cube.fill(0); interp.dcube.fill(0); interp.rho = 0; interp.w = 0;
+  interp.sh.fill(0); interp.cube.fill(0); interp.dcube.fill(0); interp.rho3.fill(0); interp.w = 0;
   wantSh = sh; wantCube = cube;
   const g = job.g;
   const h = job.cellH;
@@ -143,7 +157,7 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
     for (let j = 0; j < 12; j++) interp.sh[j] *= s;
     for (let j = 0; j < 18; j++) interp.cube[j] *= s;
     for (let j = 0; j < 24; j++) interp.dcube[j] *= s;
-    interp.rho *= s;
+    interp.rho3[0] *= s; interp.rho3[1] *= s; interp.rho3[2] *= s;
     interp.w = 1;
   }
   return true;
@@ -153,18 +167,28 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
  * when the ProbeSet has no dynamic cubes. The caller applies AO and the channel light's window. */
 export const dynIndirect = new Float64Array(4);
 
-/** Indirect irradiance (RGB, lux, with multi-bounce) at a texel; writes out[0..2] (and `dynIndirect`). */
-export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, out: Float64Array): void {
+/** Per-channel multi-bounce gains (RGB, then the luma gain of the dynamic channels) of the last `indirectAt` call
+ * (0 when no probe was found). */
+export const indirectOut = { mb: new Float64Array(3), mbL: 0 };
+
+/** Indirect irradiance (RGB, lux, with multi-bounce) at a texel; writes out[0..2] (and `dynIndirect`,
+ * `indirectOut`). `keepSh`: also interpolate the probe SH (left in `interp.sh`, for the near-field gather). */
+export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, out: Float64Array, keepSh = false): void {
   dynIndirect.fill(0);
-  if (!interpolateProbes(job, P, x, y, z, c, false, true)) { out[0] = 0; out[1] = 0; out[2] = 0; return; }
-  const mb = 1 / (1 - interp.rho * 0.55);
+  const mbo = indirectOut.mb;
+  if (!interpolateProbes(job, P, x, y, z, c, keepSh, true)) { out[0] = 0; out[1] = 0; out[2] = 0; mbo.fill(0); indirectOut.mbL = 0; return; }
+  const rho = interp.rho3;
+  const m0 = multiBounce(rho[0]), m1 = multiBounce(rho[1]), m2 = multiBounce(rho[2]);
+  mbo[0] = m0; mbo[1] = m1; mbo[2] = m2;
+  const mb = multiBounce(luma(rho[0], rho[1], rho[2]));
+  indirectOut.mbL = mb;
   // ambient cube: E(n) = sum over axes of n_a^2 * E(sign of n_a); exact for the axis-aligned shell surfaces
   const cb = interp.cube;
   const wx = nx * nx, wy = ny * ny, wz = nz * nz;
   const ox = nx > 0 ? 0 : 3, oy = ny > 0 ? 6 : 9, oz = nz > 0 ? 12 : 15;
-  out[0] = (wx * cb[ox] + wy * cb[oy] + wz * cb[oz]) * mb;
-  out[1] = (wx * cb[ox + 1] + wy * cb[oy + 1] + wz * cb[oz + 1]) * mb;
-  out[2] = (wx * cb[ox + 2] + wy * cb[oy + 2] + wz * cb[oz + 2]) * mb;
+  out[0] = (wx * cb[ox] + wy * cb[oy] + wz * cb[oz]) * m0;
+  out[1] = (wx * cb[ox + 1] + wy * cb[oy + 1] + wz * cb[oz + 1]) * m1;
+  out[2] = (wx * cb[ox + 2] + wy * cb[oy + 2] + wz * cb[oz + 2]) * m2;
   if (P.dyn) {
     const d = interp.dcube;
     const ax = nx > 0 ? 0 : 1, ay = ny > 0 ? 2 : 3, az = nz > 0 ? 4 : 5;
@@ -179,7 +203,7 @@ export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: n
  * volume samples), with multi-bounce; writes out[0..3]. */
 export function dynIndirectL0(out: Float64Array): void {
   const d = interp.dcube;
-  const mb = 1 / (1 - interp.rho * 0.55);
+  const mb = multiBounce(luma(interp.rho3[0], interp.rho3[1], interp.rho3[2]));
   for (let ch = 0; ch < 4; ch++) {
     const b = ch * 6;
     out[ch] = ((d[b] + d[b + 1] + d[b + 2] + d[b + 3] + d[b + 4] + d[b + 5]) / 6) * mb;

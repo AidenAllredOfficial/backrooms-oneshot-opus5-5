@@ -1690,8 +1690,8 @@ export interface PropDef {
   name: string;
   size: readonly [number, number, number];
   collide: boolean; // player collision AABB (rotated footprint, yaw snapped to 90deg for collision)
-  occlude: boolean; // whole-footprint light-bake occluder box (large props; yaw snapped to 90deg). Furniture
-                    // uses PROP_OCCLUDERS part boxes instead (desk tops, seats, ...)
+  occlude: boolean; // whole-footprint light-bake occluder box (large props; yaw snapped to 90deg), unless the kind
+                    // has PROP_OCCLUDERS part boxes (desk tops, seats, car bodies, rack decks, ...), which take precedence
   wallMounted: boolean; // back (+Z face) touches the wall
   maxTris: number;
 }
@@ -1748,19 +1748,21 @@ export const PROP_DEFS: readonly PropDef[] = [
 ];
 
 export type Box6 = readonly [number, number, number, number, number, number]; // x0,y0,z0,x1,y1,z1, prop-local metres
-/** Part occluder boxes (prop-local frame, yaw snapped to 90deg like `occlude`) for the WP7 VisGrid, light volume
- * and AO. Keyed by PropKind. Props with `occlude` use their full footprint instead. */
+/** Part occluder boxes (prop-local frame, yaw snapped to 90deg) for the WP7 VisGrid, light volume, AO and the
+ * near-field gather, keyed by PropKind. A part list takes precedence over `occlude` (and the OCCLUDE flag). */
 export const PROP_OCCLUDERS: Readonly<Partial<Record<number, readonly Box6[]>>> = {
-  0: [[-0.25, 0.43, -0.26, 0.25, 0.46, 0.26]], // CHAIR_STACKING seat
-  1: [[-0.25, 0.42, -0.25, 0.25, 0.5, 0.25]], // OFFICE_CHAIR seat
-  2: [[-0.75, 0.72, -0.375, 0.75, 0.75, 0.375], [-0.7, 0.3, 0.3, 0.7, 0.72, 0.34]], // DESK top + modesty panel
-  5: [[-0.16, 0, -0.16, 0.16, 1.3, 0.16]], // WATER_COOLER
-  7: [[-1.5, 0.72, -0.6, 1.5, 0.75, 0.6]], // CONFERENCE_TABLE top
-  11: [[-0.2, 0, -0.2, 0.2, 0.6, 0.2]], // TRASH_CAN
-  17: [[-0.325, 0.3, -0.95, 0.325, 0.36, 0.95]], // LOUNGE_CHAIR frame
-  19: [[-1.2, 0, -0.3, 1.2, 0.45, 0.3]], // BENCH_TILED
-  20: [[-0.45, 0, -0.95, 0.45, 0.2, 0.95]], // MATTRESS
+  // CHAIR_STACKING / OFFICE_CHAIR seats; DESK top, modesty panel, both side panels; CRT_MONITOR housing;
+  // WATER_COOLER; CONFERENCE_TABLE top + pedestal legs; PALLET deck; SHELF_RACK 4 uprights + 3 decks (1.2 / 2.4 /
+  // 3.6 m); TRASH_CAN; CAR_SEDAN lower body above the sills, cabin, underbody, 4 wheels; LOUNGE_CHAIR frame;
+  // BENCH_TILED; MATTRESS; BACKPACK; BUCKET; CARDBOARD_BOX ... (see src/core/props.ts)
 };
+/** Per-variant replacements (DESK 1/3 drawer pedestal, collapsed SHELF_RACK 2, CAR_SEDAN 3 open door, open /
+ * crushed CARDBOARD_BOX). */
+export const PROP_OCCLUDER_VARIANTS: Readonly<Partial<Record<number, Readonly<Partial<Record<number, readonly Box6[]>>>>>>;
+/** Chair backs: added only when the yaw is within OCC_ALIGN_TOL (0.2 rad) of a quarter turn. */
+export const PROP_OCCLUDERS_ALIGNED: Readonly<Partial<Record<number, readonly Box6[]>>>;
+export function propOccluders(kind: number, variant: number): readonly Box6[] | undefined;
+export function quarterAligned(yaw: number): boolean;
 /** Props that respond to the interact key (WP12 targets them, WP13 plays their sound). */
 export const INTERACTABLE_PROPS: readonly PropKindId[] = [25 /* DOOR_LEAF */, 21 /* PHONE */, 22 /* RADIO */] as PropKindId[];
 ```
@@ -3908,7 +3910,7 @@ export function createBakeCache(): BakeCache;
    - Flatten the neighbourhood into halo arrays covering the tile rect ± `LIGHT.HALO_CELLS` (24) cells (64×64 cells; the 3×3 neighbourhood always contains it): floor/ceil/block heights, flags, and ex/ez kind/hA/hB, all in metres. Every visibility ray (texel, patch, probe, LV) stays inside the halo because lights are within `R_MAX` and probe rays within `PROBE_RAY_MAX`.
    - Per-cell buckets of occluder boxes:
      - `expandPeriodicSolids` boxes with OCCLUDE;
-     - props with `PROP_DEFS.occlude`, as AABBs with yaw snapped to 90°, and every `PROP_OCCLUDERS` part box of the other props (desk tops, seats, benches…), same yaw snapping;
+     - the `PROP_OCCLUDERS` part boxes of every prop that has a part list (desk tops and panels, seats, chair backs near a quarter-turn yaw, car bodies on their wheels, rack uprights and decks…; a part list takes precedence over `occlude`), and the whole footprint of the other props with `PROP_DEFS.occlude` or the OCCLUDE flag, yaw snapped to 90°;
      - SOLID cells as blocks.
    - **Shared visibility bitset** (`visbits.ts`): for every (halo cell, light in range) the visibility of the light's centre from the cell centre at 3 heights (floor + 0.4, mid, ceil − 0.35), computed once per chunk neighbourhood and cached per chunk. Used by the patch cache, the light volume, preview classification and as the full-bake classification early-out.
 2. **DDA** (`dda.ts`). A 2D Amanatides–Woo walk in xz along the segment, with the height interpolated.
@@ -3950,8 +3952,9 @@ export function createBakeCache(): BakeCache;
      - Bilinear interpolation of the neighbouring cells' probes, with weight 0 across edges occluding at the probe height, across different `room`, or across floor steps > 0.5 m; renormalise.
      - Linear interpolation between the height layers.
      - Evaluate SH irradiance at the texel normal.
-     - Multi-bounce: `E_ind /= (1 − ρ̄_probe·0.55)`, where `ρ̄_probe` is the mean albedo over **that probe's own ray hits** (interpolated with the probe weights), never a per-tile mean.
-   - **AO** (`ao.ts`). Analytic `Π(1 − 0.5/(1 + (d/0.25)²))` over the nearby planes: occluding edge faces within 1 cell, floor, ceiling, and box faces (solids and `PROP_OCCLUDERS` parts) within 0.6 m. Plus **contact AO** for every COLLIDE prop footprint: an elliptical falloff reaching 0.3 m beyond the footprint, strength 0.5 at the footprint edge. Multiplies the indirect term only; stored in `irr.a`.
+     - Multi-bounce **per colour channel**: `E_ind,c /= (1 − min(0.6, 0.55·ρ̄_probe,c))`, where `ρ̄_probe` is the mean **RGB** albedo over **that probe's own ray hits** (interpolated with the probe weights), never a per-tile mean. Every extra bounce is tinted again, so enclosed coloured rooms keep their colour in the shadows. The flicker (luminance) channels use the luma of ρ̄.
+   - **AO** (`ao.ts`). Analytic `Π(1 − 0.5/(1 + (d/0.25)²))` over the nearby planes: occluding edge faces within 1 cell, floor, ceiling, and box faces (solids and `PROP_OCCLUDERS` parts) within 0.6 m. Plus **contact AO** for every COLLIDE prop footprint: an elliptical falloff reaching 0.3 m beyond the footprint, strength 0.5 at the footprint edge. Multiplies the indirect term only; stored in `irr.a`. Full bakes with the near-field gather leave out the prop boxes and the contact AO of footprints with boxes (`VisGrid.contactBox`): the gather traces them.
+   - **Near-field gather** (`nearfield.ts`, full bakes with `q.nearRays` > 0: high 16, ultra 32). The per-cell probe cannot see a desk top 0.7 m above a floor texel. Texels with a prop box within 1.2 m (in front of their plane) trace `nearRays` cosine rays of 1.2 m (a (0,2)-sequence, rotated by the texel's world position): `V` = the probe-SH-radiance-weighted fraction of rays that miss the props, `E_box` = π/N·Σ the hit prop faces' radiance. Prop face radiance comes from world-anchored 0.3 m face sub-patches (K_MAX lights, form factor and one visibility ray each, cached per bake), not from the shell patch of the cell. `E_ind = (E_cube·V + E_box)·mb`; `irr.a` gets the geometric visibility. The correction fades out (smoothstep) over the region's outer 0.6 m. It is traced on a world-aligned 4×4-texel sub-lattice and at seam texels and bilinearly interpolated in between (within a patch or between linked cells), so seam texels stay exact and the cost is ~1/3 of tracing every lattice texel. With `nearRays` absent or 0 the bake is byte-identical to the far-field bake.
 7. **Preview** (`preview.ts`).
    - Direct: class FULL → 1, NONE → 0, PARTIAL → 0.5, with no per-texel rays, evaluated on 2×2 texel blocks and replicated.
    - Indirect: a **2D edge-aware diffusion**.
@@ -3983,7 +3986,8 @@ export function createBakeCache(): BakeCache;
     - Samples inside solids are marked invalid and dilated.
     - Samples whose cell is a TOWER cell are baked with **that tower's bake group** (isolated, periodic lighting), so the WP9 y-wrap for tower props reads valid values.
     - `wallMask` (18×18, tile cells + ring): bits N1 E2 S4 W8 where the cell's edge occludes at y = 1.2 m.
-    - Per sample, accumulate SH-L1 of direct light (each light as a directional delta with visibility) plus indirect (probe SH).
+    - Per sample, accumulate SH-L1 of direct light (each light as a directional delta with visibility) plus indirect (probe SH), with the per-channel multi-bounce.
+    - **Near-field samples** (full bake, `q.nearRays` > 0, a prop box within 1.2 m): when the sample's own cell holds a box rising above the sample or above the bitset point at the nearest bit height, lights a box could cut off get one DDA ray from the sample instead of the cell bitset (chairs under desks are shadowed, a monitor above the desk top is lit); `nearRays` sphere rays correct the probe SH where they hit prop faces (delta form); the stored AO drops by the hit fraction.
     - Encode:
       - `a.rgb` = L0 irradiance (hemisphere average);
       - `a.a` = AO (analytic, spherical);
@@ -3999,7 +4003,7 @@ export function createBakeCache(): BakeCache;
 
 **Acceptance (vitest)**
 - **Leak.** Two rooms separated by a WALL with a light only in A: every valid texel in B has `E < 1e-4 · max(E_A)`, for both variants and both tpc values. The same for a DOORWAY-less PARTITION pair at y < 1.5 (floor B shadowed). **Leak tests evaluate the bilinearly FILTERED lightmap** at visible floor points (≥ `edgeBaseThickness/2` from the line), not raw texels. A HALF wall's shadow length matches the geometry within 1 texel.
-- **Furniture shadow.** Floor irradiance under a DESK top is < 35% of the open floor 1 m beside it.
+- **Furniture shadow.** Floor irradiance under a DESK top is < 35% of the open floor 1 m beside it. Near-field (`tests/bake/nearfield.test.ts`, `volumeNear.test.ts`, `propOccluders.test.ts`): under-desk indirect ≤ 0.5× the open floor; the floor under a car is valid and < 0.3× lit; light passes between rack decks; the region edge is seamless; seam, cache and `nearRays` 0 identities.
 - **Tall lights.** Floor E under a 1.2 m SKY_PANEL lattice at 12 m (ATRIUM) is ≥ 85% of the unwindowed sum.
 - **Cache.** `bakeTile` with and without a warm `BakeCache` is byte-identical.
 - **Analytic.** A floor point under a single 0.6×1.2 panel at 2.7 m is within 2% of the closed-form polygon value (full) and within 10% (preview).
@@ -5012,7 +5016,7 @@ storey switch:  prefetch(target) = layout jobs (target storey's query data) + bu
 
 `setQuality` at runtime:
 - **radius:** re-desires the tile set.
-- **tpc, shadow samples or probe rays (`BakeQuality`):** `await pool.reinit(newInit)` (cancels queued jobs, drops in-flight results, re-broadcasts init), then every tile is rebuilt (tpc: new atlas) or re-baked.
+- **tpc, shadow samples, probe rays or near-field rays (`BakeQuality`):** `await pool.reinit(newInit)` (cancels queued jobs, drops in-flight results, re-broadcasts init), then every tile is rebuilt (tpc: new atlas) or re-baked.
 - **textureSize:** requires a reload (UI notice).
 - **AO, AA, bloom, reflection:** applied live. `MaterialSystem.setQuality` changes defines, then warmup runs again.
 
@@ -5022,8 +5026,8 @@ values (low / medium / high / ultra): D `ssr` off/off/half/half, `ssrMaxRoughnes
 `reflectionProbe` 0/0/128/256; A `colorPyramidScale` 0/0/1/0.67, `contactShadowSteps` 0/0/8/8; B `wetPuddles`,
 `detailMaps`, `pom` 0/0/1/2, `clothSheen`, `specularAA`; C `motionBlurTaps`, `glareStreaks`, `glareGhosts`; E
 `waterRefractionSteps`, `waterWaves`, `waterRippleRes`, `waterRippleTexel`, `waterDebris`, `waterCaustics`,
-`waterVolumetrics`; F `volumetrics`, `dustMotes`, `flashlightBounce`, `bakeNearRays` (sent as `BakeQuality.nearRays`
-only when > 0, so other presets' worker inputs stay byte-identical). None of them is a resolution-only key.
+`waterVolumetrics`; F `volumetrics`, `dustMotes`, `flashlightBounce`, `bakeNearRays` 0/0/16/32 (live; sent as
+`BakeQuality.nearRays` only when > 0, so other presets' worker inputs stay byte-identical). None of them is a resolution-only key.
 `materials/shared.ts qualityDefinesOf` turns them into `QualityDefines` (ssr, probe, ssao = ao != off, cs, puddles,
 detail, pom, sheen, coat = !lite, specAA, the water fields, volumetric, bounce), `applySurfaceDefines` maps each to one
 define (`BR_SSR`, `BR_PROBE`, `BR_SSAO`, `BR_CS_STEPS=n`, `BR_PUDDLES`, `BR_DETAIL_MAPS`, `BR_POM=n` shell only,

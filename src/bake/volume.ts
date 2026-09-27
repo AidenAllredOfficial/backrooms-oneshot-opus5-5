@@ -5,7 +5,12 @@
 // Per sample: each static light as a directional delta (K_MAX strongest, irradiance at normal incidence, bitset
 // visibility at the nearest layer; tower cells: one DDA ray, baked with the tower's own bake group so the WP9
 // y-wrap reads periodic values) plus the indirect term (probe SH, full; diffused radiosity, preview) x the
-// spherical AO. Encoding (consistent with the shell lightmap decode in WP9):
+// spherical AO, with per-channel multi-bounce (indirect.ts). Near-field samples (full bake with q.nearRays > 0, a
+// prop box within NEAR.R, nearfield.ts): lights a box could cut off (or hide from the bitset's cell-centre point)
+// get one DDA ray from the sample itself instead of the cell bitset (a chair under a desk is in the desk's shadow,
+// a monitor above it is not), the probe SH is corrected by q.nearRays traced sphere rays (prop faces replace the far
+// field they hide), and the stored AO drops by the rays' box-hit fraction; full bakes with q.nearRays > 0 leave
+// out the analytic AO of prop boxes. Encoding (consistent with the shell lightmap decode in WP9):
 //   a.rgb = total irradiance on a surface facing the dominant direction's light (sum of the light deltas' E plus
 //           the L0 (direction-averaged) indirect irradiance), a.a = spherical AO;
 //   b.xyz = normalized luminance-weighted dominant direction * 0.5 + 0.5 (direct deltas + the indirect L1 vector),
@@ -24,10 +29,11 @@ import type { BakeTerm } from '../core/worker.ts';
 import { formFactor } from './areaLight.ts';
 import { aoAt, aoOut } from './ao.ts';
 import { addBounce, addDynIndirect, type DynInfo } from './channels.ts';
-import { FILTER_CELL, FILTER_NONE, isTowerCell, selectDynamic, selectLights, tail, tailSum } from './classify.ts';
+import { FILTER_CELL, FILTER_NONE, boxesBetween, isTowerCell, lightLowY, selectDynamic, selectLights, tail, tailSum } from './classify.ts';
 import { occluded } from './dda.ts';
-import { dynIndirectL0, interp, interpolateProbes } from './indirect.ts';
+import { dynIndirectL0, interp, interpolateProbes, multiBounce } from './indirect.ts';
 import { nearestBit, type BakeJob } from './job.ts';
+import { nearSphereCorrect, nearWeight } from './nearfield.ts';
 import { diffusedAt, type Diffusion } from './preview.ts';
 import type { ProbeSet } from './probes.ts';
 import { SH_E1, shIrradianceL0 } from './sh.ts';
@@ -45,7 +51,8 @@ const clampH = (v: number): number => toHalf(v > HALF_MAX ? HALF_MAX : v < 0 ? 0
 
 export interface VolumeOut { a: Uint16Array; b: Uint8Array; c: Uint16Array | null; wallMask: Uint8Array }
 
-export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null, dyn: DynInfo | null, term: BakeTerm): VolumeOut {
+/** `nearRays`: the full bake's near-field rays (0 = off, and for preview bakes). */
+export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null, dyn: DynInfo | null, term: BakeTerm, nearRays = 0): VolumeOut {
   const g = job.g, n = g.n, L = job.L;
   const NX = LV.NX, NY = LV.NY, NZ = LV.NZ;
   const ns = NX * NY * NZ;
@@ -69,7 +76,9 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
         }
         if (insideBox(g, c, x, y, z, group)) continue;
         valid[s] = 1;
-        aoAt(job, x, y, z, 0, 0, 0, c, group, true);
+        const nw = nearRays > 0 && !tower ? nearWeight(job, c, x, y, z, 0, 0, 0, group, false) : 0;
+        const near = nw > 0;
+        aoAt(job, x, y, z, 0, 0, 0, c, group, true, nearRays > 0);
         const ao = aoOut.ao;
         AO[s] = ao;
         let er = 0, eg = 0, eb = 0, vx = 0, vy = 0, vz = 0;
@@ -82,7 +91,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
           }
           for (let q = 0; q < m; q++) {
             const l = sel[q];
-            const e = lightDelta(job, l, x, y, z, c, group, tower, layer);
+            const e = near ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
             if (e <= 0) continue;
             const o = l * 3;
             er += e * L.rad[o]; eg += e * L.rad[o + 1]; eb += e * L.rad[o + 2];
@@ -97,18 +106,25 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
               const ch = L.channel[l];
               if ((seen & (1 << ch)) !== 0) throw new Error(`bakeTile: two dynamic lights of flicker channel ${ch} reach the same light-volume sample`);
               seen |= 1 << ch;
-              const e = lightDelta(job, l, x, y, z, c, group, tower, layer);
+              const e = near ? lightDeltaNear(job, l, x, y, z, c, group, layer) : lightDelta(job, l, x, y, z, c, group, tower, layer);
               if (e > 0) F[s * 4 + ch] += e * L.radLum[l];
             }
           }
         }
+        let aoDyn = ao;
         if (doInd) {
           dyn4.fill(0);
           if (P) {
             if (interpolateProbes(job, P, x, y, z, c, true, false)) {
               if (P.dyn) dynIndirectL0(dyn4);
-              const mb = ao / (1 - interp.rho * 0.55);
-              er += shIrradianceL0(interp.sh, 0) * mb; eg += shIrradianceL0(interp.sh, 4) * mb; eb += shIrradianceL0(interp.sh, 8) * mb;
+              if (near) {
+                aoDyn = ao * (1 - nearSphereCorrect(job, x, y, z, group, nearRays, k, interp.sh, nw));
+                AO[s] = aoDyn;
+              }
+              const rho = interp.rho3;
+              const mr = ao * multiBounce(rho[0]), mg = ao * multiBounce(rho[1]), mbb = ao * multiBounce(rho[2]);
+              const mb = ao * multiBounce(luma(rho[0], rho[1], rho[2]));
+              er += shIrradianceL0(interp.sh, 0) * mr; eg += shIrradianceL0(interp.sh, 4) * mg; eb += shIrradianceL0(interp.sh, 8) * mbb;
               // L1 luminance vector (SH order y, z, x)
               const c1 = LR * interp.sh[1] + LG * interp.sh[5] + LB * interp.sh[9];
               const c2 = LR * interp.sh[2] + LG * interp.sh[6] + LB * interp.sh[10];
@@ -121,7 +137,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
           }
           if (F && dyn) {
             fl4.fill(0);
-            if (P) addDynIndirect(job, x, y, z, group, dyn4, ao, fl4);
+            if (P) addDynIndirect(job, x, y, z, group, dyn4, aoDyn, fl4);
             else addBounce(job, dyn, x, y, z, c, ao, fl4);
             for (let q = 0; q < 4; q++) F[s * 4 + q] += fl4[q];
           }
@@ -164,6 +180,17 @@ function lightDelta(job: BakeJob, l: number, x: number, y: number, z: number, c:
   const f = formFactor(L, l, x, y, z, wx, wy, wz, 1.0);
   tmp3[0] = wx; tmp3[1] = wy; tmp3[2] = wz;
   return f * w;
+}
+
+/** lightDelta for near-field samples: when the sample's own cell holds a box rising above the sample or above the
+ * bitset's cell-centre point at the nearest bit height (a chair under a desk; a monitor sample above a desk top that
+ * hides the light from the bit below it; rack decks between the bits of a tall hall), and a box could cut the segment
+ * to the emitter (classify.ts boxesBetween), one DDA ray from the sample to the emitter centre decides instead of
+ * the bitset (like tower samples). */
+function lightDeltaNear(job: BakeJob, l: number, x: number, y: number, z: number, c: number, group: number, layer: number): number {
+  const yc = Math.min(y, job.cellY[c * 5 + layer]);
+  const ray = job.boxTop[c] > yc && boxesBetween(job, c, l, Math.min(yc, lightLowY(job, l)));
+  return lightDelta(job, l, x, y, z, c, group, ray, layer);
 }
 
 const nbs = new Int32Array(6);

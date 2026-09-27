@@ -1044,7 +1044,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         const bq = bakeQualityOf(q);
         const ob = init.bake;
         const tpcChanged = bq.tpc !== ob.tpc;
-        const bakeChanged = tpcChanged || bq.shadowSamples !== ob.shadowSamples || bq.probeRays !== ob.probeRays;
+        const bakeChanged = tpcChanged || bq.shadowSamples !== ob.shadowSamples || bq.probeRays !== ob.probeRays ||
+          (bq.nearRays ?? 0) !== (ob.nearRays ?? 0);
         if (old.streamRadius !== q.streamRadius) dirty = true;
         if (!bakeChanged) return;
         init = { ...init, bake: bq };
