@@ -3,7 +3,7 @@
 //   [&checks=0[&meter=0]] (skip the checks and their captures; meter=0 also pauses the auto-exposure readback)
 // panels : a Level-0 room (MeshStandardMaterial walls, RectAreaLight-lit, emissive 3300-nit troffers, flashlight).
 //          Checks: clipped fraction outside the panels < 3 %, panels bloom (ring luma with bloom > 1.25 x without), AO draw
-//          calls (AO on - off) <= 3, and two captures at frozen t = 10 are identical.
+//          calls (AO on - off) <= 5, and two captures at frozen t = 10 are identical.
 // dark   : a dark hall, flashlight only; a far wall 20 m away half behind an occluder (as seen from the light).
 //          Check: the occluded half stays dark, the unoccluded half is lit (shadow map covers the whole range).
 // shimmer: a 16 x 48 quad array evaluating brLensShimmer (LENS_SHIMMER_GLSL) on the GPU for 16 seeds x 8 times x
@@ -359,7 +359,7 @@ function main(): void {
     await nextFrames(30);
     post.snapExposure();
     await nextFrames(12);
-    // ---- AO draw-call cost (AO, denoise, composite; never a scene render)
+    // ---- pre-shade SSAO draw-call cost (two Z levels, AO, the separable denoise; never a scene render)
     if (pi) {
       post.setEnabled({ ao: true });
       await nextFrames(3);
@@ -369,7 +369,7 @@ function main(): void {
       const off = lastCalls;
       post.setEnabled({ ao: true });
       await nextFrames(3);
-      results.ao = { enabled: pi.ao.enabled, drawCallsOn: on, drawCallsOff: off, diff: on - off, pass: on - off <= 3 };
+      results.ao = { enabled: pi.ao.enabled, drawCallsOn: on, drawCallsOff: off, diff: on - off, pass: on - off <= 5 };
       results.passes = pi.passes.map((p) => p.name);
     }
     // ---- determinism at frozen t

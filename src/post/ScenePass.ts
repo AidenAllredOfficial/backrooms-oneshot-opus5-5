@@ -9,8 +9,9 @@
 // - MRT frame: q.ssr on, the ssr toggle on and no debug view. The opaque view renders into sceneRT (3 x RGBA16F:
 //   colour, fallback specular x T, oct normal + roughness; FloatType depth). Attachments 1-2 are zeroed after the
 //   prepass render (its colour background clears every attachment to the background colour) and the shading render
-//   then runs with autoClearColor off, so the forced background clear leaves them alone. MrtComposite resolves them into
-//   the input buffer and the depth is blitted across, so the late render and the composer's own depth copy see it.
+//   then runs with autoClearColor off, so the forced background clear leaves them alone. MrtComposite resolves them
+//   into the input buffer and the depth is blitted across, so the late render and the composer's own depth copy see
+//   it.
 // - Split frame: q.colorPyramidScale > 0, no debug view other than WATER, and an MRT frame or a LAYER_LATE mesh in view
 //   (recorded by the prepass). The opaque render leaves LAYER_LATE out; the pyramid (rgb opaque HDR, a = linear depth)
 //   is built from it; then LAYER_LATE draws alone (shadow auto-update off, no clears, depth writes locked as in the
@@ -57,7 +58,8 @@ export interface FrameContext {
 export interface FrameHook {
   /** also the gpuProfile segment label */
   name: string;
-  /** ascending within a stage; convention: afterDepth ssao 10, hiz 20, lightAtlas 30, volumetrics 40 | afterOpaque ssr 10 */
+  /** ascending within a stage; convention: afterDepth ssao 10, hiz 20, lightAtlas 30, volumetrics 40; afterOpaque
+   * ssr 10 */
   order: number;
   run(ctx: FrameContext): void;
 }

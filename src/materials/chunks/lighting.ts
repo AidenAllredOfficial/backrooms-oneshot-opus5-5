@@ -56,9 +56,10 @@ vec3 brLw = brDecodeDir( brLmB.xyz, brW );
 vec3 brEf = vec3( 0.0 );
 for ( int k = 0; k < 4; k ++ ) brEf += max( brFl[ k ], 0.0 ) * uFlick[ brChannelSlot( k, vBrLocal.xz, uOwnParity ) ];
 // ---- pre-shade SSAO (package A): brSs = screen-space AO, brSsK = its part the bake has not applied, brSsC = the
-// albedo multi-bounce of brSsK
+// albedo multi-bounce of brSsK; brCs = the contact-shadow visibility of the baked directional light (set below)
 float brSs = 1.0, brSsK = 1.0;
 vec3 brSsC = vec3( 1.0 );
+float brCs = 1.0;
 #ifdef BR_SSAO
 if ( uSsaoP.x > 0.5 && uBrReflPass < 0.5 ) {
 	brSs = pow( brSsao( geometryPosition, brNg ), uSsaoP.y );
@@ -79,7 +80,10 @@ if ( brW > 0.0 ) {
 	// visibility of the baked directional light: contact shadow (package A), then package B's block
 	float brDirVis = 1.0;
 #ifdef BR_CS_STEPS
-	if ( uSsaoP.x > 0.5 && uCsOn > 0.5 && uBrReflPass < 0.5 ) brDirVis *= brContactShadow( geometryPosition, brNg, brLv, brW );
+	if ( uSsaoP.x > 0.5 && uCsOn > 0.5 && uBrReflPass < 0.5 ) {
+		brCs = brContactShadow( geometryPosition, brNg, brLv, brW );
+		brDirVis *= brCs;
+	}
 #endif
 ${FRAG_DIRVIS_GLSL}
 	IncidentLight brDL;

@@ -1,8 +1,9 @@
 // src/post/PostStack.ts — the calibrated post stack (WP11), pmndrs postprocessing 6.39.5.
 // EffectComposer(HalfFloat, no MSAA); the renderer has NoToneMapping + SRGB output (WP14). Passes (POST_PASSES):
-//  1. ScenePass(scene, camera): a depth prepass, then shading with LEQUAL and no depth writes (ScenePass.ts)
-//  2. AmbientOcclusionPass (N8AO's estimator and composite, restructured: AmbientOcclusionPass.ts): radius 0.7,
-//     distance falloff 0.6, intensity/color from the atmosphere; multiplies the scene colour in place
+//  1. ScenePass(scene, camera), the frame graph (ScenePass.ts): a depth prepass, the afterDepth hooks (the pre-shade
+//     SSAO 'ssao': AmbientOcclusionPass.ts SsaoPre, radius 0.7, distance falloff 0.6, exponent from the atmosphere),
+//     shading with LEQUAL and no depth writes, the colour pyramid and the late layer
+//  2. (no pass: the surface shader applies the SSAO to the indirect light)
 //  3. AutoExposurePass (meter; needsSwap false)
 //  4. EffectPass[Bloom (threshold 1/exposure nits), Exposure (+ warm halation from the two coarsest bloom mips), AgX,
 //     Grade (+ highlight knee and black pedestal)]
@@ -23,7 +24,7 @@ import { PHOTOMETRY } from '../core/constants.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import type { Settings } from '../core/settings.ts';
 import type { AtmosphereState, PostStack } from '../core/runtime.ts';
-import { AmbientOcclusionPass } from './AmbientOcclusionPass.ts';
+import { SsaoPre } from './AmbientOcclusionPass.ts';
 import { AutoExposurePass } from './AutoExposurePass.ts';
 import { createDisplayCapture } from './capture.ts';
 import { ScenePass } from './ScenePass.ts';
@@ -37,7 +38,6 @@ import type { ExposureState } from './exposureMath.ts';
 /** Static description of the pass layout (asserted by tests/post/effects.test.ts; built by createPostStack). */
 export const POST_PASSES: readonly { name: string; effects: readonly string[] }[] = [
   { name: 'RenderPass', effects: [] },
-  { name: 'AmbientOcclusionPass', effects: [] },
   { name: 'AutoExposurePass', effects: [] },
   { name: 'EffectPass', effects: ['BloomEffect', 'ExposureEffect', 'ToneMappingEffect', 'ColorGradeEffect'] },
   { name: 'EffectPass', effects: ['SMAAEffect|FXAAEffect'] },
@@ -47,6 +47,7 @@ export const POST_PASSES: readonly { name: string; effects: readonly string[] }[
 export const POST_TUNING = {
   AO_RADIUS: 0.7, // R2-post: tighter, darker contact shadows at wall bases / under furniture
   AO_FALLOFF: 0.6,
+  SSAO_POW_SCALE: 0.8, // pre-shade SSAO exponent = atmosphere aoIntensity x this (indirect light only)
   BLOOM_RADIUS: 0.85,
   BLOOM_SMOOTHING: 0.6, // x 1/exposure (absolute nits): a soft knee, bright ceiling tiles near a panel glow a little
   BLOOM_SCALE: 0.35, // atmosphere bloomIntensity (table 0.4-0.6) -> BloomEffect.intensity (soft camcorder bloom)
@@ -82,7 +83,8 @@ export const AO_SAMPLES: Readonly<Record<Exclude<QualityConfig['ao'], 'off'>, nu
 export interface PostInternals {
   composer: EffectComposer;
   scenePass: ScenePass;
-  ao: AmbientOcclusionPass;
+  /** the pre-shade SSAO helper (the frame graph's 'ssao' hook) */
+  ao: SsaoPre;
   autoExposure: AutoExposurePass;
   bloom: BloomEffect;
   passes: Pass[];
@@ -118,17 +120,20 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const renderPass = new ScenePass(scene, camera);
   renderPass.setQuality(q);
 
-  // 2. AO. A quality change that alters the AO level or halfRes builds a NEW pass (and disposes the old one) instead
-  // of mutating defines, so the program set does not ratchet up across preset cycles.
-  const makeAo = (qq: QualityConfig): AmbientOcclusionPass => {
-    const p = new AmbientOcclusionPass(camera, { samples: qq.ao === 'off' ? AO_SAMPLES.Performance : AO_SAMPLES[qq.ao], halfRes: qq.aoHalfRes });
+  // 2. pre-shade SSAO: the frame graph's afterDepth hook 'ssao' (order 10). A quality change that alters the AO level
+  // or halfRes builds a NEW helper (and disposes the old one) instead of mutating defines, so the program set does
+  // not ratchet up across preset cycles.
+  const makeAo = (qq: QualityConfig): SsaoPre => {
+    const p = new SsaoPre(camera, { samples: qq.ao === 'off' ? AO_SAMPLES.Performance : AO_SAMPLES[qq.ao], halfRes: qq.aoHalfRes });
     p.radius = P.AO_RADIUS;
     p.distanceFalloff = P.AO_FALLOFF;
+    p.powScale = P.SSAO_POW_SCALE;
     p.enabled = qq.ao !== 'off';
     return p;
   };
   let ao = makeAo(q);
   let aoKey = `${q.ao}:${q.aoHalfRes}`;
+  renderPass.addHook('afterDepth', { name: 'ssao', order: 10, run: (ctx) => ao.run(ctx) });
 
   // 3. exposure meter
   const ae = new AutoExposurePass();
@@ -157,7 +162,6 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   finalPass.renderToScreen = false;
 
   composer.addPass(renderPass);
-  composer.addPass(ao);
   composer.addPass(ae);
   composer.addPass(hdrPass);
   composer.addPass(aaPass);
@@ -258,8 +262,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       exposureFx.setHalation(t0, t1, T[0] * k, T[1] * k, T[2] * k);
     } else exposureFx.setHalation(null, null, 0, 0, 0);
     if (atm) {
-      ao.intensity = atm.aoIntensity;
-      ao.color.setRGB(atm.aoColor[0], atm.aoColor[1], atm.aoColor[2]);
+      ao.intensity = atm.aoIntensity; // aoColor is retired: the SSAO multi-bounce keeps the albedo's hue
       grade.setGrade(atm.grade);
     }
     const frame = Math.floor(t * 24);
@@ -328,11 +331,8 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       if (nAoKey !== aoKey) {
         aoKey = nAoKey;
         const old = ao;
-        const idx = composer.passes.indexOf(old);
         ao = makeAo(nq);
-        // add before removing: the composer keeps its shared depth texture (removing the only depth user frees it)
-        composer.addPass(ao, idx >= 0 ? idx : 1);
-        composer.removePass(old);
+        ao.intensity = old.intensity;
         old.dispose();
       }
       if (bloom.mipmapBlurPass.levels !== nq.bloomLevels) bloom.mipmapBlurPass.levels = nq.bloomLevels;
@@ -395,6 +395,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
     },
     dispose() {
       composer.dispose();
+      ao.dispose(); // a frame-graph hook, not a composer pass
       finalPass.dispose();
       cap.dispose();
       for (const c of captures.splice(0)) c.reject(new Error('post stack disposed'));

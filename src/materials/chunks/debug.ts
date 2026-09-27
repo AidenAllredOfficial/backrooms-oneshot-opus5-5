@@ -65,7 +65,11 @@ vec3 brDbg = vec3( 0.0 );
 	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E
 	else if ( dv == ${DebugView.PROBE} ) brDbg = vec3( 0.0 ); // package D
 	else if ( dv == ${DebugView.SPECW} ) brDbg = vec3( 0.0 ); // package D
-	else if ( dv == ${DebugView.SSAO} ) brDbg = vec3( 0.0 ); // package A
+	else if ( dv == ${DebugView.SSAO} ) {
+		// package A: the screen-space AO (after its exponent) in grey, the contact shadow of the baked directional
+		// light in red
+		brDbg = vec3( brSs ) * mix( vec3( 1.0, 0.15, 0.15 ), vec3( 1.0 ), brCs );
+	}
 	else if ( dv == ${DEBUG_VIEW_ROTATION} ) brDbg = vec3( float( brRotIdx + 1 ) / 8.0 ); // 0 = not a rotated-tile layer
 }
 `;

@@ -6,8 +6,11 @@
 // chunks/haze.ts writes them at the very end. Writes to attachments the bound target lacks are dropped, so planar
 // and probe captures stay safe; the depth prepass (colorWrite false) never touches the colour attachments.
 
-/** Octahedral unit-vector encoding in [-1, 1]^2 (the twin of post/AmbientOcclusionPass.ts brOctEnc / brOctDec). */
+/** Octahedral unit-vector encoding in [-1, 1]^2 (the twin of post/AmbientOcclusionPass.ts brOctEnc / brOctDec).
+ * Guarded by BR_OCT_GLSL: chunks/screenspace.ts carries the same pair for the SSAO normals. */
 export const OCT_GLSL = /* glsl */ `
+#ifndef BR_OCT_GLSL
+#define BR_OCT_GLSL
 vec2 brOctEnc( vec3 n ) {
 	n /= abs( n.x ) + abs( n.y ) + abs( n.z );
 	vec2 e = n.xy;
@@ -19,6 +22,7 @@ vec3 brOctDec( vec2 e ) {
 	if ( n.z < 0.0 ) n.xy = ( 1.0 - abs( n.yx ) ) * vec2( n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0 );
 	return normalize( n );
 }
+#endif
 `;
 
 /** Appended to the fragment common block. */
