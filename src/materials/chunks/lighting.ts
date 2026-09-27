@@ -11,17 +11,24 @@
 //  - brSs / brSsK / brSsC: pre-shade SSAO (A) on the indirect terms only; brSsK is the occlusion the bake has not
 //    already applied. With SSAO off they are an exact 1.0, and each factor sits next to brE / brAO so the other
 //    operands are rounded exactly as before (the preset images stay bit-identical).
-//  - brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brMrtRough: the specular G-buffer split (D fills them; chunks/haze.ts
-//    writes them to MRT attachments 1 and 2 under BR_SSR).
+//  - brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brMrtRough: the specular G-buffer split (package D; chunks/haze.ts
+//    writes them to MRT attachments 1 and 2 under BR_SSR). On MRT frames (uBrMrt) a glossy, non-emissive, dry pixel
+//    moves its replaceable specular out of the inline sum: the baked dominant-direction lobe (the difference of
+//    reflectedLight.directSpecular across RE_Direct: three's sheen / clearcoat terms stay exact), the uniform
+//    environment radiance and the emission-map reflection. FRAG_AO_REFL_GLSL assembles them into the fallback
+//    brFbSpec with its weight brWs; the SSR composite (post/frame/MrtComposite.ts) replaces it by confidence.
 //  - brDirVis: visibility of the baked directional light (A's contact shadow, then B's FRAG_DIRVIS_GLSL).
 //  - FRAG_BOUNCE_GLSL (F) after the ambient lines.
 
+import { SSR } from '../../post/ssr/ssrGlsl.ts';
 import { FRAG_BOUNCE_GLSL } from './bounce.ts';
+import { f } from './params.ts';
 import { FRAG_DIRVIS_GLSL } from './pom.ts';
 
 /** Replaces `#include <lights_fragment_maps>`. */
 export const FRAG_LIGHTS_GLSL = /* glsl */ `
 #undef getSpotLightInfo
+#define BR_SSR_ELIG_ROUGH ${f(SSR.ELIG_ROUGH)}
 // ==== WP9 baked lighting
 vec4 brLmA;
 vec4 brLmB;
@@ -72,6 +79,11 @@ if ( uSsaoP.x > 0.5 && uBrReflPass < 0.5 ) {
 bool brMrtSpec = false;
 vec3 brFbDir = vec3( 0.0 ), brFbEnv = vec3( 0.0 ), brFbSpec = vec3( 0.0 );
 float brWs = 0.0, brMrtRough = 1.0;
+#if defined( BR_SSR ) && ! defined( BR_DECAL )
+// MRT frame: glossy (below BR_SSR_ELIG_ROUGH), not an emitter, not submerged (the water body's optics act on the
+// whole radiance). Clearcoat pixels stay inline until their coat lobe is routed (package D, second half).
+brMrtSpec = uBrMrt > 0.5 && vBrEmit <= 0.0 && brSubInfo.x <= 0.0 && material.roughness < BR_SSR_ELIG_ROUGH && ! brCoat;
+#endif
 // r186 only initialises this when punctual lights exist; set it exactly as lights_fragment_begin does
 material.multiScatteringCompensation = 1.0 + material.specularColorBlended * ( 1.0 / ( material.dfg.x + material.dfg.y ) - 1.0 );
 if ( brW > 0.0 ) {
@@ -93,12 +105,21 @@ ${FRAG_DIRVIS_GLSL}
 	brDL.visible = true;
 	float brR0 = material.roughness;
 	material.roughness = max( brR0, BR_DIRECT_MIN_ROUGH );
+	// split by difference (package D): the baked lobe leaves the inline sum on G-buffer pixels
+	vec3 brDs0 = reflectedLight.directSpecular;
 	RE_Direct( brDL, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
+	if ( brMrtSpec ) {
+		brFbDir = reflectedLight.directSpecular - brDs0;
+		reflectedLight.directSpecular = brDs0;
+	}
 	material.roughness = brR0;
 }
 irradiance += brEf * mix( vec3( 1.0 ), brSsC, 0.5 ); // flicker channels: diffuse irradiance
 iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC ); // ambient part (diffuse + multiscatter specular in RE_IndirectSpecular)
-radiance += ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI; // ambient part as a uniform environment (indirect specular)
+// ambient part as a uniform environment (indirect specular; package D: the G-buffer fallback on MRT pixels)
+vec3 brEnvRad = ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;
+if ( brMrtSpec ) brFbEnv = brEnvRad;
+else radiance += brEnvRad;
 ${FRAG_BOUNCE_GLSL}
 vec3 brIrrLocal = brE + brEf; // haze inscatter + water in-scatter
 // ---- caustics (package E): zero-mean redistributions of the local irradiance.
@@ -150,7 +171,8 @@ else if ( ( int( uTileWater + 0.5 ) & 1 ) != 0 && brNWg.y < 0.5 && uBrReflPass <
 `;
 
 /** Replaces `#include <aomap_fragment>`: specular occlusion from the baked AO (indirect diffuse already holds the
- * baked AO) times the texture cavity AO + planar / emission-map reflections added to indirectSpecular. */
+ * baked AO) times the texture cavity AO + planar / emission-map reflections added to indirectSpecular; on G-buffer
+ * pixels (brMrtSpec) the fallback specular brFbSpec and its weight brWs instead (package D). */
 export const FRAG_AO_REFL_GLSL = /* glsl */ `
 // ==== WP9 specular occlusion + reflections
 float brDotNV = saturate( dot( geometryNormal, geometryViewDir ) );
@@ -158,9 +180,11 @@ float brDotNV = saturate( dot( geometryNormal, geometryViewDir ) );
 // the indirect diffuse, so only the micro occlusion multiplies it
 float brCav = clamp( brOrmh.r, 0.0, 1.0 );
 reflectedLight.indirectDiffuse *= brCav;
-reflectedLight.indirectSpecular *= computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav, material.roughness );
+float brSO = computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav, material.roughness );
+reflectedLight.indirectSpecular *= brSO;
 vec3 brNWp = normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz );
 vec3 brRefl = vec3( 0.0 );
+vec3 brReflRad = vec3( 0.0 ); // the emission-map reflection's radiance x its fade and roughness gate (package D)
 #ifndef BR_DECAL
 {
 	float brFres = F_Schlick( 0.04, 1.0, brDotNV );
@@ -199,11 +223,30 @@ vec3 brRefl = vec3( 0.0 );
 			float brFade;
 			vec3 brEc = brEmissionRefl( vBrLocal, brRw, brPlaneY, brRk, material.roughness, brFade );
 			brRefl = brEc * brFres * brGloss * ( brAO * brSsK ) * brFade * brRGate;
+			brReflRad = brEc * brFade * brRGate;
 			// submerged: the tile/water interface reflects ~10x less than tile/air (F0 0.004 vs 0.04)
 			if ( ( brF & BR_F_UNDERWATER ) != 0 && brAuxB.w * 0.05 - 3.2 > vBrLocal.y ) brRefl *= BR_UNDERWATER_REFL;
 		}
 	}
 #endif
+}
+#endif
+#if defined( BR_SSR ) && ! defined( BR_DECAL )
+if ( brMrtSpec ) {
+	// package D: the replaceable specular of a G-buffer pixel, weighted as the inline terms were (the environment
+	// radiance by the single-scatter DFG term, three's sheen energy loss and the specular occlusion; the
+	// emission-map reflection by its legacy F x gloss x AO), plus the baked lobe; nothing of it stays inline
+	vec3 brSsD = vec3( 0.0 ), brMsD = vec3( 0.0 ), brSsM = vec3( 0.0 ), brMsM = vec3( 0.0 );
+	computeMultiscattering( material.dfg, material.specularColor, material.specularF90, brSsD, brMsD );
+	computeMultiscattering( material.dfg, material.diffuseColor, material.specularF90, brSsM, brMsM );
+	vec3 brSSw = mix( brSsD, brSsM, material.metalness );
+#ifdef USE_SHEEN
+	brSSw *= 1.0 - max3( material.sheenColor ) * IBLSheenBRDF( geometryNormal, geometryViewDir, material.sheenRoughness );
+#endif
+	brFbSpec = brFbEnv * brSSw * brSO + brRefl + brFbDir;
+	brWs = brLuma( brSSw ) * brSO;
+	brMrtRough = material.roughness;
+	brRefl = vec3( 0.0 );
 }
 #endif
 reflectedLight.indirectSpecular += brRefl;
