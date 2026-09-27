@@ -331,13 +331,14 @@ float brWaterCover( vec2 p, out float wy ) {
 // scale that varies along one surface (walls, pillars, arch soffits: the height above the water changes) would slide
 // the net by |pw| d(1/sc), hundreds of cells per metre of height at |pw| ~ 600 m: noise. The scale therefore steps
 // through levels BR_CAUSTIC_LEVEL^k, each snapped so that 2048 / sc is a multiple of 4 (the lattices and their warp
-// stay periodic over NOISE_WRAP), and cross-fades to the next level over the middle of each step (a single
-// evaluation elsewhere). Every level has the same mean, brCausticMeanW( 0.18 ).
+// stay periodic over NOISE_WRAP), and cross-fades to the next level over the middle 2 x band of each step (a single
+// evaluation elsewhere; horizontal faces, whose height is constant, pass a narrow band). Every level has the same
+// mean, brCausticMeanW( 0.18 ).
 float brCausticLevel( float k ) { return 2048.0 / ( 4.0 * floor( 512.0 / pow( BR_CAUSTIC_LEVEL, k ) + 0.5 ) ); }
-float brCausticsAbove( vec2 xz, float t, float sc ) {
+float brCausticsAbove( vec2 xz, float t, float sc, float band ) {
 	float L = log2( max( sc, 1.0 ) ) / log2( BR_CAUSTIC_LEVEL );
 	float k = floor( L );
-	float w = smoothstep( 0.3, 0.7, L - k );
+	float w = smoothstep( 0.5 - band, 0.5 + band, L - k );
 	float c = 0.0;
 	if ( w < 1.0 ) c += ( 1.0 - w ) * brCausticsW( xz, t, 0.0, brCausticLevel( k ), 0.18 );
 	if ( w > 0.0 ) c += w * brCausticsW( xz, t, 0.0, brCausticLevel( k + 1.0 ), 0.18 );

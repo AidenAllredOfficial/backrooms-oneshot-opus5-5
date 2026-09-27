@@ -74,7 +74,7 @@ describe('caustic pattern', () => {
     // twin of chunks/water.ts brCausticLevel / brCausticsAbove
     const level = (k: number): number => 2048 / (4 * Math.floor(512 / Math.pow(WATER_CAUSTICS.LEVEL, k) + 0.5));
     const above = (x: number, z: number, t: number, sc: number): number => {
-      const L = Math.log2(Math.max(sc, 1)) / Math.log2(WATER_CAUSTICS.LEVEL), k = Math.floor(L), w = sstep(0.3, 0.7, L - k);
+      const L = Math.log2(Math.max(sc, 1)) / Math.log2(WATER_CAUSTICS.LEVEL), k = Math.floor(L), w = sstep(0.3, 0.7, L - k); // walls: band 0.2
       return (w < 1 ? (1 - w) * causticsW(x, z, t, 0, level(k), 0.18) : 0) + (w > 0 ? w * causticsW(x, z, t, 0, level(k + 1), 0.18) : 0);
     };
     for (let k = 0; k < 8; k++) {
@@ -93,8 +93,10 @@ describe('caustic pattern', () => {
     }
     expect(maxStep).toBeLessThan(0.02);
     expect(maxCont).toBeGreaterThan(0.2);
-    expect(FRAG_LIGHTS_GLSL).toMatch(/brCausticsAbove\( brXs \+ uNoiseOrigin\.xz, uTime \* 0\.7, 1\.0 \+ brH \* BR_CAUSTIC_MAGNIFY \)/);
-    expect(WATER_SURF_GLSL).toContain('float brCausticsAbove( vec2 xz, float t, float sc )');
+    expect(FRAG_LIGHTS_GLSL).toContain('brCausticsAbove( brXs + uNoiseOrigin.xz, uTime * 0.7, 1.0 + brH * BR_CAUSTIC_MAGNIFY, brBand )');
+    expect(FRAG_LIGHTS_GLSL).toContain('float brBand = abs( brNWg.y ) > 0.9 ? 0.05 : 0.2;');
+    expect(WATER_SURF_GLSL).toContain('float brCausticsAbove( vec2 xz, float t, float sc, float band )');
+    expect(WATER_SURF_GLSL).toContain('float w = smoothstep( 0.5 - band, 0.5 + band, L - k );');
   });
   it('the pool-floor pattern keeps its own mean (brCaustics = brCausticsW with width 0.26 + depth / 2)', () => {
     expect(HELPERS_GLSL).toContain('return brCausticsW( xz, t, 0.5 * depth, sc, 0.26 )');

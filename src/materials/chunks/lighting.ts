@@ -136,7 +136,8 @@ else if ( ( int( uTileWater + 0.5 ) & 1 ) != 0 && brNWg.y < 0.5 && uBrReflPass <
 	float brH = vBrLocal.y - brCwy;
 	if ( brCov > 0.0 && brH > 0.02 ) {
 		vec2 brXs = vBrLocal.xz - brNWg.xz * ( brH * 0.3 );
-		float brC = brCausticsAbove( brXs + uNoiseOrigin.xz, uTime * 0.7, 1.0 + brH * BR_CAUSTIC_MAGNIFY );
+		float brBand = abs( brNWg.y ) > 0.9 ? 0.05 : 0.2; // flat ceilings: constant height, a narrow cross-fade band
+		float brC = brCausticsAbove( brXs + uNoiseOrigin.xz, uTime * 0.7, 1.0 + brH * BR_CAUSTIC_MAGNIFY, brBand );
 		float brStr = brNWg.y < - 0.5 ? BR_CAUSTIC_CEIL : BR_CAUSTIC_ABOVE_WALL;
 		irradiance += brE * ( brStr * ( brC - brCausticMeanW( 0.18 ) ) * brCov / ( 1.0 + BR_CAUSTIC_FADE * brH ) );
 	}
