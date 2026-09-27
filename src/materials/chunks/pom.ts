@@ -10,19 +10,16 @@ export const POM_PARS_GLSL = /* glsl */ `
 #ifdef BR_POM
 #if BR_POM >= 2
 #define BR_POM_MAX BR_POM_MAX_2
+#define BR_POM_STEP_PX BR_POM_PX_PER_STEP_2
 #else
 #define BR_POM_MAX BR_POM_MAX_1
+#define BR_POM_STEP_PX BR_POM_PX_PER_STEP
 #endif
-// texture height (normal.a) at uv through the rotated-tile transform of physical tiles (brRotUv) and the unshifted
-// footprint (dx, dy): the march and its self-shadow read exactly the texels the main sampling shades
-float brPomH( vec2 uv, vec2 cells, uint salt, float lf, vec2 dx, vec2 dy ) {
-	if ( cells.x > 0.0 ) {
-		mat2 M;
-		int ri;
-		vec2 uvR = brRotUv( uv, cells, salt, M, ri );
-		return textureGrad( uBrNormal, vec3( uvR, lf ), ( M * ( dx * cells ) ) / cells, ( M * ( dy * cells ) ) / cells ).a;
-	}
-	return textureGrad( uBrNormal, vec3( uv, lf ), dx, dy ).a;
+// texture height (normal.a) at uv under the march's fixed cell transform: texel uv = ( b0 + M ( uv cells - c0 ) ) / cells
+// (a rotated physical tile's hashed rotation / flip M and cell offset, taken at the march start; plain layers: cells 1,
+// M identity, b0 = c0), with the unshifted footprint (gx, gy) in texel uv
+float brPomH( vec2 uv, mat2 M, vec2 cells, vec2 c0, vec2 b0, float lf, vec2 gx, vec2 gy ) {
+	return textureGrad( uBrNormal, vec3( ( b0 + M * ( uv * cells - c0 ) ) / cells, lf ), gx, gy ).a;
 }
 #endif
 `;
@@ -46,7 +43,7 @@ export const FRAG_DIRVIS_GLSL = /* glsl */ `
 			for ( int i = 1; i <= BR_POM_SH_STEPS; i ++ ) {
 				float brT = float( i ) / float( BR_POM_SH_STEPS );
 				float brRay = mix( brPomHitN, 1.0, brT );
-				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brDx, brDy ) / brPTop;
+				float brHs = brPomH( brUv + brDuL * brT, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomGx, brPomGy ) / brPTop;
 				brOcc = max( brOcc, ( brHs - brRay ) * BR_POM_SH_K * ( 1.0 - 0.5 * brT ) );
 			}
 			brDirVis *= 1.0 - clamp( brOcc, 0.0, 1.0 ) * brPomK * brW;

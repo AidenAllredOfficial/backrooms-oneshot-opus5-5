@@ -4,7 +4,8 @@
 // map_fragment replacement) and stashed in main-scope variables, because in r186 roughnessmap_fragment runs before
 // normal_fragment_maps. Main-scope outputs read later (chunks/materialPost.ts, debug views, packages D/E): brWet,
 // brFilm, brPuddle, brDust, brCov, brWear, brPileLean, brTbn; POM state for chunks/pom.ts FRAG_DIRVIS_GLSL (brPomOn,
-// brPomT/B/N, brPomRep, brPomDepth, brPomHitN, brPomK, brPomSalt); detail state (brDetUv, brDetSl, brDetVar).
+// brPomT/B/N, brPomRep, brPomDepth, brPomHitN, brPomK and the cell transform brPomM/Cells/C0/B0/Gx/Gy); detail state
+// (brDetUv, brDetSl, brDetVar).
 // Detail maps (BR_DETAIL_MAPS, chunks/detail.ts) and POM (BR_POM, chunks/pom.ts) are package B's high / ultra paths.
 
 import { DecalKind } from '../../core/ids.ts';
@@ -112,7 +113,9 @@ bool brPomOn = false;
 vec3 brPomT = vec3( 1.0, 0.0, 0.0 ), brPomB = vec3( 0.0, 1.0, 0.0 ), brPomN = vec3( 0.0, 0.0, 1.0 );
 vec2 brPomRep = vec2( 1.0 );
 float brPomDepth = 0.0, brPomHitN = 1.0, brPomK = 0.0;
-uint brPomSalt = 0u;
+// the height lookup's cell transform (chunks/pom.ts brPomH), fixed at the march start
+mat2 brPomM = mat2( 1.0 );
+vec2 brPomCells = vec2( 1.0 ), brPomC0 = vec2( 0.5 ), brPomB0 = vec2( 0.5 ), brPomGx = vec2( 0.0 ), brPomGy = vec2( 0.0 );
 {
 	vec3 brQ0 = dFdx( vViewPosition );
 	vec3 brQ1 = dFdy( vViewPosition );
@@ -132,13 +135,27 @@ uint brPomSalt = 0u;
 		float brShift = brPomDepth * sqrt( 1.0 - brNdV * brNdV ) / ( brNdV * max( max( length( brQ0 ), length( brQ1 ) ), 1e-6 ) );
 		float brFadeP = smoothstep( BR_POM_MIN_PX, BR_POM_FULL_PX, brShift );
 		if ( brFadeP > 0.0 ) {
-			brPomSalt = brTileSalt( brNWg );
+			brPomGx = brDx;
+			brPomGy = brDy;
+			if ( brLA.x > 0.0 ) {
+				// rotated physical tile: its cell transform is fixed for the whole march (re-hashing per step dominated
+				// the cost on tiled floors); a step past the cell edge reads the start cell's layout continued (the
+				// same grout grid, another tile's tilt), and the shading below re-derives the true cell of the hit
+				brPomCells = brLA.xy;
+				int brRi;
+				vec2 brUvR0 = brRotUv( brUv, brPomCells, brTileSalt( brNWg ), brPomM, brRi );
+				vec2 brCu = brUv * brPomCells;
+				brPomC0 = floor( brCu ) + 0.5;
+				brPomB0 = brUvR0 * brPomCells - brPomM * ( brCu - brPomC0 );
+				brPomGx = ( brPomM * ( brDx * brPomCells ) ) / brPomCells;
+				brPomGy = ( brPomM * ( brDy * brPomCells ) ) / brPomCells;
+			}
 			vec2 brDUv = - vec2( dot( brV, brPomT ), dot( brV, brPomB ) ) / brPomRep * ( brPomDepth * brFadeP / brNdV );
-			int brSteps = clamp( int( ceil( brShift / BR_POM_PX_PER_STEP ) ), 4, BR_POM_MAX );
+			int brSteps = clamp( int( ceil( brShift / BR_POM_STEP_PX ) ), 4, BR_POM_MAX );
 			float brStep = 1.0 / float( brSteps );
 			vec2 brUvP = brUv;
 			float brRayP = 1.0;
-			float brHP = brPomH( brUv, brLA.xy, brPomSalt, brLayerF, brDx, brDy ) / brTop;
+			float brHP = brPomH( brUv, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomGx, brPomGy ) / brTop;
 			vec2 brUvHit = brUv;
 			float brHitN = 1.0;
 			if ( brHP < 1.0 ) {
@@ -146,7 +163,7 @@ uint brPomSalt = 0u;
 					if ( i > brSteps ) break;
 					float brRay = 1.0 - float( i ) * brStep;
 					vec2 brUvC = brUv + brDUv * ( 1.0 - brRay );
-					float brHC = brPomH( brUvC, brLA.xy, brPomSalt, brLayerF, brDx, brDy ) / brTop;
+					float brHC = brPomH( brUvC, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomGx, brPomGy ) / brTop;
 					if ( brHC >= brRay ) {
 						// secant between the last sample above the surface and the first below it
 						float brSa = brRayP - brHP;

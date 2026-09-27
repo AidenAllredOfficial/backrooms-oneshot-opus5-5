@@ -69,8 +69,8 @@ export const SURFACE_PHYS: Readonly<Record<MatId, SurfacePhys>> = {
   [Mat.CONCRETE_WALL]: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8 }),
   [Mat.CONCRETE_CEIL]: phys(0.6, { det: 4, detS: 0.8 }),
   [Mat.CMU_PAINTED]: phys(0.3, { pomTop: 0.8, tok: 0.6, det: 3, detS: 0.8 }),
-  [Mat.POOL_TILE]: phys(0.08, { pomTop: 0.9, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
-  [Mat.POOL_MOSAIC]: phys(0.05, { pomTop: 0.7, tok: 0.3, det: 6, detS: 0.7, glaze: 0.1, roughComp: 0.7 }),
+  [Mat.POOL_TILE]: phys(0.08, { pomTop: 0.8, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
+  [Mat.POOL_MOSAIC]: phys(0.05, { pomTop: 0.6, tok: 0.3, det: 6, detS: 0.7, glaze: 0.1, roughComp: 0.7 }),
   [Mat.METAL_PAINTED]: phys(0.05, { det: 3, detS: 0.6 }),
   [Mat.METAL_RUST]: phys(0.4, { det: 4, detS: 0.6 }),
   [Mat.METAL_GRATE]: phys(0),
@@ -235,6 +235,7 @@ export const TUNE = {
   POM_MIN_PX: 0.5, // no POM below this much parallax (pixels)...
   POM_FULL_PX: 1.5, // ...full depth from here
   POM_PX_PER_STEP: 1.5, // linear-search step length (pixels), then one secant refinement
+  POM_PX_PER_STEP_2: 2.25, // BR_POM 2 (ultra renders at 1.5x: the same 1.5 display pixels)
   POM_MAX_1: 12, // steps, BR_POM 1 (high)
   POM_MAX_2: 16, // steps, BR_POM 2 (ultra)
   POM_SH_STEPS: 4, // self-shadow steps toward the baked light (BR_POM 2)
@@ -418,6 +419,7 @@ export function glslConstants(): string {
 #define BR_POM_MIN_PX ${f(TUNE.POM_MIN_PX)}
 #define BR_POM_FULL_PX ${f(TUNE.POM_FULL_PX)}
 #define BR_POM_PX_PER_STEP ${f(TUNE.POM_PX_PER_STEP)}
+#define BR_POM_PX_PER_STEP_2 ${f(TUNE.POM_PX_PER_STEP_2)}
 #define BR_POM_MAX_1 ${TUNE.POM_MAX_1}
 #define BR_POM_MAX_2 ${TUNE.POM_MAX_2}
 #define BR_POM_SH_STEPS ${TUNE.POM_SH_STEPS}
