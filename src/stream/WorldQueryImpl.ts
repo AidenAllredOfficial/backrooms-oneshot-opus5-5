@@ -5,13 +5,19 @@
 // Hot-path rules: no allocation per call. Returned PortalHit / FixtureRef / EmitterRef objects are
 // precomputed per chunk when its data is registered; propAt returns ONE reused PropHit object (overwritten
 // by the next call).
+//
+// raycast (package F: flashlight bounce; usable by audio and gameplay) walks the cells along the ray (2D DDA in xz)
+// and intersects, per cell, the floor and ceiling planes, the collision boxes listed in the cell (walls, jambs and
+// posts WITH their thickness, SOLID masses, blockers, risers and soffits, colliding props) and the chunk's ramps. The
+// nearest hit inside a cell's span is final: a box crossing the ray there is listed in that cell too (the cell lists
+// are expanded by PLAYER.radius).
 
-import { CELL, CHUNK_CELLS, CHUNK_SIZE, PLAYER, STD_CEIL_CM, STOREY_PITCH, TOWER_SPAN } from '../core/constants.ts';
+import { CELL, CHUNK_CELLS, CHUNK_SIZE, PLAYER, STD_CEIL_CM, STOREY_PITCH, TOWER_SPAN, WALL_T } from '../core/constants.ts';
 import { EDGE_SOUND, edgeOccludesAt } from '../core/edges.ts';
 import {
   cellToChunk, exIdx, ezIdx, tileKeyStr, tileOfPoint, worldToCell, type ChunkKey,
 } from '../core/grid.ts';
-import { CellFlag, Mood, SolidFlag, SurfaceSound, Zone, type MoodId, type StoreyId, type SurfaceSoundId, type ZoneId } from '../core/ids.ts';
+import { CellFlag, EdgeKind, Mood, SolidFlag, SurfaceSound, Zone, type MoodId, type StoreyId, type SurfaceSoundId, type ZoneId } from '../core/ids.ts';
 import { NO_WATER, TOWER_REPLICAS, towerGroups, type ChunkLayout, type Solid } from '../core/layout.ts';
 import { LAYER_DEFS } from '../core/materials.ts';
 import type { ChunkCollision } from '../core/mesh.ts';
@@ -149,6 +155,13 @@ const EPS = 1e-6;
 const NOT_WALKABLE = CellFlag.SOLID | CellFlag.VOID | CellFlag.NOWALK;
 const STEP_CM = Math.round(PLAYER.stepMax * 100);
 const WADE_CM = Math.round(PLAYER.wadeMaxDepth * 100);
+/** raycast: albedo of colliding props and other non-edge boxes (the bake's PROP_RHO) */
+export const RAY_PROP_RHO = 0.3;
+/** raycast: albedo when the material is unknown */
+export const RAY_UNKNOWN_RHO = 0.4;
+/** raycast: a vertical box face this close to a cell line belongs to that line's edge (walls are WALL_T thick) */
+const RAY_EDGE_TOL = WALL_T / 2 + 0.02;
+const RAY_FLOOR = 1, RAY_CEIL = 2, RAY_BOX = 3, RAY_RAMP = 4, RAY_SOLID = 5;
 
 // ---------------------------------------------------------------- the query
 
@@ -166,6 +179,15 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
   const hit: PropHit = { kind: 0, x: 0, y: 0, z: 0, seed: 0, cx: 0, cz: 0 };
 
   const dataOf = (): StoreyData => deps.data(deps.storey());
+  /** A fresh per-box dedupe stamp (boxesNear, raycast). */
+  const nextStamp = (): void => {
+    stampId = (stampId + 1) >>> 0;
+    if (stampId === 0) {
+      // wrapped: clear every stamp so stale ids cannot alias
+      for (const s of [0, 1, 2] as StoreyId[]) for (const d of deps.data(s).map.values()) d.stamp.fill(0);
+      stampId = 1;
+    }
+  };
 
   const locateCell = (gi: number, gj: number): ChunkData | null => {
     const cx = cellToChunk(gi), cz = cellToChunk(gj);
@@ -375,6 +397,95 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
     return -1;
   };
 
+  // ---- raycast scratch: the nearest hit so far (t, normal) and what was hit (for the albedo)
+  let rBest = 0, rNx = 0, rNy = 0, rNz = 0, rWhat = 0, rMat = 0, rFlags = 0;
+
+  /** Slab test against box o of chunk d (chunk-local); keeps the entry hit if it is the nearest so far. An origin
+   * inside the box sees no hit (the entry lies behind it). */
+  const rayBox = (d: ChunkData, o: number, x: number, y: number, z: number, dx: number, dy: number, dz: number): void => {
+    const b = d.collision.boxes;
+    let t0 = -Infinity, t1 = rBest, ax = -1;
+    const lo0 = b[o] + d.ox - x, hi0 = b[o + 3] + d.ox - x;
+    if (dx !== 0) {
+      const a = lo0 / dx, c = hi0 / dx;
+      const n = a < c ? a : c, f = a < c ? c : a;
+      if (n > t0) { t0 = n; ax = 0; }
+      if (f < t1) t1 = f;
+    } else if (lo0 > 0 || hi0 < 0) return;
+    const lo1 = b[o + 1] - y, hi1 = b[o + 4] - y;
+    if (dy !== 0) {
+      const a = lo1 / dy, c = hi1 / dy;
+      const n = a < c ? a : c, f = a < c ? c : a;
+      if (n > t0) { t0 = n; ax = 1; }
+      if (f < t1) t1 = f;
+    } else if (lo1 > 0 || hi1 < 0) return;
+    const lo2 = b[o + 2] + d.oz - z, hi2 = b[o + 5] + d.oz - z;
+    if (dz !== 0) {
+      const a = lo2 / dz, c = hi2 / dz;
+      const n = a < c ? a : c, f = a < c ? c : a;
+      if (n > t0) { t0 = n; ax = 2; }
+      if (f < t1) t1 = f;
+    } else if (lo2 > 0 || hi2 < 0) return;
+    if (ax < 0 || !(t0 > 1e-6) || t0 > t1 || t0 >= rBest) return;
+    rBest = t0; rWhat = RAY_BOX; rFlags = d.collision.boxFlags[(o / 6) | 0];
+    rNx = ax === 0 ? -Math.sign(dx) : 0; rNy = ax === 1 ? -Math.sign(dy) : 0; rNz = ax === 2 ? -Math.sign(dz) : 0;
+  };
+
+  /** The chunk's ramps (stair flights): the walkable inclined top, hit from above. */
+  const rayRamps = (d: ChunkData, x: number, y: number, z: number, dx: number, dy: number, dz: number): void => {
+    const r = d.collision.ramps;
+    for (let o = 0; o < r.length; o += 8) {
+      const x0 = r[o] + d.ox, z0 = r[o + 1] + d.oz, x1 = r[o + 2] + d.ox, z1 = r[o + 3] + d.oz;
+      const y0 = r[o + 4], y1 = r[o + 5], dir = r[o + 6];
+      // top height h = hc + gx * px + gz * pz over the footprint
+      let gx = 0, gz = 0, hc: number;
+      if (dir === 0) { gx = (y1 - y0) / (x1 - x0 || 1); hc = y0 - gx * x0; }
+      else if (dir === 1) { gx = -(y1 - y0) / (x1 - x0 || 1); hc = y0 - gx * x1; }
+      else if (dir === 2) { gz = (y1 - y0) / (z1 - z0 || 1); hc = y0 - gz * z0; }
+      else { gz = -(y1 - y0) / (z1 - z0 || 1); hc = y0 - gz * z1; }
+      const den = dy - gx * dx - gz * dz; // < 0: the ray descends onto the slope
+      if (!(den < 0)) continue;
+      const t = (hc + gx * x + gz * z - y) / den;
+      if (!(t > 1e-6) || t >= rBest) continue;
+      const px = x + dx * t, pz = z + dz * t;
+      if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
+      const nl = 1 / Math.sqrt(gx * gx + 1 + gz * gz);
+      rBest = t; rWhat = RAY_RAMP; rNx = -gx * nl; rNy = nl; rNz = -gz * nl;
+      rMat = d.layout.floorMat[((worldToCell(pz) - d.key.cz * CHUNK_CELLS) * CHUNK_CELLS) + worldToCell(px) - d.key.cx * CHUNK_CELLS] ?? -1;
+    }
+  };
+
+  /** Material of a recorded box hit at (hx, hy, hz): the edge's face material for wall pieces, the floor material on
+   * walkable tops, the cell's wall material for faces on an open cell line (SOLID cover, risers, soffits); -1 for
+   * props. */
+  const boxMat = (hx: number, hy: number, hz: number): number => {
+    if (rNy > 0.5 && (rFlags & SolidFlag.WALKABLE_TOP) !== 0) {
+      // a blocker's top or a riser's top carries the cell's floor material; any other walkable top is a prop
+      const d = locateCell(worldToCell(hx), worldToCell(hz));
+      if (!d) return -1;
+      const fl = d.layout.floorCm[ci] / 100;
+      const top = fl + d.layout.blockCm[ci] / 100;
+      return Math.abs(hy - fl) < 0.02 || Math.abs(hy - top) < 0.02 ? d.layout.floorMat[ci] : -1;
+    }
+    if (rNx === 0 && rNz === 0) return -1;
+    const axisX = rNx !== 0;
+    const along = axisX ? hx : hz;
+    const line = Math.round(along / CELL);
+    if (Math.abs(along - line * CELL) > RAY_EDGE_TOL) return -1;
+    const neg = (axisX ? rNx : rNz) < 0; // the face looks toward -axis: the ray came from cell line - 1
+    // the cell in front of the face, and the edge's index in that cell's chunk (border lines exist in both chunks)
+    const fi = axisX ? (neg ? line - 1 : line) : worldToCell(hx);
+    const fj = axisX ? worldToCell(hz) : (neg ? line - 1 : line);
+    const d = locateCell(fi, fj);
+    if (!d) return -1;
+    const l = d.layout;
+    const eg = axisX ? l.ex : l.ez;
+    const idx = axisX ? exIdx(line - d.key.cx * CHUNK_CELLS, fj - d.key.cz * CHUNK_CELLS)
+      : ezIdx(fi - d.key.cx * CHUNK_CELLS, line - d.key.cz * CHUNK_CELLS);
+    if (eg.kind[idx] !== EdgeKind.OPEN) return neg ? eg.matNeg[idx] : eg.matPos[idx];
+    return l.wallMat[ci];
+  };
+
   const q: WorldQuery = {
     get storey() { return deps.storey(); },
 
@@ -482,12 +593,7 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
     boxesNear(x, z, r, out) {
       const cap = (out.length / 6) | 0;
       let n = 0;
-      stampId = (stampId + 1) >>> 0;
-      if (stampId === 0) {
-        // wrapped: clear every stamp so stale ids cannot alias
-        for (const s of [0, 1, 2] as StoreyId[]) for (const d of deps.data(s).map.values()) d.stamp.fill(0);
-        stampId = 1;
-      }
+      nextStamp();
       // cell range clamped to the registered chunks (a huge or infinite r must not become an unbounded loop)
       const sd = dataOf();
       const gi0 = Math.max(worldToCell(x - r), sd.minCx * CHUNK_CELLS), gi1 = Math.min(worldToCell(x + r), sd.maxCx * CHUNK_CELLS + CHUNK_CELLS - 1);
@@ -601,6 +707,87 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
       const md = maxDist < MAX_RAY ? maxDist : MAX_RAY;
       const s = march(x, y, z, x + ux * md, y, z + uz * md);
       return s > 1 ? maxDist : s * md;
+    },
+
+    raycast(x, y, z, dx, dy, dz, maxDist, out) {
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (!(len > 0) || !(maxDist > 0)) return false;
+      dx /= len; dy /= len; dz /= len;
+      const md = maxDist < MAX_RAY ? maxDist : MAX_RAY;
+      rBest = md; rWhat = 0; rMat = -1;
+      nextStamp();
+      let gi = worldToCell(x), gj = worldToCell(z);
+      const stepI = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+      const stepJ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
+      const tDeltaX = stepI !== 0 ? CELL / Math.abs(dx) : Infinity;
+      const tDeltaZ = stepJ !== 0 ? CELL / Math.abs(dz) : Infinity;
+      let tMaxX = stepI > 0 ? ((gi + 1) * CELL - x) / dx : stepI < 0 ? (gi * CELL - x) / dx : Infinity;
+      let tMaxZ = stepJ > 0 ? ((gj + 1) * CELL - z) / dz : stepJ < 0 ? (gj * CELL - z) / dz : Infinity;
+      let tEnter = 0;
+      let lastAxisX = true; // axis of the last cell-line crossing (the face of a SOLID cell entered there)
+      let rampChunk: ChunkData | null = null;
+      let prevWall = -1; // wall material of the previous cell (the face of a SOLID cell looks into it)
+      for (let n = 0; n < 4096; n++) {
+        const d = locateCell(gi, gj);
+        if (!d) break; // unloaded: nothing more is known along the ray
+        const l = d.layout, c = ci;
+        const f = l.flags[c];
+        const tExit = Math.min(tMaxX, tMaxZ);
+        if (f & CellFlag.SOLID) {
+          if (n === 0) return false; // the origin is inside solid mass
+          if (tEnter < rBest) {
+            rBest = tEnter; rWhat = RAY_SOLID; rMat = prevWall;
+            rNx = lastAxisX ? -stepI : 0; rNy = 0; rNz = lastAxisX ? 0 : -stepJ;
+          }
+          break;
+        }
+        if (n > 0 && tEnter < rBest) {
+          // entering below this cell's floor (a step up) or above its ceiling (a soffit): the face on the cell line
+          const ye = y + dy * tEnter;
+          const below = (f & (CellFlag.VOID | CellFlag.TOWER)) === 0 && ye < l.floorCm[c] / 100 - 1e-4;
+          const above = (f & (CellFlag.NO_CEIL | CellFlag.TOWER)) === 0 && ye > l.ceilCm[c] / 100 + 1e-4;
+          if (below || above) {
+            rBest = tEnter; rWhat = RAY_SOLID; rMat = below ? l.floorMat[c] : prevWall;
+            rNx = lastAxisX ? -stepI : 0; rNy = 0; rNz = lastAxisX ? 0 : -stepJ;
+            break;
+          }
+        }
+        // floor and ceiling planes of this cell (TOWER shafts, VOID pits and NO_CEIL cells have none: their
+        // surfaces are boxes and ramps)
+        if (dy < 0 && (f & (CellFlag.VOID | CellFlag.TOWER)) === 0) {
+          const t = (l.floorCm[c] / 100 - y) / dy;
+          if (t >= tEnter - 1e-9 && t <= tExit && t > 1e-6 && t < rBest) {
+            rBest = t; rWhat = RAY_FLOOR; rMat = l.floorMat[c]; rNx = 0; rNy = 1; rNz = 0;
+          }
+        } else if (dy > 0 && (f & (CellFlag.NO_CEIL | CellFlag.TOWER)) === 0) {
+          const t = (l.ceilCm[c] / 100 - y) / dy;
+          if (t >= tEnter - 1e-9 && t <= tExit && t > 1e-6 && t < rBest) {
+            rBest = t; rWhat = RAY_CEIL; rMat = l.ceilMat[c]; rNx = 0; rNy = -1; rNz = 0;
+          }
+        }
+        const col = d.collision, st = d.stamp;
+        for (let k = col.cellStart[c], e = col.cellStart[c + 1]; k < e; k++) {
+          const i = col.cellBoxes[k];
+          if (st[i] === stampId) continue;
+          st[i] = stampId;
+          rayBox(d, i * 6, x, y, z, dx, dy, dz);
+        }
+        if (d !== rampChunk) { rampChunk = d; rayRamps(d, x, y, z, dx, dy, dz); }
+        if (rBest <= tExit) break; // nothing in a later cell can be nearer
+        prevWall = l.wallMat[c];
+        if (tMaxX <= tMaxZ) { gi += stepI; tEnter = tMaxX; tMaxX += tDeltaX; lastAxisX = true; }
+        else { gj += stepJ; tEnter = tMaxZ; tMaxZ += tDeltaZ; lastAxisX = false; }
+        if (tEnter >= rBest) break;
+      }
+      if (rWhat === 0) return false;
+      const t = rBest;
+      const hx = x + dx * t, hz = z + dz * t;
+      const mat = rWhat === RAY_BOX ? boxMat(hx, y + dy * t, hz) : rMat;
+      const a = mat >= 0 ? LAYER_DEFS[mat]?.albedoMean : undefined;
+      const rho = rWhat === RAY_BOX && mat < 0 ? RAY_PROP_RHO : RAY_UNKNOWN_RHO;
+      out.t = t; out.nx = rNx; out.ny = rNy; out.nz = rNz;
+      if (a) { out.r = a[0]; out.g = a[1]; out.b = a[2]; } else { out.r = rho; out.g = rho; out.b = rho; }
+      return true;
     },
 
     edgeSound(axis, gi, gj) {
