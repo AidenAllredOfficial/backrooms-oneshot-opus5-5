@@ -88,7 +88,11 @@ describe('FRAG_EMISSIVE_GLSL', () => {
     expect(lines.slice(b).some((s) => /dFd[xy]\(|fwidth\(/.test(s))).toBe(false);
   });
 
-  it('ends with the closing brace (E appends its two lines after it)', () => {
-    expect(FRAG_EMISSIVE_GLSL.trimEnd().endsWith('}')).toBe(true);
+  it('ends with the closing brace, followed only by the two lines package E appends', () => {
+    const tail = FRAG_EMISSIVE_GLSL.trimEnd().split('\n');
+    const e = tail.findIndex((s) => s.startsWith('vec4 brSubInfo = brWaterSubInfo('));
+    expect(e).toBe(tail.length - 2);
+    expect(tail[e + 1]).toMatch(/^#define getSpotLightInfo\( l, p, d \) brSpotInfoW\(/);
+    expect(tail.slice(0, e).join('\n').trimEnd().endsWith('}')).toBe(true);
   });
 });
