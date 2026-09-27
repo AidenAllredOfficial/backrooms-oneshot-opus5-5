@@ -12,7 +12,7 @@ import { HELPERS_GLSL } from '../../src/materials/chunks/common.ts';
 import { TUNE } from '../../src/materials/chunks/params.ts';
 import { PREPASS, PREPASS_LATE, renderWithPrepass } from '../../src/materials/prepass.ts';
 import { LAYER_LATE } from '../../src/materials/shared.ts';
-import { buildSurfaceVertex } from '../../src/materials/SurfaceMaterial.ts';
+import { buildSurfaceFragment, buildSurfaceVertex } from '../../src/materials/SurfaceMaterial.ts';
 import { genNb, tileKey } from '../mesh/helpers.ts';
 
 const ZONES: ZoneId[] = [Zone.LOBBY, Zone.OFFICE, Zone.PARKING, Zone.POOLROOMS, Zone.PIPEWORKS, Zone.WAREHOUSE];
@@ -91,6 +91,13 @@ describe('depth program', () => {
     expect(depth.uniforms.uPropCull.value).toBe(1);
     expect(depth.colorWrite).toBe(false);
     expect(depth.side).toBe(THREE.FrontSide);
+  });
+
+  it('POM and detail maps only move texture lookups: nothing writes gl_FragDepth, the depth program has neither', () => {
+    // parallax occlusion mapping shifts the shading uv of the flat face; depth, discards and silhouettes stay those of
+    // the geometry, so the prepass depth still matches the shading pass bit for bit
+    expect(buildSurfaceFragment(THREE.ShaderLib.physical.fragmentShader)).not.toMatch(/gl_FragDepth/);
+    expect(depth.fragmentShader).not.toMatch(/gl_FragDepth|BR_POM|brPom|uBrDetail/);
   });
 });
 

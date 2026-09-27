@@ -6,7 +6,7 @@
 // proportions / colours / shape (SHELF_RACK 2 = collapsed, CAR_SEDAN 3 = driver door open); larger variant numbers
 // wrap modulo 4. The prop seed only changes tints and seeded placements, never the triangle count.
 
-import { PropFlag, PROP_KIND_COUNT, type PropKindId } from '../core/ids.ts';
+import { PropFlag, PropKind, PROP_KIND_COUNT, type PropKindId } from '../core/ids.ts';
 import type { Fixture, PropPlacement, Solid } from '../core/layout.ts';
 import { PROP_DEFS } from '../core/props.ts';
 import type { GeometryWriter } from '../core/writer.ts';
@@ -34,6 +34,11 @@ export const PROP_BUILDERS: readonly PropBuild[] = [
 if (PROP_BUILDERS.length !== PROP_KIND_COUNT) throw new Error('props: builder table out of sync with PropKind');
 
 export const variantIndex = (v: number): number => (((v | 0) % PROP_VARIANTS) + PROP_VARIANTS) % PROP_VARIANTS;
+
+/** Kinds that never gather dust (tileProps.ts dust bits): things that float on (or were just pulled out of) water. */
+const DUST_FREE: ReadonlySet<PropKindId> = new Set<PropKindId>([PropKind.POOL_FLOAT, PropKind.LIFEBUOY, PropKind.FLOAT_ROPE]);
+/** Does a placed prop of this kind carry the anchor cell's dust level? */
+export const propGathersDust = (kind: PropKindId): boolean => !DUST_FREE.has(kind);
 
 const B = new PartBuilder();
 

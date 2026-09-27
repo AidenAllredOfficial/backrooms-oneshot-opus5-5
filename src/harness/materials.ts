@@ -8,10 +8,15 @@
 //   mip=N                         show mip level N (default: trilinear)
 //   tile=N                        repeats shown in single-layer texture views (default 2, seams at the centre)
 //   extra=grime|water|cookie      show a 2D auxiliary texture instead of the arrays
+//   extra=detail                  the LEAN detail array (textures/detail.ts; layer=k one layer, default a gallery):
+//                                 ch=r|g mean slope / S, b albedo multiplier / 2, a E[slope^2] / 2S^2
 //   t=seconds                     freeze the light animation of the lit view
 //   base=N                        lit view of an alpha layer (DECAL_ATLAS, SIGNAGE, ...): composite it over layer N
 //                                 (soft alpha, alpha-tested for SIGNAGE/chalk-like hard edges) instead of discarding
 //   check=0                       skip the GPU checks
+//   checks=albedo,range,seam,orient   which GPU checks run (default all): range = per-layer albedo percentile range
+//                                 (stats().albedoRange) and the texture height maximum against SURFACE_PHYS.pomTop
+//                                 (stats().heightMax, heightFails)
 //   hud=0                         hide the text overlay
 //   packh=1                       force the packed RGBA8 height scratch (fallback without float colour buffers)
 // window.__backrooms (HarnessDebugAPI): ready once the textures are generated, the checks have run and a few frames
@@ -20,11 +25,17 @@
 import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { HarnessDebugAPI, LayerAlbedoReport } from '../core/debug.ts';
-import { MAT_COUNT, Mat } from '../core/ids.ts';
+import { MAT_COUNT, Mat, type MatId } from '../core/ids.ts';
 import { LAYER_DEFS, layerRepeatY } from '../core/materials.ts';
 import type { TextureSet } from '../core/runtime.ts';
-import { arrowOrientationCheck, layerAlbedoCheck, reduceAtlasSlots, reduceLayers, tileSeamCheck, tileSeamCheckDetailed, type OrientationReport, type SeamDetail } from '../textures/albedoCheck.ts';
+import { SURFACE_PHYS } from '../materials/chunks/params.ts';
+import {
+  arrowOrientationCheck, layerAlbedoCheck, layerAlbedoRangeCheck, layerHeightMax, reduceAtlasSlots, reduceLayers, tileSeamCheck,
+  tileSeamCheckDetailed, type LayerRangeReport, type OrientationReport, type SeamDetail,
+} from '../textures/albedoCheck.ts';
 import { generateTextures, textureBakeStats } from '../textures/TextureBaker.ts';
+import { detailBakeStats, generateDetailTextures } from '../textures/DetailBaker.ts';
+import { DETAIL_COUNT, DETAIL_RECIPES, DETAIL_SIZE } from '../textures/detail.ts';
 import { setForcePackedScratch } from '../textures/programs.ts';
 import { LAYER_RECIPES_FULL } from '../textures/registry.ts';
 
@@ -42,11 +53,12 @@ const ch = ({ rgb: 0, r: 1, g: 2, b: 3, a: 4 } as Record<string, number>)[chName
 const mip = q.has('mip') ? Number(q.get('mip')) : -1;
 const tile = Math.max(0.02, Number(q.get('tile') ?? 2)); // < 1 zooms in (e.g. tile=0.25: a quarter of the frame)
 const extra = q.get('extra');
+const detailView = extra === 'detail';
 const baseParam = q.get('base');
 const baseLayer = baseParam !== null && baseParam !== '' ? Math.max(0, Math.min(MAT_COUNT - 1, Number(baseParam) | 0)) : -1;
 const tFixed = q.has('t') ? Number(q.get('t')) : null;
 const runChecks = q.get('check') !== '0';
-const checkList = (q.get('checks') ?? 'albedo,seam,orient').split(',');
+const checkList = (q.get('checks') ?? 'albedo,range,seam,orient').split(',');
 const hud = q.get('hud') !== '0';
 if (q.get('packh') === '1') setForcePackedScratch(true); // exercise the RGBA8 packed-height scratch fallback
 
@@ -83,7 +95,7 @@ void main() {
 `;
 
 function viewMaterial(set: TextureSet, layer: number): THREE.ShaderMaterial {
-  const arr = view === 'normal' ? set.normal : view === 'ormh' ? set.ormh : set.albedo;
+  const arr = detailView && set.detail ? set.detail : view === 'normal' ? set.normal : view === 'ormh' ? set.ormh : set.albedo;
   const tex2d = extra === 'grime' ? set.grime : extra === 'water' ? set.waterNormals : extra === 'cookie' ? set.cookie : set.grime;
   const d = LAYER_DEFS[layer];
   // single-layer views keep the physical aspect of the layer frame
@@ -93,7 +105,7 @@ function viewMaterial(set: TextureSet, layer: number): THREE.ShaderMaterial {
     uniforms: {
       uArr: { value: arr },
       uTex2D: { value: tex2d },
-      uUse2D: { value: extra ? 1 : 0 },
+      uUse2D: { value: extra && !detailView ? 1 : 0 },
       uLayer: { value: layer },
       uCh: { value: ch },
       uMip: { value: mip },
@@ -200,10 +212,13 @@ async function main(): Promise<void> {
   let frames = 0;
   let phase = 'textures';
   let albedo: LayerAlbedoReport[] | null = null;
+  let range: LayerRangeReport[] | null = null;
+  let heightMax: Float64Array | null = null;
   let seams: SeamDetail[] | null = null;
   let orient: OrientationReport[] | null = null;
   let ormhMeans: Float64Array | null = null;
   let signSlots: Float64Array | null = null;
+  let detailMeans: Float64Array | null = null;
   let set: TextureSet | null = null;
   const errors: string[] = [];
 
@@ -213,9 +228,19 @@ async function main(): Promise<void> {
     stats: () => ({
       page: 'materials', view, layer: single, size, phase, frames,
       bake: textureBakeStats(),
+      detailMs: detailBakeStats(),
+      // extra=detail: per layer the rms slope (m/m, from the mean of E[s^2]) and the mean albedo multiplier
+      detailMoments: detailMeans ? DETAIL_RECIPES.map((r, l) => ({
+        n: r.name, rmsSlope: +(Math.sqrt(2 * detailMeans![l * 4 + 3]) * r.slope).toPrecision(3), mult: +(2 * detailMeans![l * 4 + 2]).toFixed(3),
+      })) : null,
       programs: renderer.info.programs?.length ?? 0,
       albedoFails: albedo ? albedo.filter((r) => !r.ok).map((r) => `${r.name} m=${r.measured.map((v) => v.toFixed(3)).join(',')} d=${r.declared.join(',')}`) : null,
       albedo: albedo?.map((r) => ({ n: r.name, m: r.measured.map((v) => +v.toFixed(4)), ok: r.ok })) ?? null,
+      albedoRange: range?.map((r) => ({ n: r.name, p2: +r.p2.toFixed(4), p98: +r.p98.toFixed(4), ok: r.ok })) ?? null,
+      albedoRangeFails: range ? range.filter((r) => !r.ok).map((r) => `${r.name} p2=${r.p2.toFixed(3)} p98=${r.p98.toFixed(3)}`) : null,
+      // POM layers: the relief top must stay within 0.02 of SURFACE_PHYS.pomTop
+      heightMax: heightMax ? Array.from(heightMax, (v, l) => `${LAYER_DEFS[l].name}: ${v.toFixed(3)}${SURFACE_PHYS[l as MatId].pomTop > 0 ? ` (pomTop ${SURFACE_PHYS[l as MatId].pomTop})` : ''}`) : null,
+      heightFails: heightMax ? LAYER_DEFS.filter((d) => SURFACE_PHYS[d.id].pomTop > 0 && heightMax![d.id] > SURFACE_PHYS[d.id].pomTop + 0.02).map((d) => `${d.name}: ${heightMax![d.id].toFixed(3)}`) : null,
       seamMax: seams ? Math.max(...seams.map((s) => s.maxEdgeDelta)) * 255 : null,
       seamFails: seams ? seams.filter((s) => s.maxEdgeDelta >= 2 / 255).map((s) => `${LAYER_DEFS[s.layer].name}:${s.parts.join('/')}`) : null,
       orientation: orient,
@@ -232,6 +257,7 @@ async function main(): Promise<void> {
   window.__backrooms = api;
 
   set = await generateTextures(renderer, size, renderer.capabilities.getMaxAnisotropy(), (f) => { phase = `textures ${(f * 100).toFixed(0)}%`; });
+  if (detailView) set.detail = await generateDetailTextures(renderer, renderer.capabilities.getMaxAnisotropy());
   const ts = set;
 
   // ---- scene
@@ -295,7 +321,21 @@ async function main(): Promise<void> {
     ortho.position.z = 1;
     camera = ortho;
     const H = innerHeight, W = innerWidth;
-    if (single >= 0 || extra) {
+    if (detailView && single < 0) {
+      // detail gallery: 4 x 3 layers
+      const cols = 4, rows = Math.ceil(DETAIL_COUNT / cols);
+      const cell = Math.min((2 * aspect()) / cols, 2 / rows);
+      for (let l = 0; l < DETAIL_COUNT; l++) {
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(cell * 0.97, cell * 0.97), viewMaterial(ts, l));
+        const cx = ((l % cols) - (cols - 1) / 2) * cell;
+        const cy = ((rows - 1) / 2 - Math.floor(l / cols)) * cell;
+        quad.position.set(cx, cy, 0);
+        scene.add(quad);
+        const px = ((cx - cell * 0.485) / (2 * aspect()) + 0.5) * W;
+        const py = (0.5 - (cy + cell * 0.485) / 2) * H;
+        label(overlay, `D${l} ${DETAIL_RECIPES[l].name} ch=${chName}`, px + 3, py + 2, (cell / (2 * aspect())) * W - 6);
+      }
+    } else if (single >= 0 || extra) {
       const layer = single >= 0 ? single : 0;
       const d = LAYER_DEFS[layer];
       const fr = extra ? 1 : layerRepeatY(d) / d.repeat; // frame aspect (v / u)
@@ -303,7 +343,8 @@ async function main(): Promise<void> {
       const sc = Math.min(1, (2 * aspect() * 0.98) / w);
       const quad = new THREE.Mesh(new THREE.PlaneGeometry(w * sc, h * sc), viewMaterial(ts, layer));
       scene.add(quad);
-      label(overlay, extra ? `extra=${extra}` : `${layer} ${d.name}  view=${view} ch=${chName}${mip >= 0 ? ` mip=${mip}` : ''}  ${d.repeat}x${layerRepeatY(d)} m, ${tile}x${tile} repeats`, 8, 6, W - 16);
+      const what = detailView ? `D${layer} ${DETAIL_RECIPES[Math.min(layer, DETAIL_COUNT - 1)].name} ch=${chName}, ${tile}x${tile} repeats of 0.3 m` : `extra=${extra}`;
+      label(overlay, extra ? what : `${layer} ${d.name}  view=${view} ch=${chName}${mip >= 0 ? ` mip=${mip}` : ''}  ${d.repeat}x${layerRepeatY(d)} m, ${tile}x${tile} repeats`, 8, 6, W - 16);
     } else {
       const cell = Math.min((2 * aspect()) / COLS, 2 / ROWS);
       for (let l = 0; l < MAT_COUNT; l++) {
@@ -335,6 +376,12 @@ async function main(): Promise<void> {
         ormhMeans = await reduceLayers(renderer, ts.ormh, ts.size);
         signSlots = await reduceAtlasSlots(renderer, ts.albedo, ts.size, Mat.SIGNAGE);
       }
+      if (detailView && ts.detail) detailMeans = await reduceLayers(renderer, ts.detail, DETAIL_SIZE);
+      phase = 'range check';
+      if (checkList.includes('range')) {
+        range = await layerAlbedoRangeCheck(renderer, ts);
+        heightMax = await layerHeightMax(renderer, ts);
+      }
       phase = 'seam check';
       if (checkList.includes('seam')) seams = await tileSeamCheckDetailed(renderer, ts);
       phase = 'orientation check';
@@ -353,6 +400,11 @@ async function main(): Promise<void> {
     const bad = albedo.filter((r) => !r.ok);
     lines.push(`albedo: ${albedo.length - bad.length}/${albedo.length} within 10%`);
     for (const r of bad) lines.push(`  FAIL ${r.name}: ${r.measured.map((v) => v.toFixed(3)).join(' ')} vs ${r.declared.join(' ')}`);
+  }
+  if (range) {
+    const bad = range.filter((r) => !r.ok);
+    lines.push(`albedo range: ${range.length - bad.length}/${range.length} p2/p98 in [0.02, 0.9]`);
+    for (const r of bad) lines.push(`  FAIL ${r.name}: p2 ${r.p2.toFixed(3)} p98 ${r.p98.toFixed(3)}`);
   }
   if (seams) {
     const worst = seams.reduce((a, s) => (s.maxEdgeDelta > a.maxEdgeDelta ? s : a), seams[0]);

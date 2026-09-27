@@ -29,3 +29,19 @@
 - **Other consumers:** props that use TRIM_PAINT with their own tint (props/misc.ts door frame v0, door leaf v1,
   fallen T-bar debris) become ~1.6x lighter; that reads as painted wood / enamel and was left as is (B3 does not own
   props/). The baker's bounce colour for trims follows the new mean automatically.
+
+## 2026-09-26 — graphics-realism package B: three mean roughness values in `src/core/materials.ts` (numeric only) — APPLIED
+- **Status:** APPLIED by package B (materials recipe pass). Numeric edits of `roughness` only; no `albedoMean`, ids or
+  other fields changed.
+- **Changes:**
+  | layer | old | new | why |
+  |---|---|---|---|
+  | `WALLPAPER_L0` | 0.8 | 0.7 | satin vinyl-coated paper (recipe roughness 0.63-0.72 instead of 0.78-0.85) |
+  | `WALLPAPER_MANILA` | 0.8 | 0.72 | same, for the paper-backed vinyl |
+  | `TERRAZZO` | 0.25 | 0.16 | polished terrazzo is ~0.12-0.18; the recipe base went from 0.22 to 0.13 (its two-lobe glaze value is 0.13) |
+- **Other consumers:** `LAYER_DEFS.roughness` only seeds `TABLE_ROUGH` for recipes that do not set `s.rough` (all three
+  do) and the dev harness fake textures. The bake does not read it.
+- **Calibration:** the albedo means are unaffected; `layerAlbedoCheck` passes for all 28 layers at 1024, and `TRIM` was
+  re-derived for the recipes whose colour changed (CONCRETE_FLOOR, CMU_PAINTED, POOL_TILE). The new
+  `layerAlbedoRangeCheck` (2nd / 98th percentile of the 32x32 cell luminance within [0.02, 0.9]) passes for every
+  opaque layer.

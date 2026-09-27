@@ -25,6 +25,7 @@ import { LAYER_LATE } from '../materials/shared.ts';
 import { createChunkStreamer, getStreamTiming } from '../stream/ChunkStreamer.ts';
 import { createWorkerPool, poolSizeFor, type WorkerPool } from '../stream/WorkerPool.ts';
 import { generateTextures } from '../textures/TextureBaker.ts';
+import { generateDetailTextures } from '../textures/DetailBaker.ts';
 
 const READY_FRAMES = 5;
 
@@ -155,6 +156,7 @@ async function main(): Promise<void> {
 
   // ---- textures, materials
   const textures = await generateTextures(renderer, q.textureSize, q.anisotropy);
+  if (q.detailMaps && q.shaderDetail !== 'lite') textures.detail = await generateDetailTextures(renderer, q.anisotropy);
   phase = 'shaders';
   materials = createMaterialSystem(renderer, textures, q);
   const viewIdx = Math.max(0, DEBUG_VIEW_NAMES.indexOf(P.view));

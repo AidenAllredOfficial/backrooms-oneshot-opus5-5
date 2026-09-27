@@ -40,8 +40,9 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Pool tile, 0.15 m white glaze (roughness 0.06-0.12) with cushion edges and a per-tile tilt of +-1.5 degrees,
- * 3 mm cyan-grey grout (roughness 0.7). */
+/** Pool tile, 0.15 m white glaze (roughness 0.06-0.12) with cushion edges, a slight pillow and a per-tile tilt of
+ * +-1.5 degrees; glaze crazing on a quarter of the tiles and a hazy (rougher, greyer) glaze rim next to the 3 mm
+ * light grey grout (roughness 0.7). Every feature is tile-local (the shader rotates / flips whole tiles). */
 const POOL_TILE = /* glsl */ `
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
@@ -58,9 +59,18 @@ void gen(vec2 uv, inout Surf s) {
   vec3 glaze = TABLE_ALBEDO * (1.0 + 0.06 * (r.z - 0.5)) * (1.0 + 0.008 * fbm(uv, PM(40.0), 2, 5));
   glaze *= mix(vec3(1.0), vec3(0.975, 0.955, 0.9), step(0.98, r.w)); // a few off-white tiles from another batch
   vec3 groutCol = srgb8(192.0, 198.0, 194.0) * (0.88 + 0.2 * vnoise(uv, PM(500.0), 6));
+  // crazing: a fine crack net in the glaze of a quarter of the tiles (pattern offset per tile)
+  vec3 cz = worleyEdge(uv + floor(r.zw * 16.0) / 8.0, PM(45.0), 0.9, 30);
+  float crz = step(r.w, 0.25) * lineM(cz.x * FRAME.x / float(PM(45.0).x), 0.00008);
+  glaze *= 1.0 - 0.2 * crz;
+  // grout haze: the glaze rim next to the joint is filmed over (cement residue, cleaning chemicals)
+  float haze = (1.0 - smoothstep(0.0015, 0.006, e)) * (1.0 - grout);
+  glaze = mix(glaze, groutCol, 0.08 * haze);
   s.albedo = mix(glaze, groutCol, grout);
-  s.rough = mix(0.06 + 0.06 * fbmV(uv, PM(10.0), 2, 7), 0.7, grout);
-  float hTile = 0.3 + 0.25 * cushH + (tiltM + wav) / 0.008;
+  s.rough = mix(0.06 + 0.06 * fbmV(uv, PM(10.0), 2, 7) + 0.12 * crz + 0.1 * haze, 0.7, grout);
+  // pillow: the face bulges ~0.1 mm toward its centre (reflections bend across each tile)
+  float pillow = 0.012 * (1.0 - dot(t.local, t.local) / (2.0 * 0.075 * 0.075));
+  float hTile = 0.3 + 0.25 * cushH + pillow + (tiltM + wav) / 0.008;
   s.height = mix(hTile, 0.08 + 0.03 * vnoise(uv, PM(300.0), 8), grout);
 }
 `;

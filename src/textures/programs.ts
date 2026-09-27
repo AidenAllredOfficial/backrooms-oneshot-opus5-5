@@ -46,7 +46,8 @@ export function createBlitter(renderer: THREE.WebGLRenderer): Blitter {
   };
 }
 
-const rawMaterial = (fragmentShader: string, uniforms: Record<string, THREE.IUniform>): THREE.RawShaderMaterial =>
+/** Full-screen generator material (GLSL 3.00, no depth, no blending). */
+export const rawMaterial = (fragmentShader: string, uniforms: Record<string, THREE.IUniform>): THREE.RawShaderMaterial =>
   new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: FULLSCREEN_VERTEX,
@@ -92,17 +93,24 @@ export function scratchFloatRenderable(renderer: THREE.WebGLRenderer): boolean {
   return ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
 }
 
-export function createGenerator(renderer: THREE.WebGLRenderer, size: number): Generator {
-  const blit = createBlitter(renderer);
-  const packedScratch = !scratchFloatRenderable(renderer);
+/** The height scratch of a generator: HalfFloat R, or RGBA8 with 16-bit packed height (`packed`) when the context
+ * cannot render to float colour buffers. Nearest filtering, repeat wrap (the Scharr / cavity taps wrap). */
+export function createHeightScratch(renderer: THREE.WebGLRenderer, size: number): { scratch: THREE.WebGLRenderTarget; packed: boolean } {
+  const packed = !scratchFloatRenderable(renderer);
   const scratch = new THREE.WebGLRenderTarget(size, size, {
-    type: packedScratch ? THREE.UnsignedByteType : THREE.HalfFloatType,
-    format: packedScratch ? THREE.RGBAFormat : THREE.RedFormat,
+    type: packed ? THREE.UnsignedByteType : THREE.HalfFloatType,
+    format: packed ? THREE.RGBAFormat : THREE.RedFormat,
     colorSpace: THREE.NoColorSpace, depthBuffer: false, stencilBuffer: false,
     generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping,
   });
-  if (packedScratch) console.warn('[textures] no float colour buffers: height scratch falls back to packed RGBA8');
+  if (packed) console.warn('[textures] no float colour buffers: height scratch falls back to packed RGBA8');
+  return { scratch, packed };
+}
+
+export function createGenerator(renderer: THREE.WebGLRenderer, size: number): Generator {
+  const blit = createBlitter(renderer);
+  const { scratch, packed: packedScratch } = createHeightScratch(renderer, size);
   const dummy = new THREE.DataTexture(new Uint8Array([128, 0, 0, 255]), 1, 1);
   dummy.needsUpdate = true;
 

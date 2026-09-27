@@ -5,7 +5,6 @@
 // the scene: ScenePass, PlanarReflection).
 
 import type * as THREE from 'three';
-import { MAT_COUNT } from '../core/ids.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import type { TextureSet } from '../core/runtime.ts';
 import { buildLayerTable } from './chunks/params.ts';
@@ -22,8 +21,8 @@ export interface SharedUniforms {
   waterNormals: { value: THREE.Texture };
   layerA: { value: Float32Array };
   layerB: { value: Float32Array };
-  /** package B layer tables (SURFACE_PHYS; zero until B fills them from buildLayerTable): C = (heightScale, pomTop,
-   * porosity, tok), D = (detailId, detailStrength, sheen, sheenRough), E = (glazeRough, roughComp, 0, 0) */
+  /** package B layer tables (chunks/params.ts SURFACE_PHYS via buildLayerTable): C = (heightScale, pomTop, porosity,
+   * tok), D = (detailId, detailStrength, sheen, sheenRough), E = (glazeRough, roughComp, 0, 0) */
   layerC: { value: Float32Array };
   layerD: { value: Float32Array };
   layerE: { value: Float32Array };
@@ -56,9 +55,9 @@ export function createSharedUniforms(textures: TextureSet): SharedUniforms {
     waterNormals: { value: textures.waterNormals },
     layerA: { value: t.a },
     layerB: { value: t.b },
-    layerC: { value: new Float32Array(MAT_COUNT * 4) },
-    layerD: { value: new Float32Array(MAT_COUNT * 4) },
-    layerE: { value: new Float32Array(MAT_COUNT * 4) },
+    layerC: { value: t.c },
+    layerD: { value: t.d },
+    layerE: { value: t.e },
     detail: { value: textures.detail ?? null },
     reflPass: REFL_PASS,
     mrt: MRT_PASS,

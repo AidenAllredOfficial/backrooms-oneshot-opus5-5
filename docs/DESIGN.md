@@ -4051,6 +4051,8 @@ export interface LayerRecipe { layer: MatId; glsl: string; normalStrength: numbe
 export const LAYER_RECIPES: readonly LayerRecipe[]; // index = MatId, length MAT_COUNT
 // textures/glsl/noise.ts
 export const NOISE_GLSL: string; // periodic value/gradient/worley(F1,F2,id)/fbm/ridged/warp, all taking an integer period
+// textures/DetailBaker.ts (package B; recipes in textures/detail.ts)
+export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy: number): Promise<THREE.Texture>;
 ```
 
 **Procedure** (verified r186 behaviour):
@@ -4076,6 +4078,15 @@ export const NOISE_GLSL: string; // periodic value/gradient/worley(F1,F2,id)/fbm
 7. **Grime** (512², tileable RGBA8, 2D): r = tide rings (iso-lines of warped fbm), g = speckle/mould, b = scuff, a = vertical drip streaks.
    **Water normals** (512², RG): 2 octaves of periodic gradient noise.
    **Cookie** (512², RGBA16F; package F): the beam profile of `lighting/flashlightOptics.ts` (`beamProfileGlsl`: a softly square LED-die core, a dark ring, a yellow phosphor ring, corona, flat spill, reflector lip, crisp rim) times lens dirt and a thumb smudge, cool core / warm spill. The texture spans `CONE × MAP_FOCUS` (see WP11 §4).
+8. **Detail maps** (package B, only when `QualityConfig.detailMaps`: boot generates them after the layers, a quality
+   switch lazily; `TextureSet.detail`). One `WebGLArrayRenderTarget(512, 512, 12)` RGBA8, linear, trilinear + anisotropic,
+   repeat, over a 0.3 m frame (divides NOISE_WRAP, STOREY_PITCH and TILE_SIZE). Recipes (`textures/detail.ts`, the layer
+   recipe environment): D0 cut pile, D1 loop pile, D2 embossed vinyl paper, D3 rolled paint, D4 fine concrete (sand,
+   pinholes), D5 mineral fibre, D6 glaze waviness, D7 basket weave, D8 brushed sheet, D9 open wood grain, D10 haircell, D11
+   the puddle ripple. Per layer: HEIGHT → the shared scratch, then the pack pass (`DETAIL_MAIN`, the normal pass's Scharr
+   slope `br_slope`): rg = mean slope / S, b = albedo multiplier × AO × cavity / 2, a = E[|slope|²] / 2S², S about 4 × the
+   layer's rms slope (harness `extra=detail`, `stats().detailMoments`). The box-filtered mips keep both slope moments
+   exact (LEAN). ~15 MiB, ~15 ms compile + ~20 ms generation.
 
 **Recipes** (`uv.x` ∈ [0,1) spans `repeat` metres and `uv.y` spans `layerRepeatY` metres, so layers with `repeatY` are authored in a non-square frame; all noise is periodic with an integer period, so every layer tiles). Output `Surf{ albedo (linear), alpha, height, rough, metal, ao, emissive }`.
 - **Sampling limits.** Every periodic feature spans ≥ 3 texels at 1024² (and at 512² on low), or is supersampled 4× inside the generator (box-filtered), so no moiré is baked into the texture.
@@ -4083,25 +4094,25 @@ export const NOISE_GLSL: string; // periodic value/gradient/worley(F1,F2,id)/fbm
 
 | Layer | Recipe essentials |
 |---|---|
-| WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls with ±2% shade offset. Faint damask/chevron SDF motif on a 0.3 m diamond lattice (±4% value, embossed height 0.2 mm). Vertical roll-seam ridge. Paper fibre fbm at 1 mm (supersampled). Roughness 0.78–0.85. (Lifted edges and fading come from the WP7 mask.) |
+| WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls with ±2% shade offset. Faint damask/chevron SDF motif on a 0.3 m diamond lattice (±4% value, embossed height 0.2 mm). Vertical roll-seam ridge. Paper fibre fbm at 1 mm (supersampled), slight cockle (~0.25 mm over 7 cm). Satin vinyl, roughness 0.63–0.72. (Lifted edges and fading come from the WP7 mask.) |
 | CARPET_L0 | Loop-pile micro grid (period 3 mm, **supersampled 4×**: it is below the 2.3 mm texel Nyquist limit, so the texture holds its filtered average plus pile normals) × Worley tufts. Isotropic strand speckle (no directional streaks: the layer uses hex tiling without rotation). Colour mottling (±6%). Roughness 0.95. (Macro blotches come from the mask.) |
 | CEILING_TILE | 2×2 tiles of 0.6 m. Mineral-fibre fissures (thresholded warped ridged noise, "worm holes") plus pinholes. Raised 24 mm off-white T-bar grid (roughness 0.45, metal 0.3, height step). Per-tile brightness ±3%. Slight yellowing. |
 | PANEL_LENS | Prismatic pyramid grid (4 mm) in the normal map. Two tube hot-stripes in the emissive mask (`ormh.a`, used by the low preset only; scaled so the lens mean matches the old framed texture). One continuous sheet: no frame per 0.6 m repeat (a 2x4 used to read as two squares, a sky panel as four). Albedo pale grey-white. |
 | TRIM_PAINT | Semi-gloss paint, orange peel, edge scuffs. |
-| WALLPAPER_MANILA | Beige vertical pinstripes, 0.15 m pitch. |
+| WALLPAPER_MANILA | Beige vertical pinstripes, 0.15 m pitch, linen emboss, cockle; satin roughness ~0.72. |
 | CARPET_OFFICE | 0.6 m carpet tiles, pile direction rotated per tile (roughness and normal sheen), blue-grey speckle. |
 | DRYWALL | Roller stipple, eggshell. |
 | VINYL_VCT | 0.3 m tiles, ±4% tint per tile, chips, wax sheen (roughness 0.3–0.45). |
-| CONCRETE_FLOOR | Aggregate speckle, trowel swirls, Worley F2−F1 crack network, sealed/rough patches (roughness 0.35–0.75). (Oil spots are decals.) Isotropic enough to also serve stair risers (frame 4.8 × 3.0 m). |
-| CONCRETE_WALL | Frame 2.4 × 1.5 m: formwork seams every 1.2 m horizontally and 1.5 m vertically, tie holes. |
+| CONCRETE_FLOOR | Aggregate speckle, a few exposed pebbles, trowel swirls with burnished burns (darker, −0.14 roughness), Worley F2−F1 crack network, curing mottle, chalky laitance, a soft unimodal sheen field (roughness 0.44–0.6). (Oil spots are decals.) Isotropic enough to also serve stair risers (frame 4.8 × 3.0 m). |
+| CONCRETE_WALL | Frame 2.4 × 1.5 m: formwork seams every 1.2 m horizontally and 1.5 m vertically, tie holes. heightScale 20 mm with the face at 0.9 (POM top 0.92) and 18 mm deep conical tie holes. |
 | CONCRETE_CEIL | Board-form grain. |
-| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses), recessed mortar, paint over pores. |
-| POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12). Per-tile normal tilt ±1.5°. 3 mm grout, cyan-grey, roughness 0.7. |
+| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses), recessed mortar with pooled (glossier, darker) paint, paint over pores and bridged voids, each block face tilted ±0.35°. heightScale 14 mm: ~6 mm tooled joints (POM). |
+| POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile normal tilt ±1.5°. Crazing on a quarter of the tiles, a hazy glaze rim at the joint. 3 mm grout, light grey, roughness 0.7. |
 | POOL_MOSAIC | 2.5 cm aqua mosaic. |
 | METAL_PAINTED, METAL_RUST, METAL_GRATE | Chipped paint; rust mask (fbm threshold plus downward streaks); grate with dark holes (albedo plus height). |
 | WOOD, PLASTIC, FABRIC_PARTITION, PLENUM, RUBBER | Standard recipes. |
 | FLOOR_PAINT | Yellow or white worn paint, alpha from threshold noise. |
-| TERRAZZO | Chips in a grey matrix, polished (roughness 0.2–0.3). |
+| TERRAZZO | Chips in a grey matrix, polished (roughness 0.13–0.2, pits and brass strips rougher). |
 | METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms. Frame 1.2 m. |
 | METAL_PAINTED | Frame 1.2 × 1.0 m. |
 
@@ -4165,18 +4176,74 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - **Rotation anti-tiling** only for layers with `tileSize > 0` (physical tiles: CEILING_TILE, VINYL_VCT, POOL_TILE, POOL_MOSAIC, CARPET_OFFICE): `id = floor(worldUv·repeat/tileSize)` → hash → 90° rotation plus flip `M` about the tile centre. Differentiate the continuous (unrotated) uv, then sample with `textureGrad(tex, M·uv', M·dFdx(uv), M·dFdy(uv))` so anisotropic filtering follows the rotated axes. The decoded tangent normal's xy is transformed by `M⁻¹`.
   - **Hex (stochastic) tiling** for layers with `hexTile > 0` (CARPET_L0, CONCRETE_FLOOR): offset-only (no rotation) hashed per hex cell of `hexTile` metres, 3-way blend with a 0.15 m feathered edge, variance-preserving blend; same derivatives for all samples.
   - **Macro variation:** value (±6%) and hue (±2%) only, from low-frequency world noise and the coarse-mip (level ≥ 6) luminance of the layer. No second full-detail sample (it ghosts patterned layers at the wrong scale).
+  - **Parallax occlusion mapping** (package B, `BR_POM` 1 high / 2 ultra, shell only, layers with
+    `SURFACE_PHYS.pomTop > 0`: CMU 0.8, cast concrete wall 0.92, pool tile 0.9, mosaic 0.7, metal deck 1). The flat face
+    is the relief top; the view ray is marched down through `normal.a` from the geometric surface in steps of at most
+    1.5 display pixels of visible parallax (2-12 steps on high; 2-16 on ultra, 2.25 render pixels each at its 1.5x
+    scale; the last step is exactly the bottom, so every ray hits), then refined by one secant step. It runs only where
+    the parallax exceeds 0.5 px (fading in to 1.5 px), never in the planar mirror pass and never on submerged faces.
+    Only the texture lookup moves (`brUv`): depth, discards and silhouettes stay those of the flat face, so the depth
+    prepass is unchanged, and the lightmap / mask lookups stay at the unshifted point. The unshifted footprint
+    (`brDx/brDy`) keeps the shading gradients continuous; the march's own height lookups use an isotropic LOD of the
+    footprint's area (trilinear, not anisotropic: 5-20 lookups per pixel). Rotated physical tiles go through the shared
+    `brRotUv`, cached per cell and re-derived when a ray enters another cell, so the march and the shading read the same
+    tiles. `pomTop` must cover the per-texel relief maximum (a texel above the top casts false self-shadows). The march
+    state (`brPomT/B/N`, depth, hit height, fade) feeds the self-shadow below.
+  - **Detail maps** (package B, `BR_DETAIL_MAPS` high / ultra, not the decal variant; `textures/detail.ts`). One 512²
+    RGBA8 array of 11 + 1 layers over a 0.3 m repeat (0.59 mm texels): world-anchored on the shell (the tile-local
+    `brSurf2D(vBrLocal) / 0.3`: 0.3 m divides TILE_SIZE and STOREY_PITCH, so this is the world pattern at full float
+    precision, where `brS2` would reach 4096 uv units), part-local metres on props (`vBrUv · round(repeat / 0.3)`). The
+    layer and strength come from `SURFACE_PHYS.det/detS` (`uBrLayerD.xy`). The pack is LEAN: rg = mean slope / S, b =
+    albedo multiplier / 2, a = E[|slope|²] / 2S², so the box-filtered mips keep exact first and second moments. The
+    shader multiplies the albedo by `t.b / mean.b` (mean-preserving: the 1x1 mip is the layer mean), adds
+    `roughK·(1 − am)` roughness in pits and gaps, hands the mean slope to the normal pass and the variance E[s²] −
+    |E[s]|² to the roughness. Between 8 and 16 detail texels per pixel the texel fades to the layer mean and the fetch
+    is skipped beyond: far away the detail survives as micro-roughness only, never as a fade band or sparkle. Standing
+    water drops the detail slope and variance (a film keeps 30 % of the variance) and carries micro-ripples from layer
+    D11 on the shell (0.6 m repeat, drifting a few mm/s, normalised slope × `TUNE.RIPPLE` 0.004 on deeper water only,
+    faded out between 1.5 and 4 ripple texels per pixel).
   - `diffuseColor.rgb = albedo·vBrTint.rgb`.
   - DECAL flag in the shell/props variants: `if (albedo.a < 0.5) discard;` (grates, sign faces). The decal variant uses soft alpha.
   - **Grime** by `LAYER_DEFS.grime` profile (compiled into a small switch on a per-layer uniform table `uLayerParams[28]`). High-frequency `grime` texture thresholded against `lmMask`:
-    - carpet: wet (B) darkens ×0.65, lowers roughness to 0.55, damage (A) = wear paths;
+    - carpet: a dried tide ring at the edge of wet (B) patches, damage (A) = wear paths;
     - wallpaper: stain (R) tide bands (brown-yellow, sharp edge from `grime.r`), baseboard dirt (G), peeling at seams (A);
     - ceilingTile: stain rings (R ∧ rings), sag darkening;
-    - concrete: oil and wet patches;
-    - tile: grout grime (G), wet film (B → roughness × 0.5);
+    - concrete: oil patches, saw-cut joints, damp walls with efflorescence;
+    - tile: grout grime (G);
     - metal: rust streaks.
-- **`roughnessmap_fragment`.** `brOrmh.g`. **Toksvig**: `r' = sqrt(r² + (1 − |n̄|)/|n̄|)` with the stashed `|n̄|` (length of the filtered normal before normalisation). Multiply by the wetness term.
+  - **Wetness** (package B; Lagarde 2013 porosity model, every profile, every preset). `brWet` = the mask's B field
+    thresholded with a wide ramp (1 under water) and `brSoak` = the same field unramped (the ramp would flood whole
+    patches evenly). With the layer porosity P (`SURFACE_PHYS`, `uBrLayerC.z`): absorption `smoothstep(0, 0.6, brWet)·P`
+    darkens albedo by up to 45 % and raises its saturation by up to 35 %; a water film `smoothstep(0.3 + 0.55P,
+    0.6 + 0.35P, brSoak)` forms early on sealed surfaces and only at saturation on porous ones (carpet: soaked cores
+    only). `BR_PUDDLES` (medium+): on up-facing layers with P < 0.95 standing water fills the texture relief
+    (`(normal.a − layer mean)·heightScale`) below a level that rises from −1.2 mm to +1.5 mm with `brSoak`, so shorelines
+    follow grout, cracks and tilted-tile corners; the shoreline width grows with the texel footprint. Film and puddles
+    set the roughness target (0.07 + 0.25P, puddles 0.03), flatten the normal and drop the Toksvig variance; puddles on
+    porous floors are murky (tint (0.94, 0.9, 0.82) × min(2P, 1)). Decals take the base floor's mean state. The bake
+    adds a pool splash zone to B (floors within 1.2 m of a pool's water edge). Debug view `wetness` = (brWet, film,
+    puddle), `height` = normal.a.
+  - **Prop dust** (package B; props variant, not lite): aux.z bits 2-7 carry a dust level from the anchor cell's decay
+    (`props/tileProps.ts`, floats and lifebuoys opt out); up-facing faces get a settled layer with soft drifts (colour
+    (0.36, 0.34, 0.30), up to 70 %, roughness 0.92, weaker normals, no metal), vertical faces a faint film. Emissive,
+    NO_GRIME and animated parts stay clean; `brDust` also dulls the clearcoat.
+- **`roughnessmap_fragment`.** `brOrmh.g` (props: the aux.x override, never on emissive parts). **Toksvig**:
+  `r' = sqrt(r² + var·tok)`, `var = (1 − |n̄|)/|n̄|` of the stashed filtered normal and `tok` the layer's share of it that
+  is lobe broadening (`uBrLayerC.w`: pool tiles 0.3, VCT 0.5, CMU 0.6, deck 0.7, ceiling tile 0.8, else 1). **Two-lobe
+  unmixing** of the bimodal layers (POOL_TILE, POOL_MOSAIC, VINYL_VCT, TERRAZZO; `uBrLayerE` = glaze lobe gz, rough
+  component rx): the mip-filtered roughness is the mixture (1 − c)·gz + c·rx, so `brCov = c` weights the specular
+  (below) and the lobe keeps `sqrt(min(r, gz)² + 0.25·var)` at every distance instead of averaging into satin. Then
+  × the grime multiplier and mixed toward the wet / dust target. With detail maps, the unresolved detail slope variance
+  first adds to alpha² (LEAN: `r = (r⁴ + var)^¼`).
 - **`metalnessmap_fragment`.** `ormh.b`.
-- **`normal_fragment_maps`.** First `vec3 brNg = normal;` (unperturbed; declared at main scope). Then the cotangent frame from `dFdx`/`dFdy` of **`-vViewPosition`** (view space, precise) and `vBrUv`; apply the stashed normal (already counter-rotated); strength per layer.
+- **`normal_fragment_maps`.** First `vec3 brNg = normal;` (unperturbed; declared at main scope). Then the cotangent frame `brTbn` (main scope) from `dFdx`/`dFdy` of **`-vViewPosition`** (view space, precise) and `vBrUv`; apply the stashed normal (already counter-rotated); strength per layer. With detail maps the detail slope follows in a second
+  cotangent frame (of the detail uv: world-anchored on the shell), added to the mapped normal UDN-style with |slope| ≤ 1.
+- **After `lights_physical_fragment`** (`chunks/materialPost.ts`, package B; before three computes `material.dfg`, so
+  every light path sees it), in this order: water F0 0.02 / F90 1 on film (70 %) and puddle pixels; glaze coverage
+  (specular × `1 − brCov·(1 − puddle)`); `USE_SHEEN` (medium+): Charlie sheen for textiles, colour = amount ·
+  sqrt(albedo) (less where wet or worn), roughness from the pile lean seen by the camera; `USE_CLEARCOAT` (props):
+  clearcoat = coat bit (aux.z bit 1) × (1 − dust), roughness 0.04; `BR_SPEC_AA` (medium+): alpha² += min(0.5·(|dn/dx|² +
+  |dn/dy|²), 0.18)·tok on roughness and clearcoat roughness (Tokuyoshi & Kaplanyan 2019).
 - **`emissivemap_fragment`.** `totalEmissiveRadiance = vBrEmit · vBrTint.rgb · mix(1.0, ormh.a·1.3, isLens) · dyn · shimmer`.
   - `dyn` = own-channel intensity (luma of `uFlick[0]`, which is exactly the intensity because `color/luma(color)` has luma 1) if `DYN_EMIT`.
   - `shimmer = brLensShimmer(int(aux.w·255), tint.a·255, uTime, uFlickerMode)` if `SHIMMER`, using `LENS_SHIMMER_GLSL` from `core/flicker.ts` injected verbatim (WP11 owns its body; WP9 never re-implements it).
@@ -4201,6 +4268,12 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   brIrrLocal = E + Ef;                                // stashed for haze
   ```
   - `material.multiScatteringCompensation` is only initialised by three's `lights_fragment_begin` when punctual lights exist; our chunk **sets it itself** from `material.dfg` exactly as r186 does: `material.multiScatteringCompensation = 1.0 + material.specularColorBlended * (1.0 / (material.dfg.x + material.dfg.y) - 1.0);` (`material.dfg` is always set by `lights_fragment_begin`), so harness scenes without the flashlight match the game.
+  - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
+    `chunks/pom.ts FRAG_DIRVIS_GLSL`): micro-shadowing (Chan 2018, not lite) `clamp(|N·L| + 2·ao² − 1, 0, 1)` with the
+    texture cavity AO, so grout, joints, pile gaps and fissures shadow the baked light as it grazes the mapped normal;
+    on ultra (`BR_POM` 2) the parallax hit also marches up to 4 steps toward the light up to the relief top (step
+    midpoints, one per march step length; skipped when the shadow would be under half a pixel long; occlusion × 8 per
+    unit of height above the ray, × the parallax fade, × w: a less directional bake is shadowed less).
   - `RE_IndirectSpecular` (three) then uses `radiance`/`iblIrradiance` with its multiscatter term; `computeSpecularOcclusion` with the baked AO (`aomap_fragment`, below) keeps corners from glowing.
   - The **props** variant samples the light volume instead: `p = vBrLocal`, uvw from `p`.
     - **Tower wrap:** if `PROP_AUX` bit 1 is set, `p.y = 1.5 + mod(p.y − 1.5, 3.0)` (the tower's LV samples are periodic).
@@ -5055,7 +5128,8 @@ values (low / medium / high / ultra): D `ssr` off/off/half/half, `ssrMaxRoughnes
 `detailMaps`, `pom` 0/0/1/2, `clothSheen`, `specularAA`; C `motionBlurTaps`, `glareStreaks`, `glareGhosts`; E
 `waterRefractionSteps`, `waterWaves`, `waterRippleRes`, `waterRippleTexel`, `waterDebris`, `waterCaustics`,
 `waterVolumetrics`; F `volumetrics`, `dustMotes`, `flashlightBounce`, `bakeNearRays` 0/0/16/32 (live; sent as
-`BakeQuality.nearRays` only when > 0, so other presets' worker inputs stay byte-identical). None of them is a resolution-only key.
+`BakeQuality.nearRays` only when > 0, so other presets' worker inputs stay byte-identical). None of them is a resolution-only key. Landed: B `wetPuddles`,
+`clothSheen`, `specularAA` (F/T/T/T), `detailMaps` (F/F/T/T) and `pom` (0/0/1/2).
 `materials/shared.ts qualityDefinesOf` turns them into `QualityDefines` (ssr, probe, ssao = ao != off, cs, puddles,
 detail, pom, sheen, coat = !lite, specAA, the water fields, volumetric, bounce), `applySurfaceDefines` maps each to one
 define (`BR_SSR`, `BR_PROBE`, `BR_SSAO`, `BR_CS_STEPS=n`, `BR_PUDDLES`, `BR_DETAIL_MAPS`, `BR_POM=n` shell only,
@@ -5074,6 +5148,8 @@ more sampler must go before the last of them lands (props: 12 + 4 = 16; water: 1
 (pre-shade SSAO and contact shadows, medium / high / ultra) makes the high / ultra shell 14; the lead's resolution is
 that D compiles the emission-map reflection out under `BR_SSR` / `BR_PROBE`, which frees `uEmission`. Package A's
 colour pyramid (`uSceneColor`) is read by water and SSR passes only, never by surface programs.
+The detail array (B) has landed: it is referenced by the shell and props programs at high / ultra, never by the
+decal program.
 
 
 ---

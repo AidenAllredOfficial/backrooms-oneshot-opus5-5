@@ -12,8 +12,9 @@ const ISO_FRAME = /* glsl */ `
 #define NOISE_FRAME vec2(4.8, 3.8)
 `;
 
-/** Power-floated slab: aggregate speckle (supersampled), exposed pebbles, trowel swirl arcs, Worley crack network,
- * sealed (glossy) vs rough patches. Oil spots are decals. */
+/** Power-floated slab: aggregate speckle (supersampled), a few exposed pebbles, trowel swirl arcs with burnished
+ * (darker, glossier) burns, Worley crack network, curing mottle, chalky laitance and a soft sheen field (a
+ * unimodal roughness 0.44-0.6 instead of sealed vs rough camouflage). Oil spots are decals; pinholes are detail. */
 const CONCRETE_FLOOR = /* glsl */ `
 #define SS 4
 ${ISO_FRAME}
@@ -25,7 +26,7 @@ void gen(vec2 uv, inout Surf s) {
   float grains = smoothstep(0.68, 0.84, sand) - 0.8 * (1.0 - smoothstep(0.16, 0.32, sand));
   // exposed aggregate
   Cell ag = worley(uv, PM(42.0), 0.9, 5);
-  float agOn = step(hashf(ag.id, 6), 0.16);
+  float agOn = step(hashf(ag.id, 6), 0.07);
   float peb = agOn * (1.0 - smoothstep(0.16, 0.28, ag.f1 + 0.08 * vnoise(uv, PM(200.0), 7)));
   vec3 pebCol = mix(srgb8(92.0, 90.0, 86.0), srgb8(158.0, 152.0, 142.0), hashf(ag.id, 8));
   // power-trowel marks: partial overlapping arcs around ~0.45 m centres, varying pitch, mostly a sheen change
@@ -49,21 +50,36 @@ void gen(vec2 uv, inout Surf s) {
   float cd = ce.x * cellM;
   float crack = lineM(cd, 0.0006) * crackOn;
   float halo = (1.0 - smoothstep(0.0, 0.012, cd)) * crackOn;
-  // sealed vs rough patches
-  float seal = smoothstep(-0.25, 0.35, fbm(uv, PM(0.9), 3, 15));
+  // soft sheen field (wear and old sealer, 1-2 m): a unimodal roughness variation, no hard glossy / matte patches
+  float sheen = smoothstep(-0.35, 0.45, fbm(uv, PM(0.6), 3, 15));
+  // trowel burn: overworked blade passes, darker and burnished
+  float burn = arcMask * smoothstep(0.45, 0.8, vnoise(uv, PM(1.2), 19));
+  // curing mottle: irregular ~30 cm blotches where the slab cured under a mat / dried unevenly
+  Cell mo = worley(warp(uv, PM(6.0), 2, 22, 0.025), PM(3.2), 0.9, 20);
+  float mott = (1.0 - smoothstep(0.25, 0.8, mo.f1 + 0.25 * fbm(uv, PM(12.0), 2, 23))) * step(hashf(mo.id, 21), 0.45);
+  // laitance: chalky, paler, rougher skin of fines on the surface
+  float lait = smoothstep(0.55, 0.85, fbmV(uv, PM(2.0), 3, 24));
   vec3 col = TABLE_ALBEDO * (1.0 + 0.09 * big + 0.05 * mid + 0.07 * grains + 0.03 * (sand2 - 0.5));
-  col *= mix(vec3(1.0), vec3(0.95, 0.96, 0.985), seal * 0.6);
+  col *= mix(vec3(1.0), vec3(0.95, 0.96, 0.985), sheen * 0.6);
   col = mix(col, pebCol, peb * 0.65);
   col *= 1.0 - 0.015 * arcMask - 0.08 * halo;
+  col *= 1.0 - 0.09 * burn;
+  col *= 1.0 - 0.05 * mott;
+  col = mix(col, col * vec3(1.1, 1.1, 1.08), 0.6 * lait);
   col = mix(col, col * 0.3, crack);
   s.albedo = col;
   s.height = 0.5 + 0.06 * mid + 0.06 * (sand - 0.5) + 0.08 * peb - 0.4 * crack + 0.015 * arcMask;
-  s.rough = mix(0.75, 0.37, seal) - 0.06 * arcMask + 0.2 * crack + 0.04 * (sand2 - 0.5);
+  s.rough = mix(0.6, 0.44, sheen) - 0.06 * arcMask - 0.14 * burn + 0.05 * mott + 0.08 * lait + 0.2 * crack + 0.04 * (sand2 - 0.5);
 }
 `;
 
 /** Cast-in-place wall, frame 2.4 x 1.5 m: plywood formwork panels 1.2 x 1.5 m (seam fins, per-panel tone, grain
- * imprint), 4 tie holes per panel, bug holes, laitance mottling. */
+ * imprint), 4 tie holes per panel, bug holes, laitance mottling. Relief for parallax occlusion mapping: the face rests
+ * at 0.9 (x CONCRETE_WALL_HS = 18 mm above height 0, pomTop 0.92) and the tie holes are cones from the rim down to 0
+ * (the plastic cones of the snap ties leave 18 mm deep conical recesses); every other amplitude is 1/5 of its value at
+ * the former 4 mm heightScale, so normals and cavity AO of the face are unchanged. The cone keeps the concrete colour
+ * (a little darker): the relief shades it. */
+const CONCRETE_WALL_HS = 0.02; // heightScale (m per height unit)
 const CONCRETE_WALL = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -85,13 +101,18 @@ void gen(vec2 uv, inout Surf s) {
   float tr = length(tl);
   float tie = 1.0 - smoothstep(0.011, 0.0125 + 0.7 * aaM(), tr);
   float tieRing = gauss((tr - 0.017) / 0.003);
+  float cone = 0.9 * sat(tr / 0.0125);
   col *= 1.0 + 0.05 * mot + 0.03 * mot2 + 0.025 * grain;
   col *= 1.0 - 0.35 * bug;
   col *= 1.0 - 0.2 * seamLine + 0.03 * fin;
-  col = mix(col, srgb8(78.0, 76.0, 72.0), tie);
+  // the cone recess is the same concrete (cast against a smooth plastic cone, a little darker from form oil and dirt):
+  // its depth now darkens it through the cavity AO, micro-shadowing and POM; the former dark plug colour on top of
+  // that turned every tie hole into a pure black disc
+  col = mix(col, col * 0.62, tie);
   col *= 1.0 - 0.1 * tieRing;
   s.albedo = col;
-  s.height = 0.5 + 0.04 * grain + 0.03 * mot2 - 0.3 * bug + 0.25 * fin - 0.35 * tie + 0.04 * tieRing;
+  float face = 0.9 + 0.008 * grain + 0.006 * mot2 - 0.06 * bug + 0.05 * fin + 0.008 * tieRing;
+  s.height = mix(face, cone, tie);
   s.rough = 0.85 + 0.05 * mot2 + 0.05 * bug - 0.1 * tie;
 }
 `;
@@ -127,8 +148,11 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 /** Painted CMU, frame 2.4 x 1.0 m: 0.4 x 0.2 m blocks (6 x 5 courses) with 10 mm concave recessed joints; paint
- * over porous block faces. 15 courses fit a 3 m storey, so a true half bond cannot be periodic; courses use a
- * third bond (offset sequence 0, 1/3, 2/3, 1/3, 2/3 of a block), so every head joint is overlapped by >= 1/3. */
+ * over porous block faces, paint-bridged voids, paint pooled glossier and darker in the joints; each block face is
+ * laid slightly out of plane (+-0.35 deg), so the sheen changes block by block along a wall. 15 courses fit a 3 m
+ * storey, so a true half bond cannot be periodic; courses use a third bond (offset sequence 0, 1/3, 2/3, 1/3, 2/3 of
+ * a block), so every head joint is overlapped by >= 1/3. */
+const CMU_HS = 0.014; // heightScale (m per height unit): 5.6 mm tooled joints below the face
 const CMU_PAINTED = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -148,14 +172,20 @@ void gen(vec2 uv, inout Surf s) {
   Cell po = worley(uv, PM(200.0), 0.95, 4);
   float pore = step(hashf(po.id, 5), 0.45) * (1.0 - smoothstep(0.1, 0.3, po.f1));
   float edgeRound = smoothstep(0.005, 0.013, e);
-  float face = 0.72 + 0.05 * coarse - 0.1 * pore;
+  // voids in the block face that the paint bridged over: shallow dimples
+  Cell vo = worley(uv, PM(90.0), 0.9, 12);
+  float vd = step(hashf(vo.id, 13), 0.3) * (1.0 - smoothstep(0.12, 0.3, vo.f1));
+  float face = 0.72 + 0.05 * coarse - 0.1 * pore - 0.12 * vd;
+  vec2 bt = (hash2f(bid, 7) - 0.5) * 0.012; // face tilt (slope), metres per metre
+  face += dot(lp, bt) / ${CMU_HS};
   face = mix(face - 0.1, face, edgeRound);
   s.height = mix(face, 0.3 + 0.12 * jprof, joint);
   vec3 col = TABLE_ALBEDO * (1.0 + 0.03 * (tileRand(bid, 6) - 0.5) + 0.02 * coarse);
   col *= 1.0 - 0.1 * pore;
-  col *= mix(1.0, 0.86, joint);
+  col *= 1.0 - 0.08 * vd;
+  col *= mix(1.0, 0.82, joint);
   s.albedo = col;
-  s.rough = mix(0.46 + 0.12 * pore + 0.03 * coarse, 0.62, joint);
+  s.rough = mix(0.46 + 0.12 * pore + 0.03 * coarse, 0.52, joint);
 }
 `;
 
@@ -175,7 +205,8 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Terrazzo: marble/stone chips in a grey cement matrix, polished; brass divider strips on the 2.4 m frame. */
+/** Terrazzo: marble/stone chips in a grey cement matrix, polished (0.13-0.2; pits 0.3+); brass divider strips on the
+ * 2.4 m frame. */
 const TERRAZZO = /* glsl */ `
 #define SS 4
 vec3 tzChip(float h) {
@@ -209,16 +240,16 @@ void gen(vec2 uv, inout Surf s) {
   col *= 1.0 - 0.3 * pit;
   s.albedo = col;
   s.metal = strip;
-  s.rough = mix(0.22 + 0.07 * fbmV(uv, PM(3.0), 3, 13) + 0.2 * pit, 0.3, strip);
+  s.rough = mix(0.13 + 0.07 * fbmV(uv, PM(3.0), 3, 13) + 0.2 * pit, 0.3, strip);
   s.height = 0.5 + 0.02 * chip1 - 0.3 * pit;
 }
 `;
 
 export const CONCRETE_RECIPES: RecipeTable = {
   [Mat.CONCRETE_FLOOR]: { glsl: CONCRETE_FLOOR, normalStrength: 1.0, heightScale: 0.004 },
-  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 1.0, heightScale: 0.004 },
+  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 1.0, heightScale: CONCRETE_WALL_HS },
   [Mat.CONCRETE_CEIL]: { glsl: CONCRETE_CEIL, normalStrength: 1.0, heightScale: 0.005 },
-  [Mat.CMU_PAINTED]: { glsl: CMU_PAINTED, normalStrength: 1.0, heightScale: 0.012 },
+  [Mat.CMU_PAINTED]: { glsl: CMU_PAINTED, normalStrength: 1.0, heightScale: CMU_HS },
   [Mat.FLOOR_PAINT]: { glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0003 },
   [Mat.TERRAZZO]: { glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.001 },
 };

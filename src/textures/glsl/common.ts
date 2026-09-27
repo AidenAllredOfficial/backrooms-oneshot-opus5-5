@@ -119,7 +119,9 @@ vec4 tileRand4(vec2 id, int seed) { return hash4f(ivec2(id), seed); }
 float distLines(float x, float pitch) { float f = x / pitch; return abs(f - floor(f + 0.5)) * pitch; }
 `;
 
-export const RECIPE_MAIN = /* glsl */ `
+/** Generator support shared by the layer (RECIPE_MAIN) and detail (DETAIL_MAIN) programs: Surf init/accumulate, the
+ * scratch height and the cavity AO. */
+const RECIPE_SUPPORT = /* glsl */ `
 // ---------------------------------------------------------------- RECIPE_MAIN (WP8)
 void br_init(out Surf s) {
   s.albedo = TABLE_ALBEDO; s.alpha = 1.0; s.height = 0.5; s.rough = TABLE_ROUGH; s.metal = TABLE_METAL;
@@ -147,7 +149,9 @@ float br_cavity(vec2 px) {
   }
   return 1.0 - 0.75 * occ / 16.0;
 }
-void main() {
+`;
+
+export const RECIPE_MAIN = RECIPE_SUPPORT + /* glsl */ `void main() {
   vec2 px = gl_FragCoord.xy + uOrigin; // texel centre in full-texture coordinates (may lie outside [0,S))
   Surf s;
 #ifdef SS
@@ -190,6 +194,19 @@ float br_unpackH(vec4 t) {
 }
 `;
 
+/** Scharr gradient of the wrap-sampled scratch height at the texel centre p, in metres of relief per metre, for texM
+ * metres per texel and `scale` metres per height unit. Needs `float br_h(vec2 p)` (the scratch height). Shared by the
+ * normal pass and the detail-map pack pass (DETAIL_MAIN). */
+export const SLOPE_GLSL = /* glsl */ `
+vec2 br_slope(vec2 p, vec2 texM, float scale) {
+  float gx = 3.0 * (br_h(p + vec2(1, -1)) - br_h(p + vec2(-1, -1))) + 10.0 * (br_h(p + vec2(1, 0)) - br_h(p + vec2(-1, 0)))
+           + 3.0 * (br_h(p + vec2(1, 1)) - br_h(p + vec2(-1, 1)));
+  float gy = 3.0 * (br_h(p + vec2(-1, 1)) - br_h(p + vec2(-1, -1))) + 10.0 * (br_h(p + vec2(0, 1)) - br_h(p + vec2(0, -1)))
+           + 3.0 * (br_h(p + vec2(1, 1)) - br_h(p + vec2(1, -1)));
+  return vec2(gx, gy) / 16.0 / (2.0 * texM) * scale;
+}
+`;
+
 /** Sobel/Scharr normal pass over the wrap-sampled scratch height (one program shared by every layer). */
 export const NORMAL_FRAGMENT = /* glsl */ `
 precision highp float;
@@ -203,16 +220,13 @@ uniform vec2 uOrigin;
 uniform int uHPackIn;   // 1: RGBA8 scratch with packed height
 layout(location = 0) out highp vec4 fragColor;
 ${HEIGHT_PACK_GLSL}
-float h(vec2 p) { vec4 t = texelFetch(uScratch, ivec2(mod(p, vec2(uRes))), 0); return uHPackIn == 1 ? br_unpackH(t) : t.r; }
+float br_h(vec2 p) { vec4 t = texelFetch(uScratch, ivec2(mod(p, vec2(uRes))), 0); return uHPackIn == 1 ? br_unpackH(t) : t.r; }
+${SLOPE_GLSL}
 void main() {
   vec2 p = floor(gl_FragCoord.xy + uOrigin) + 0.5;
-  float gx = 3.0 * (h(p + vec2(1, -1)) - h(p + vec2(-1, -1))) + 10.0 * (h(p + vec2(1, 0)) - h(p + vec2(-1, 0)))
-           + 3.0 * (h(p + vec2(1, 1)) - h(p + vec2(-1, 1)));
-  float gy = 3.0 * (h(p + vec2(-1, 1)) - h(p + vec2(-1, -1))) + 10.0 * (h(p + vec2(0, 1)) - h(p + vec2(0, -1)))
-           + 3.0 * (h(p + vec2(1, 1)) - h(p + vec2(1, -1)));
-  vec2 d = vec2(gx, gy) / 16.0 / (2.0 * uTexelM) * uScale; // metres of relief per metre
+  vec2 d = br_slope(p, uTexelM, uScale); // metres of relief per metre
   vec3 n = normalize(vec3(-d, 1.0));
-  fragColor = vec4(n * 0.5 + 0.5, clamp(h(p), 0.0, 1.0));
+  fragColor = vec4(n * 0.5 + 0.5, clamp(br_h(p), 0.0, 1.0));
 }
 `;
 
@@ -262,6 +276,82 @@ ${COMMON_GLSL}
 // ---------------------------------------------------------------- recipe (layer ${p.layer})
 ${recipeGlsl}
 ${RECIPE_MAIN}`;
+}
+
+/** Main of a detail-map recipe (package B, textures/detail.ts; the layer recipe environment with FRAME = the detail
+ * repeat). uOut == OUT_HEIGHT writes the scratch height; any other value is the pack pass (LEAN moments):
+ *   rg = E[slope] / DETAIL_S * 0.5 + 0.5, b = albedo multiplier x recipe AO x cavity^DETAIL_CAVITY / 2 (0.5 neutral),
+ *   a = E[|slope|^2] / (2 DETAIL_S^2).
+ * The texel stores one slope, so its variance is 0; the box-filtered mips then hold exact first and second moments, and
+ * the shader recovers the unresolved variance E[s^2] - |E[s]|^2 at any distance (LEAN mapping, Olano & Baker 2010). */
+export const DETAIL_MAIN = RECIPE_SUPPORT + SLOPE_GLSL + /* glsl */ `
+void main() {
+  vec2 px = gl_FragCoord.xy + uOrigin;
+  Surf s;
+#ifdef SS
+  br_texel = vec2(0.5 / uRes);
+  br_init(s);
+  s.albedo = vec3(0.0); s.alpha = 0.0; s.height = 0.0; s.rough = 0.0; s.metal = 0.0; s.ao = 0.0; s.emissive = 0.0;
+  for (int i = 0; i < 4; i++) {
+    vec2 o = i == 0 ? vec2(0.125, 0.375) : i == 1 ? vec2(0.375, -0.125) : i == 2 ? vec2(-0.125, -0.375) : vec2(-0.375, 0.125);
+    Surf t; br_init(t);
+    gen((px + o) / uRes, t);
+    br_add(s, t);
+  }
+  s.albedo *= 0.25; s.height *= 0.25; s.ao *= 0.25;
+#else
+  br_texel = vec2(1.0 / uRes);
+  br_init(s);
+  gen(px / uRes, s);
+#endif
+  if (uOut == OUT_HEIGHT) {
+    fragColor = uHPackOut == 1 ? br_packH(s.height) : vec4(s.height, 0.0, 0.0, 1.0);
+  } else {
+    vec2 c = floor(px) + 0.5;
+    vec2 sE = clamp(br_slope(c, FRAME / uRes, uHeightM) / DETAIL_S, -1.0, 1.0);
+    float cav = DETAIL_CAVITY > 0.0 ? pow(br_cavity(c), DETAIL_CAVITY) : 1.0;
+    fragColor = vec4(sE * 0.5 + 0.5, sat(0.5 * s.albedo.r * s.ao * cav), 0.5 * dot(sE, sE));
+  }
+}
+`;
+
+export interface DetailHeaderParams {
+  layer: number;
+  repeat: number; // metres (square frame)
+  slope: number; // DETAIL_S: slope normalisation of the pack
+  cavity: number; // exponent of the cavity AO folded into the albedo multiplier (0 = none)
+}
+
+/** Full fragment source of one detail recipe program (the layer recipe environment, neutral table values). */
+export function buildDetailFragment(p: DetailHeaderParams, recipeGlsl: string): string {
+  return /* glsl */ `precision highp float;
+precision highp int;
+precision highp sampler2D;
+#define DETAIL ${p.layer}
+#define FRAME ${v2(p.repeat, p.repeat)}
+#define NOISE_FRAME FRAME
+#define TABLE_ALBEDO vec3(1.0)
+#define TABLE_ROUGH 0.0
+#define TABLE_METAL 0.0
+#define DETAIL_S ${f(p.slope)}
+#define DETAIL_CAVITY ${f(p.cavity)}
+#define OUT_HEIGHT ${OUT_HEIGHT}
+#define OUT_ALBEDO ${OUT_ALBEDO}
+#define OUT_ORMH ${OUT_ORMH}
+uniform int uOut;
+uniform float uRes;
+uniform vec2 uOrigin;
+uniform sampler2D uScratch;
+uniform float uHeightM;
+uniform int uHPackIn;
+uniform int uHPackOut;
+layout(location = 0) out highp vec4 fragColor;
+${NOISE_GLSL}
+${HEIGHT_PACK_GLSL}
+${COMMON_GLSL}
+// ---------------------------------------------------------------- detail recipe (D${p.layer})
+${recipeGlsl}
+${DETAIL_MAIN}`;
 }
 
 /** Fragment source for a standalone 2D generator (grime, water normals, cookie): noise + common + body.

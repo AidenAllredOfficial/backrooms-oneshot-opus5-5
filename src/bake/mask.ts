@@ -9,13 +9,14 @@
 //             within 0.4 m of a wall), baseboard band = wall texels below 0.25 m above the floor; walls add a hand-
 //             smudge band (0.9-1.5 m) near jambs / wall ends / outside corners and a dust line under the ceiling;
 //             ceilings add dust halos around recessed fixtures and supply diffusers (VENT tiles).
-//   B wet:    humidity * lowFreqPuddle(hash noise), WET cells, leak puddles (1.2 m radius under each leak).
+//   B wet:    humidity * lowFreqPuddle(hash noise), WET cells, leak puddles (1.2 m radius under each leak), and the
+//             splash zone of pools (floors within 1.2 m of a pool WaterRect, above its water line, noise-broken).
 //   A damage: walls: peeling and mould at the base and near leaks, scaled by decay; carpet floors: traffic wear
 //             where the texel is away from walls in corridors (corridorWidth <= 3), threshold wear ellipses across
 //             openings and lanes between openings of the same room.
 // Decay is raised in DYING (+0.2) and DARK (+0.3) mood chunks (per-cell, bilinearly blended like the fields).
 
-import { CELL } from '../core/constants.ts';
+import { CELL, CHUNK_CELLS } from '../core/constants.ts';
 import { cellIdx } from '../core/grid.ts';
 import { EDGE_RENDERS } from '../core/edges.ts';
 import { CellFlag, EdgeKind, Mat, Mood, TileState } from '../core/ids.ts';
@@ -29,6 +30,9 @@ import { occluded } from './dda.ts';
 
 const SEED_PUDDLE = 0x5eed01 ^ SALT.BAKE, SEED_PEEL = 0x5eed02 ^ SALT.BAKE, SEED_WEAR = 0x5eed03 ^ SALT.BAKE, SEED_RING = 0x5eed04;
 const SEED_TIDE = 0x5eed05 ^ SALT.BAKE, SEED_SEEP = 0x5eed06 ^ SALT.BAKE, SEED_HAND = 0x5eed07 ^ SALT.BAKE;
+const SEED_SPLASH = 0x5eed08 ^ SALT.BAKE;
+/** Pool splash zone: wetness up to SPLASH_MAX at the coping, gone SPLASH_REACH metres from the water's edge. */
+const SPLASH_MAX = 0.75, SPLASH_REACH = 1.2;
 
 const sstep = (e0: number, e1: number, x: number): number => {
   const t = (x - e0) / (e1 - e0);
@@ -51,6 +55,10 @@ export interface MaskCache {
   nearWear: (Int32Array | null)[];
   /** per cell: indices of recessed-ish lights near the ceiling, built lazily */
   nearFix: (Int32Array | null)[];
+  /** pool (WaterRect kind 0) rectangles of the 3x3 neighbourhood: x0 z0 x1 z1 (halo cells) + water y (m), built lazily */
+  pools: Float64Array | null; nPools: number;
+  /** per cell: indices into pools within the splash reach, built lazily */
+  nearPool: (Int32Array | null)[];
 }
 export function createMaskCache(job: BakeJob): MaskCache {
   const g = job.g;
@@ -61,7 +69,10 @@ export function createMaskCache(job: BakeJob): MaskCache {
     const m = job.nb.get(slotDcx(slot) as -1 | 0 | 1, slotDcz(slot) as -1 | 0 | 1).mood;
     moodAdd[c] = m === Mood.DARK ? 0.3 * 255 : m === Mood.DYING ? 0.2 * 255 : 0;
   }
-  return { cw: new Int16Array(nn).fill(-1), leakNear: new Uint8Array(nn), moodAdd, open: null, nOpen: 0, lanes: null, nLanes: 0, nearWear: new Array(nn).fill(null), nearFix: new Array(nn).fill(null) };
+  return {
+    cw: new Int16Array(nn).fill(-1), leakNear: new Uint8Array(nn), moodAdd, open: null, nOpen: 0, lanes: null, nLanes: 0,
+    nearWear: new Array(nn).fill(null), nearFix: new Array(nn).fill(null), pools: null, nPools: 0, nearPool: new Array(nn).fill(null),
+  };
 }
 
 const solidAt = (g: BakeJob['g'], i: number, j: number): boolean =>
@@ -165,6 +176,40 @@ function fixNear(job: BakeJob, mc: MaskCache, c: number): Int32Array {
   }
   r = Int32Array.from(list);
   mc.nearFix[c] = r;
+  return r;
+}
+
+/** Pool rectangles (kind 0) that may splash cell c. The rects come from every layout of the neighbourhood (world data
+ * only, never the tile), so the splash field is seamless across tiles. */
+function poolNear(job: BakeJob, mc: MaskCache, c: number): Int32Array {
+  let r = mc.nearPool[c];
+  if (r) return r;
+  const g = job.g;
+  if (!mc.pools) {
+    const out: number[] = [];
+    for (let dcz = -1; dcz <= 1; dcz++) {
+      for (let dcx = -1; dcx <= 1; dcx++) {
+        const offX = dcx * CHUNK_CELLS - g.hl0, offZ = dcz * CHUNK_CELLS - g.hm0;
+        for (const w of job.nb.get(dcx as -1 | 0 | 1, dcz as -1 | 0 | 1).water) {
+          if (w.kind !== 0) continue;
+          out.push(offX + w.x0 / CELL, offZ + w.z0 / CELL, offX + w.x1 / CELL, offZ + w.z1 / CELL, w.y);
+        }
+      }
+    }
+    mc.pools = Float64Array.from(out);
+    mc.nPools = out.length / 5;
+  }
+  const p = mc.pools;
+  const hi = c % g.n, hj = (c - hi) / g.n;
+  const reach = SPLASH_REACH / CELL + 0.75; // + half the cell diagonal (cells)
+  const list: number[] = [];
+  for (let k = 0; k < mc.nPools; k++) {
+    const o = k * 5;
+    const dx = Math.max(0, p[o] - (hi + 0.5), (hi + 0.5) - p[o + 2]), dz = Math.max(0, p[o + 1] - (hj + 0.5), (hj + 0.5) - p[o + 3]);
+    if (dx < reach && dz < reach) list.push(k);
+  }
+  r = Int32Array.from(list);
+  mc.nearPool[c] = r;
   return r;
 }
 
@@ -389,6 +434,21 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
     b = Math.max(b, hum * sstep(0.58, 0.8, pn));
     const wf = wetFeather(g, x, z, wx, wz);
     if (wf > 0) b = Math.max(b, wf * (0.75 + 0.25 * valueNoise2(SEED_PUDDLE + 7, wx / 0.7, wz / 0.7)));
+    // pool splash zone: decks within SPLASH_REACH of a pool's water edge (floors at or above its water line)
+    const pl = poolNear(job, cache, c);
+    if (pl.length > 0) {
+      const p = cache.pools as Float64Array;
+      let dMin = Infinity;
+      for (let q = 0; q < pl.length; q++) {
+        const o = pl[q] * 5;
+        if (floorY < p[o + 4] - 0.02) continue; // the pool's own (submerged) floor
+        const dx = Math.max(0, p[o] - x, x - p[o + 2]), dz = Math.max(0, p[o + 1] - z, z - p[o + 3]);
+        dMin = Math.min(dMin, Math.hypot(dx, dz) * CELL);
+      }
+      if (dMin < SPLASH_REACH) {
+        b = Math.max(b, SPLASH_MAX * (1 - sstep(0.15, SPLASH_REACH, dMin)) * (0.55 + 0.45 * valueNoise2(SEED_SPLASH, wx / 0.9, wz / 0.9)));
+      }
+    }
   } else if (isWall) {
     if (wet) b = Math.max(b, 0.5 * (1 - sstep(0, 0.3, hy)));
     b = Math.max(b, 0.25 * hum * (1 - sstep(0, 0.15, hy)));

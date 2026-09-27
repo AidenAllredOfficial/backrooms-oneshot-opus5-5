@@ -142,6 +142,7 @@ export function createMaterialSystem(renderer: THREE.WebGLRenderer, textures: Te
     },
     setQuality(nq: QualityConfig): void {
       globals.floorReflOn.value = nq.floorReflections ? 1 : 0;
+      shared.detail.value = textures.detail ?? null; // package B: the detail array may have been generated just now
       const nd = qualityDefinesOf(nq);
       // the full canonical key: any define change (not only floorRefl / airlight) re-defines every live material
       if (definesKey(nd) === definesKey(defs)) return;
