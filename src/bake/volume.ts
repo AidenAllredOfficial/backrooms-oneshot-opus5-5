@@ -17,7 +17,8 @@
 //   b.w   = directionality |V| / E in [0, 1];
 //   c     = per-channel dynamic luminance (direct + bounce: probe L0 in the full bake, the per-light constant in
 //           the preview), only when the tile has dynamic light.
-// Samples inside solids are invalid and dilated (6-neighbour average, repeated).
+// Samples inside solids (or on a face two occluder boxes share: visgrid.ts insideOccluder) are invalid and dilated
+// (6-neighbour average, repeated).
 // wallMask: 18 x 18 (tile cells + ring), r = bits N1 E2 S4 W8 of the cell sides that occlude at 1.2 m above the
 // higher floor (or face a SOLID / out-of-group neighbour).
 
@@ -39,7 +40,7 @@ import { diffusedAt, type Diffusion } from './preview.ts';
 import type { ProbeSet } from './probes.ts';
 import { SH_E1, shIrradianceL0 } from './sh.ts';
 import { HALO_OFF, LB, LG, LR, luma, quant, windowDist2, windowW } from './util.ts';
-import { insideBox } from './visgrid.ts';
+import { insideOccluder } from './visgrid.ts';
 import { visBits } from './visbits.ts';
 
 const sel = new Int32Array(16);
@@ -75,7 +76,7 @@ export function bakeVolume(job: BakeJob, P: ProbeSet | null, D: Diffusion | null
           const fl = g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c];
           if (y <= fl || y >= g.ceil[c]) continue;
         }
-        if (insideBox(g, c, x, y, z, group)) continue;
+        if (insideOccluder(g, c, x, y, z, group)) continue; // (also on a face two boxes share)
         valid[s] = 1;
         const nw = nearRays > 0 && !tower ? nearWeight(job, c, x, y, z, 0, 0, 0, group, false) : 0;
         const near = nw > 0;

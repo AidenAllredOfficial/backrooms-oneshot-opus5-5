@@ -282,9 +282,11 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
         const x0 = hx(Math.min(s.x0, s.x1)), x1 = hx(Math.max(s.x0, s.x1));
         const z0 = hz(Math.min(s.z0, s.z1)), z1 = hz(Math.max(s.z0, s.z1));
         if (x1 < lo || x0 > hi || z1 < lo || z0 > hi || x1 <= x0 || z1 <= z0) continue;
-        const thick = rampSlabThickness(s.y0, s.y1, s.steps, (s.flags & SolidFlag.FILLED) !== 0);
-        const ylo = Math.min(s.y0, s.y1) - thick, yhi = Math.max(s.y0, s.y1);
-        pushBox(bb, x0, ylo, z0, x1, yhi, z1, s.bakeGroup, s.mat, s.dir, s.y0, s.y1, thick);
+        const filled = (s.flags & SolidFlag.FILLED) !== 0;
+        const [ry0, ry1] = filled ? filledTopLine(s.y0, s.y1, s.steps) : [s.y0, s.y1];
+        const thick = rampSlabThickness(s.y0, s.y1, s.steps, filled); // (filled: the whole rise, whatever the top line)
+        const ylo = Math.min(ry0, ry1) - thick, yhi = Math.max(s.y0, s.y1);
+        pushBox(bb, x0, ylo, z0, x1, yhi, z1, s.bakeGroup, s.mat, s.dir, ry0, ry1, thick);
       }
     }
     for (const p of expandPeriodicProps(l)) {
@@ -429,8 +431,10 @@ function occInterval(kind: number, hA: number, hB: number, sill: number, e: numb
  * n > 1 risers, 0.15 otherwise): the former 0.3 m slab swallowed the soffit
  * samples (insideBox -> invalid texels -> pure black stair undersides). The slab only needs to be crossed by rays
  * (dda.ts tests a sign change of y - h), so a few centimetres suffice. A FILLED ramp (SolidFlag.FILLED: a built-up
- * body, sides down to the floor, no soffit) is solid from its walking line down past its low end (FILLED_BASE below
- * it: the floor under the body), so no ray passes through it and the hidden floor under it is invalid, not lit.
+ * body, sides down to the floor, no soffit) is solid from its top line (filledTopLine) down past its low end: the
+ * thickness is its whole rise plus FILLED_BASE, so even under the highest point of the top line (a one-riser block is
+ * flat at y1) the body reaches below the floor under it; no ray passes through it and the hidden floor under it is
+ * invalid, not lit.
  */
 export function rampSlabThickness(y0: number, y1: number, steps: number, filled = false): number {
   if (filled) return Math.abs(y1 - y0) + FILLED_BASE;
@@ -441,6 +445,18 @@ export function rampSlabThickness(y0: number, y1: number, steps: number, filled 
 }
 /** Depth (m) of a FILLED ramp's occluder below its low end (its low end sits on the floor). */
 export const FILLED_BASE = 0.1;
+/**
+ * Occluder top line [y at s = 0, y at s = L] of a FILLED ramp: inscribed in its stepped body, never above a tread.
+ * The walking plane (y0 -> y1) rises a whole riser above the top tread (src/mesh/stairs.ts: the last tread is at
+ * y1 - rise, the step up to y1 is the face of whatever backs the flight), and a solid body up to it swallowed that
+ * face (a pool's end wall over the top step of its entry baked black). n >= 2 risers: the line through the back edge
+ * of every tread (nose(s) - rise); one riser: a block, flat at y1; a smooth ramp (steps 0): its plane.
+ */
+export function filledTopLine(y0: number, y1: number, steps: number): [number, number] {
+  const n = Math.max(0, Math.round(steps));
+  if (n === 1) return [y1, y1];
+  return n >= 2 ? [y0, y1 - (y1 - y0) / n] : [y0, y1];
+}
 
 /** Effective floor of a cell for sample heights (blocker top if any). */
 export const effFloor = (g: VisGrid, c: number): number => (g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c]);
@@ -463,7 +479,21 @@ export function insideBox(g: VisGrid, c: number, x: number, y: number, z: number
   return false;
 }
 
-/** Height of a ramp's walking surface at (x, z) (halo units). */
+/**
+ * Is (x, y, z) inside the occluders of `group` bucketed in cell c: strictly inside a box, or on a face shared by two
+ * boxes (inside their union, strictly inside neither). A car's lower body (top 0.8 m) and cabin (bottom 0.8 m) meet
+ * on the 0.8 m light-volume level: those samples baked black (E 0) and valid, and their trilinear blend smudged the
+ * hood and the windshield base.
+ */
+export function insideOccluder(g: VisGrid, c: number, x: number, y: number, z: number, group: number): boolean {
+  if (insideBox(g, c, x, y, z, group)) return true;
+  const e = 1e-4;
+  return (insideBox(g, c, x, y + e, z, group) && insideBox(g, c, x, y - e, z, group))
+    || (insideBox(g, c, x + e, y, z, group) && insideBox(g, c, x - e, y, z, group))
+    || (insideBox(g, c, x, y, z + e, group) && insideBox(g, c, x, y, z - e, group));
+}
+
+/** Height of a ramp's occluder top at (x, z) (halo units): its walking plane (FILLED: filledTopLine). */
 export function rampHeight(g: VisGrid, b: number, x: number, z: number): number {
   const o = b * 6;
   const r = g.boxRamp[b];
