@@ -74,7 +74,11 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 /** Cast-in-place wall, frame 2.4 x 1.5 m: plywood formwork panels 1.2 x 1.5 m (seam fins, per-panel tone, grain
- * imprint), 4 tie holes per panel, bug holes, laitance mottling. */
+ * imprint), 4 tie holes per panel, bug holes, laitance mottling. Relief for parallax occlusion mapping: the face rests
+ * at 0.9 (x CONCRETE_WALL_HS = 18 mm above height 0, pomTop 0.92) and the tie holes are cones from the rim down to 0
+ * (the plastic cones of the snap ties leave 18 mm deep conical recesses); every other amplitude is 1/5 of its value at
+ * the former 4 mm heightScale, so normals and cavity AO of the face are unchanged. */
+const CONCRETE_WALL_HS = 0.02; // heightScale (m per height unit)
 const CONCRETE_WALL = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -96,13 +100,15 @@ void gen(vec2 uv, inout Surf s) {
   float tr = length(tl);
   float tie = 1.0 - smoothstep(0.011, 0.0125 + 0.7 * aaM(), tr);
   float tieRing = gauss((tr - 0.017) / 0.003);
+  float cone = 0.9 * sat(tr / 0.0125);
   col *= 1.0 + 0.05 * mot + 0.03 * mot2 + 0.025 * grain;
   col *= 1.0 - 0.35 * bug;
   col *= 1.0 - 0.2 * seamLine + 0.03 * fin;
   col = mix(col, srgb8(78.0, 76.0, 72.0), tie);
   col *= 1.0 - 0.1 * tieRing;
   s.albedo = col;
-  s.height = 0.5 + 0.04 * grain + 0.03 * mot2 - 0.3 * bug + 0.25 * fin - 0.35 * tie + 0.04 * tieRing;
+  float face = 0.9 + 0.008 * grain + 0.006 * mot2 - 0.06 * bug + 0.05 * fin + 0.008 * tieRing;
+  s.height = mix(face, cone, tie);
   s.rough = 0.85 + 0.05 * mot2 + 0.05 * bug - 0.1 * tie;
 }
 `;
@@ -142,7 +148,7 @@ void gen(vec2 uv, inout Surf s) {
  * laid slightly out of plane (+-0.35 deg), so the sheen changes block by block along a wall. 15 courses fit a 3 m
  * storey, so a true half bond cannot be periodic; courses use a third bond (offset sequence 0, 1/3, 2/3, 1/3, 2/3 of
  * a block), so every head joint is overlapped by >= 1/3. */
-const CMU_HS = 0.012; // heightScale (m per height unit)
+const CMU_HS = 0.014; // heightScale (m per height unit): 5.6 mm tooled joints below the face
 const CMU_PAINTED = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -237,7 +243,7 @@ void gen(vec2 uv, inout Surf s) {
 
 export const CONCRETE_RECIPES: RecipeTable = {
   [Mat.CONCRETE_FLOOR]: { glsl: CONCRETE_FLOOR, normalStrength: 1.0, heightScale: 0.004 },
-  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 1.0, heightScale: 0.004 },
+  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 1.0, heightScale: CONCRETE_WALL_HS },
   [Mat.CONCRETE_CEIL]: { glsl: CONCRETE_CEIL, normalStrength: 1.0, heightScale: 0.005 },
   [Mat.CMU_PAINTED]: { glsl: CMU_PAINTED, normalStrength: 1.0, heightScale: CMU_HS },
   [Mat.FLOOR_PAINT]: { glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0003 },
