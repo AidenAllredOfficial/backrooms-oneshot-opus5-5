@@ -8,6 +8,7 @@
 import { CELL } from '../../core/constants.ts';
 import { beamSoftGlsl } from '../../lighting/flashlightOptics.ts';
 import { f, glslConstants } from './params.ts';
+import { VOLUMETRIC_GLSL } from './volumetric.ts';
 
 /** Uniforms shared by every surface / water material (MaterialGlobals + shared texture set + layer table). Every
  * uniform of the graphics-realism packages is declared here once (A.0); unused declarations cost nothing, and the
@@ -408,8 +409,14 @@ export function fragmentCommon(): string {
  * Haze (D12) + edge fog + optional flashlight airlight. Needs three's lights_pars_begin (getSpotAttenuation,
  * getDistanceAttenuation, spotLights[]) so it is injected after the last pars include.
  * brHazeTerms() is separate so the premultiplied water shader can apply the same maths.
+ * Package F: under BR_VOLUMETRIC (high / ultra) brHaze and brHazeT dispatch to the froxel volume (brVolFog, brVolT:
+ * in-scatter and transmittance along the view ray from post/VolumetricFog.ts, the analytic haze beyond its far plane)
+ * while it is valid (uVolZ.w) and outside reflection passes (the planar mirror and the probe keep the analytic haze
+ * and airlight). brHaze( col ) = col * brHazeT + brHaze( 0 ) on both paths (affine in col: the water layer and the
+ * MRT specular write rely on it).
  */
 export const HAZE_FUNCS_GLSL = /* glsl */ `
+${VOLUMETRIC_GLSL}
 #if defined( BR_AIRLIGHT ) && NUM_SPOT_LIGHTS > 0
 ${beamSoftGlsl()}
 #endif
@@ -444,19 +451,43 @@ vec3 brAirlight( vec3 viewPos, float d ) {
 	return vec3( 0.0 );
 #endif
 }
+// analytic in-scatter colour of the haze for a surface of local irradiance irrLocal
+vec3 brHazeInsc( vec3 irrLocal ) { return mix( uFarColor, irrLocal * uHazeAlbedo / BR_PI * uHazeTint, 0.5 ); }
 void brHazeTerms( vec3 irrLocal, float d, out float fh, out vec3 insc, out float fe ) {
 	fh = 1.0 - exp( - uHazeDensity * d );
-	insc = mix( uFarColor, irrLocal * uHazeAlbedo / BR_PI * uHazeTint, 0.5 );
+	insc = brHazeInsc( irrLocal );
 	fe = smoothstep( uEdgeFog.x, uEdgeFog.y, d );
 }
-// transmittance of the haze and edge fog between the camera and viewPos (the MRT specular write, water); package F
-// replaces the body with the froxel volume's when BR_VOLUMETRIC is on
+#ifdef BR_VOLUMETRIC
+bool brVolOn() { return uVolZ.w > 0.5 && uBrReflPass < 0.5; }
+// the froxel volume up to zF, the analytic haze of the far remainder beyond it (behind the volume), then edge fog
+vec3 brVolFog( vec3 col, vec3 irrLocal, vec3 viewPos ) {
+	float d = length( viewPos );
+	float dF = uVolZ.y * d / max( - viewPos.z, 1e-4 ); // where the ray leaves the grid
+	if ( d > dF ) col = mix( col, brHazeInsc( irrLocal ), 1.0 - exp( - uHazeDensity * ( d - dF ) ) );
+	vec4 v = brVolLookup( viewPos );
+	col = col * v.a + v.rgb;
+	return mix( col, uFarColor, smoothstep( uEdgeFog.x, uEdgeFog.y, d ) );
+}
+float brVolT( vec3 viewPos ) {
+	float d = length( viewPos );
+	float dF = uVolZ.y * d / max( - viewPos.z, 1e-4 );
+	return brVolLookup( viewPos ).a * exp( - uHazeDensity * max( d - dF, 0.0 ) ) * ( 1.0 - smoothstep( uEdgeFog.x, uEdgeFog.y, d ) );
+}
+#endif
+// transmittance of the haze and edge fog between the camera and viewPos (the MRT specular write, water)
 float brHazeT( vec3 viewPos ) {
+#ifdef BR_VOLUMETRIC
+	if ( brVolOn() ) return brVolT( viewPos );
+#endif
 	float fh; vec3 insc; float fe;
 	brHazeTerms( vec3( 0.0 ), length( viewPos ), fh, insc, fe );
 	return ( 1.0 - fh ) * ( 1.0 - fe );
 }
 vec3 brHaze( vec3 col, vec3 irrLocal, vec3 viewPos ) {
+#ifdef BR_VOLUMETRIC
+	if ( brVolOn() ) return brVolFog( col, irrLocal, viewPos );
+#endif
 	float d = length( viewPos );
 	float fh; vec3 insc; float fe;
 	brHazeTerms( irrLocal, d, fh, insc, fe );

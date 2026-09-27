@@ -1,11 +1,18 @@
 // src/lighting/atmosphereBlend.ts (WP11) — zone x mood atmosphere targets and the 1.5 s crossfade.
 // No three, no DOM: unit-testable in Node. Allocation-free after construction.
 
-import { ZONE_COUNT } from '../core/ids.ts';
+import { Mood, ZONE_COUNT } from '../core/ids.ts';
 import type { AtmosphereParams, AtmosphereState, ColorGrade } from '../core/runtime.ts';
 import { ATMOSPHERES, MOOD_EXTRA, MOOD_MODS } from './atmospheres.ts';
 
 export const ATMOSPHERE_FADE_S = 1.5;
+
+/** Package F: the living-air fields' values when a row leaves them out (AtmosphereParams, all optional). */
+export const VOL_DEFAULTS = { hazePhase: 0.7, dustDensity: 0, dustNoise: 0.5, mistDensity: 0, moteDensity: 0 } as const;
+/** 1/m: the mood-scaled dust never exceeds this (a DARK mood must not extinguish the far rooms; volumetricDensity VD) */
+export const DUST_MAX = 0.03;
+/** the DARK mood shows at least this fraction of the dust motes */
+export const DARK_MOTES_MIN = 0.9;
 
 type V3 = [number, number, number];
 
@@ -19,12 +26,14 @@ function newGrade(): ColorGrade {
 export function newParams(): AtmosphereParams {
   return {
     hazeDensity: 0, hazeTint: [1, 1, 1], hazeAlbedo: 0.5, ev100Range: [6.5, 11], exposureBias: 0, bloomIntensity: 0.5,
-    aoIntensity: 2, aoColor: [0, 0, 0], grain: 0.5, grade: newGrade(),
+    aoIntensity: 2, aoColor: [0, 0, 0], grain: 0.5, grade: newGrade(), ...VOL_DEFAULTS,
   };
 }
 export function newAtmosphereState(): AtmosphereState {
   return { ...newParams(), grade: newGrade(), hazeTint: [1, 1, 1], ev100Range: [6.5, 11], aoColor: [0, 0, 0], camIrradiance: [0, 0, 0], edgeFog: [0, 0] };
 }
+
+const MOODS_DARK: number = Mood.DARK;
 
 const c3 = (d: V3, s: readonly number[]): void => { d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; };
 const l3 = (d: V3, a: readonly number[], b: readonly number[], w: number): void => {
@@ -40,6 +49,11 @@ export function copyParams(d: AtmosphereParams, s: AtmosphereParams): void {
   g.pedestal = h.pedestal ?? 0;
   g.toe = h.toe ?? 0;
   c3(g.lift, h.lift); c3(g.gamma, h.gamma); c3(g.gain, h.gain); c3(g.shadowTint, h.shadowTint); c3(g.highlightTint, h.highlightTint);
+  d.hazePhase = s.hazePhase ?? VOL_DEFAULTS.hazePhase;
+  d.dustDensity = s.dustDensity ?? VOL_DEFAULTS.dustDensity;
+  d.dustNoise = s.dustNoise ?? VOL_DEFAULTS.dustNoise;
+  d.mistDensity = s.mistDensity ?? VOL_DEFAULTS.mistDensity;
+  d.moteDensity = s.moteDensity ?? VOL_DEFAULTS.moteDensity;
 }
 
 const lp = (w: number, x: number, y: number): number => x + (y - x) * w;
@@ -57,6 +71,12 @@ export function lerpParams(d: AtmosphereParams, a: AtmosphereParams, b: Atmosphe
   g.toe = lp(w, ga.toe ?? 0, gb.toe ?? 0);
   l3(g.lift, ga.lift, gb.lift, w); l3(g.gamma, ga.gamma, gb.gamma, w); l3(g.gain, ga.gain, gb.gain, w);
   l3(g.shadowTint, ga.shadowTint, gb.shadowTint, w); l3(g.highlightTint, ga.highlightTint, gb.highlightTint, w);
+  const V = VOL_DEFAULTS;
+  d.hazePhase = lp(w, a.hazePhase ?? V.hazePhase, b.hazePhase ?? V.hazePhase);
+  d.dustDensity = lp(w, a.dustDensity ?? V.dustDensity, b.dustDensity ?? V.dustDensity);
+  d.dustNoise = lp(w, a.dustNoise ?? V.dustNoise, b.dustNoise ?? V.dustNoise);
+  d.mistDensity = lp(w, a.mistDensity ?? V.mistDensity, b.mistDensity ?? V.mistDensity);
+  d.moteDensity = lp(w, a.moteDensity ?? V.moteDensity, b.moteDensity ?? V.moteDensity);
 }
 
 /** Target params for a (zone, mood) pair: ATMOSPHERES[zone] modified by MOOD_MODS[mood] (+ MOOD_EXTRA). */
@@ -74,6 +94,8 @@ export function atmosphereTarget(zone: number, mood: number, out: AtmospherePara
   out.grain *= mx.grainMul;
   out.grade.saturation *= mx.saturationMul;
   out.exposureBias *= mx.biasMul;
+  out.dustDensity = Math.min(DUST_MAX, (out.dustDensity ?? 0) * mx.dustMul);
+  if (m === MOODS_DARK) out.moteDensity = Math.max(out.moteDensity ?? 0, DARK_MOTES_MIN);
   return out;
 }
 

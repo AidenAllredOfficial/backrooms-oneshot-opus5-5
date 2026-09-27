@@ -1,11 +1,12 @@
-// src/textures/cookie.ts — 512^2 flashlight cookie (SpotLight.map) (WP8; package F optics): the measured-style LED
-// beam of lighting/flashlightOptics.ts (square-ish die core, dark and phosphor rings, corona, flat spill, reflector
-// lip and crisp rim) times lens dirt and a thumb smudge, with a cool core, warm spill and a yellow phosphor ring.
-// Linear RGBA16F (HalfFloat: no 8-bit banding in the 7 % spill gradient), clamped, mipmapped, not tileable.
+// src/textures/cookie.ts — 512^2 flashlight cookie (SpotLight.map) (WP8; package F optics): the LED reflector beam
+// of lighting/flashlightOptics.ts (a softly square ~9 deg hotspot with a faint phosphor ring, a smooth halo, a dim
+// wide spill and a soft outer edge) times lens dirt and a thumb smudge, with a cool core, warm spill and a yellow
+// phosphor ring. Linear RGBA16F (HalfFloat: no 8-bit banding in the 3 % spill gradient), clamped, mipmapped, not
+// tileable.
 //
 // Projection: three maps the cookie through the spot shadow camera (fov = 2 * angle * focus, focus = MAP_FOCUS), so
 // the point p = (uv - 0.5) * 2 lies at tan(theta) = |p| * tan(CONE * MAP_FOCUS) off the beam axis; the beam ends at
-// |p| = tan(CONE) / tan(CONE * MAP_FOCUS) (~0.88) and the margin beyond it stays black.
+// |p| = tan(RIM.out) / tan(CONE * MAP_FOCUS) (~0.80) and the margin beyond it stays black.
 
 import { beamProfileGlsl, FLASHLIGHT_OPTICS } from '../lighting/flashlightOptics.ts';
 import { f } from '../materials/chunks/params.ts';
@@ -27,7 +28,7 @@ vec4 texel(vec2 uv) {
   float tc = ${f(Math.tan(O.CONE * O.MAP_FOCUS))};
   float th = atan(r * tc);
   // the die image is slightly square: the core uses a blend of the round and the Chebyshev radius
-  float ths = atan(mix(r, max(abs(p.x), abs(p.y)) * 1.05, 0.15) * tc);
+  float ths = atan(mix(r, max(abs(p.x), abs(p.y)) * 1.03, 0.07) * tc);
   float I = brBeam(th, ths);
   // lens dirt: low-frequency blotches everywhere, darker specks in the spill, a thumb smudge off-centre
   float dirt = 1.0 + 0.04 * fbm(uv, ivec2(6), 4, 61)

@@ -250,6 +250,7 @@ export function applyWaterDefines(m: THREE.ShaderMaterial, d: QualityDefines): v
   if (waves > 0) defs.BR_WATER_WAVES = String(waves);
   if (d.waterRipple) defs.BR_WATER_RIPPLE = '';
   if (d.waterDebris) defs.BR_WATER_DEBRIS = '';
+  if (d.volumetric) defs.BR_VOLUMETRIC = ''; // package F: brHaze / brHazeT read the froxel volume (high / ultra)
   m.defines = defs;
   m.userData.brKey = `br-water-v2|${definesKey(d)}`;
   m.needsUpdate = true;

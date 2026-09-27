@@ -60,7 +60,16 @@ vec3 brDbg = vec3( 0.0 );
 	}
 	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( brWet, brFilm, brPuddle ); // package B: r wet, g film, b standing water
 	else if ( dv == ${DebugView.HEIGHT} ) brDbg = vec3( brNrm.w ); // package B: texture height (normal.a, 0.5 = rest)
-	else if ( dv == ${DebugView.VOLUMETRIC} ) brDbg = vec3( 0.0 ); // package F
+	else if ( dv == ${DebugView.VOLUMETRIC} ) {
+		// package F: the froxel in-scatter from the camera to this surface (1.0 = BR_VOL_DEBUG_NITS) and its
+		// extinction (1 - transmittance) in blue; black while the volume is off (medium / low, loading)
+#ifdef BR_VOLUMETRIC
+		if ( uVolZ.w > 0.5 ) {
+			vec4 brV = brVolLookup( - vViewPosition );
+			brDbg = brV.rgb / BR_VOL_DEBUG_NITS + vec3( 0.0, 0.0, 0.5 ) * ( 1.0 - brV.a );
+		}
+#endif
+	}
 	else if ( dv == ${DebugView.BOUNCE} ) brDbg = brFbE / BR_FB_DEBUG_LUX; // package F: flashlight bounce irradiance
 	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E
 	else if ( dv == ${DebugView.PROBE} ) brDbg = vec3( 0.0 ); // package D

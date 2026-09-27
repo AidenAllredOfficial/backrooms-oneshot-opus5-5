@@ -1,7 +1,7 @@
 // src/lighting/Flashlight.ts (WP11) — the one runtime light. A SpotLight that is ALWAYS in the scene with
 // castShadow ALWAYS true (constant light count and program set); off = intensity 0 + shadow.autoUpdate false.
-// Photometry and beam shape come from lighting/flashlightOptics.ts (package F): a 3000 cd, 35.5 deg LED reflector
-// beam reaching 40 m, shaped by the cookie texture.
+// Photometry and beam shape come from lighting/flashlightOptics.ts (package F): a 5500 cd LED reflector beam (a ~9 deg
+// hotspot, a dim spill fading out by 37 deg) reaching 40 m, shaped by the cookie texture.
 // Rig: the light sits at the eye + camera-space offset (0.15, -0.2, 0) and aims along a direction that follows
 // the camera through a critically damped rotation spring (omega 12), so fast turns lag slightly like a hand. A small
 // hand sway (breathing, gait, tremor) moves the aim only; it advances only on normal frames (0 < dt <= 0.25), so
@@ -19,8 +19,8 @@ export const FLASHLIGHT = {
   COLOR: 0xfff4e0,
   CD: FLASHLIGHT_OPTICS.PEAK_CD, // candela at the beam axis (the cookie is 1 there)
   DISTANCE: FLASHLIGHT_OPTICS.RANGE, // m; shadow.camera.far == distance (outside the shadow frustum three reports "lit")
-  ANGLE: FLASHLIGHT_OPTICS.CONE, // the reflector's spill cut-off; the cookie spans exactly this cone
-  PENUMBRA: FLASHLIGHT_OPTICS.PENUMBRA, // three's ramp stays inside the cookie's crisp rim
+  ANGLE: FLASHLIGHT_OPTICS.CONE, // just beyond the spill's soft rim; the cookie spans this cone x MAP_FOCUS
+  PENUMBRA: FLASHLIGHT_OPTICS.PENUMBRA, // three's ramp lies beyond the cookie's rim
   DECAY: 2,
   OFFSET: [0.15, -0.2, 0] as const, // camera space (right, up, back)
   OMEGA: 12,
@@ -178,11 +178,11 @@ export function createFlashlight(scene: THREE.Scene, cookie: THREE.Texture | nul
     },
     setQuality(nq) {
       if (light.shadow.mapSize.x !== nq.flashlightShadow) {
+        // three (r186) resizes the existing map at its next shadow render (WebGLShadowMap: map.setSize when mapSize
+        // differs) and fills it in the same call. Disposing it here left the lit draws before that render (the planar
+        // reflection, the next frame's first passes) with no depth texture behind the shadow sampler: a burst of
+        // GL_INVALID_OPERATION on every quality switch that changes the map size (e.g. high <-> ultra).
         light.shadow.mapSize.set(nq.flashlightShadow, nq.flashlightShadow);
-        if (light.shadow.map) {
-          light.shadow.map.dispose();
-          (light.shadow as { map: THREE.WebGLRenderTarget | null }).map = null;
-        }
         light.shadow.needsUpdate = true;
       }
     },
