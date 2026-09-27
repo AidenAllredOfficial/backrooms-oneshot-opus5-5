@@ -10,7 +10,7 @@
 // geometry is a sphere of radius exactly w / 2; HIGHBAY's disk has radius w / 2.
 // Pure module (no three/DOM).
 
-import { DYING_MEAN, FixtureKind, isRecessedFixture, LightState, Mat, SignKind, VFlag } from '../core/ids.ts';
+import { DROP_LENS_H, DYING_MEAN, FixtureKind, isRecessedFixture, LightState, Mat, SignKind, VFlag } from '../core/ids.ts';
 import { fixtureRadiance, type Fixture } from '../core/layout.ts';
 import type { GeometryWriter } from '../core/writer.ts';
 import { PartBuilder, rnd } from './builder.ts';
@@ -162,10 +162,16 @@ function pendantLinear(f: Fixture, md: number): void {
   const hx = (f.shape === 0 ? f.w : Math.sqrt(emissiveArea(f) * 6)) / 2;
   const hz = emissiveArea(f) / (4 * hx);
   lens(Mat.PANEL_LENS);
-  rect(B, 0, -0.0015, 0, hx, 0, 0, 0, 0, hz, 0, -1, 0);
-  // extruded aluminium body with end caps
+  dropLens(hx, hz);
+  // extruded aluminium body with end caps. Its bottom is only a frame around the lens: a full bottom face just
+  // above the lens z-fights with it beyond ~30 m (24-bit depth, near 0.05), breaking distant lenses into steps.
   housing(0.5, 0.5, 0.49, 0.25);
-  bevelBox(B, -hx - 0.012, 0, -hz - 0.018, hx + 0.012, 0.075, hz + 0.018, 0.01);
+  const fx = hx + 0.012, fz = hz + 0.018;
+  bevelBox(B, -fx, 0, -fz, fx, 0.075, fz, 0.01, SKIP.NY);
+  for (const s of [-1, 1]) {
+    rect(B, 0, 0, s * (hz + fz) / 2, fx, 0, 0, 0, 0, (fz - hz) / 2, 0, -1, 0);
+    rect(B, s * (hx + fx) / 2, 0, 0, (fx - hx) / 2, 0, 0, 0, 0, hz, 0, -1, 0);
+  }
   housing(0.08, 0.08, 0.085, 0.4);
   for (const s of [-1, 1]) box(B, s > 0 ? hx + 0.012 : -hx - 0.02, 0.005, -hz - 0.012, s > 0 ? hx + 0.02 : -hx - 0.012, 0.07, hz + 0.012, 0);
   // aircraft cables + ceiling canopies
@@ -180,6 +186,24 @@ function pendantLinear(f: Fixture, md: number): void {
     cylinder(B, 0.03, 0.03, top - 0.012, top, 10, 1);
     B.pop();
   }
+}
+
+/** Emissive drop diffuser of half extents (hx, hz) hanging DROP_LENS_H below y = 0: bottom face plus sides whose
+ * lower vertices face down, so the vertex shaders can deepen it to 1 px on screen (a distant lens seen edge-on
+ * would otherwise cover under a pixel and break up). */
+function dropLens(hx: number, hz: number): void {
+  B.dropLens();
+  const h = -DROP_LENS_H;
+  rect(B, 0, h, 0, hx, 0, 0, 0, 0, hz, 0, -1, 0);
+  // sides: top edge at the housing (normal outward), bottom edge on the lens face (normal down)
+  const side = (x0: number, z0: number, x1: number, z1: number, nx: number, nz: number): void => {
+    const u1 = Math.hypot(x1 - x0, z1 - z0);
+    B.quad(B.v(x0, 0, z0, nx, 0, nz, 0, 0), B.v(x1, 0, z1, nx, 0, nz, u1, 0), B.v(x1, h, z1, 0, -1, 0, u1, h), B.v(x0, h, z0, 0, -1, 0, 0, h));
+  };
+  side(-hx, -hz, hx, -hz, 0, -1);
+  side(-hx, hz, hx, hz, 0, 1);
+  side(-hx, -hz, -hx, hz, -1, 0);
+  side(hx, -hz, hx, hz, 1, 0);
 }
 
 function sodium(f: Fixture, md: number): void {

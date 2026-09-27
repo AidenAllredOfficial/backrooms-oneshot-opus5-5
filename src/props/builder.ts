@@ -13,7 +13,7 @@
 // - a counting mode (no writer) used by propTris(), which runs the identical code path.
 
 import { LAYER_DEFS } from '../core/materials.ts';
-import { VFlag } from '../core/ids.ts';
+import { DROP_LENS_AUX, VFlag } from '../core/ids.ts';
 import { packRGBA, type GeometryWriter } from '../core/writer.ts';
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -96,11 +96,18 @@ export class PartBuilder {
 
   /** The following parts of the current material are thin tubes of radius `r` (m, 0.1 mm steps up to 25.5 mm):
    * cylinder / sweep sides with radial normals and no caps, straight from the builder (no scaled transform). The
-   * vertex shaders widen them to at least WIRE_MIN_PX on screen (aux.y, materials/chunks/vertex.ts WIRE_GLSL), so a
+   * vertex shaders widen them to at least WIRE_MIN_PX on screen (aux.y < 255, materials/chunks/vertex.ts WIRE_GLSL), so a
    * distant cable stays a continuous line instead of breaking into dashes. Cleared by the next mat() / emissive(). */
   wire(r: number): void {
-    const rb = Math.max(1, Math.min(255, Math.round(r * 1e4)));
-    this.state(this.stFlags, this.stTint, this.stEmit, ((this.stAux & ~0xff00) | (rb << 8)) >>> 0);
+    this.tag(Math.max(1, Math.min(DROP_LENS_AUX - 1, Math.round(r * 1e4))));
+  }
+
+  /** The following parts are a drop lens DROP_LENS_H deep whose down-facing vertices (normal y < -0.5) are the ones
+   * to lower: the vertex shaders deepen it to at least 1 px on screen (aux.y = DROP_LENS_AUX). */
+  dropLens(): void { this.tag(DROP_LENS_AUX); }
+
+  private tag(auxY: number): void {
+    this.state(this.stFlags, this.stTint, this.stEmit, ((this.stAux & ~0xff00) | (auxY << 8)) >>> 0);
   }
 
   private state(flags: number, tint: number, emit: number, aux: number): void {

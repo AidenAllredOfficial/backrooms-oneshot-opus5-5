@@ -187,6 +187,11 @@ export const VFlag = {
   PROP_AUX: 128, // brAux = (roughness override byte (0 = none, else roughness = x / 255), thin-tube radius in 0.1 mm (0 = none; widened to >= 1 px on screen), bits: 1 = tower-periodic (wrap y for LV lookup), ceilCm/5 of the anchor cell)
 } as const;
 
+/** PROP_AUX aux.y value marking a drop lens (PartBuilder.dropLens) rather than a thin-tube radius. */
+export const DROP_LENS_AUX = 255;
+/** Built depth (m) of a drop lens below its housing (deepened to >= 1 px on screen by the vertex shaders). */
+export const DROP_LENS_H = 0.004;
+
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)
 export const DebugView = {
   FINAL: 0, ALBEDO: 1, NORMAL: 2, ROUGHNESS: 3, LIGHTMAP: 4, DIRECTIONALITY: 5, AO: 6, FLICKER: 7,
