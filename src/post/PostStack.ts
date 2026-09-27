@@ -81,6 +81,7 @@ export const AO_SAMPLES: Readonly<Record<Exclude<QualityConfig['ao'], 'off'>, nu
 /** Internals exposed to the post harness / QA only (not part of the PostStack contract). */
 export interface PostInternals {
   composer: EffectComposer;
+  scenePass: ScenePass;
   ao: AmbientOcclusionPass;
   autoExposure: AutoExposurePass;
   bloom: BloomEffect;
@@ -113,8 +114,9 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
   composer.autoRenderToScreen = false;
 
-  // 1. scene
+  // 1. scene: the frame graph (depth prepass, hook stages, optional MRT, colour pyramid, late layer)
   const renderPass = new ScenePass(scene, camera);
+  renderPass.setQuality(q);
 
   // 2. AO. A quality change that alters the AO level or halfRes builds a NEW pass (and disposes the old one) instead
   // of mutating defines, so the program set does not ratchet up across preset cycles.
@@ -191,6 +193,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
 
   const applyEnabled = (): void => {
     ao.enabled = enabled.ao && quality.ao !== 'off';
+    renderPass.setSsrEnabled(enabled.ssr);
     bloom.active = enabled.bloom;
     aaPass.enabled = enabled.smaa && quality.aa !== 'off';
     grade.enabled = enabled.grade;
@@ -320,6 +323,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
     },
     setQuality(nq) {
       quality = nq;
+      renderPass.setQuality(nq);
       const nAoKey = `${nq.ao}:${nq.aoHalfRes}`;
       if (nAoKey !== aoKey) {
         aoKey = nAoKey;
@@ -398,7 +402,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   };
   applyEnabled();
   internals.set(post, {
-    composer, get ao() { return ao; }, autoExposure: ae, bloom, finalPass,
+    composer, scenePass: renderPass, get ao() { return ao; }, autoExposure: ae, bloom, finalPass,
     get passes() { return composer.passes; },
     targetEv: () => targetEv,
     measurements: () => ae.measurements,

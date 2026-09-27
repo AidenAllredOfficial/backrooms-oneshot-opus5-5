@@ -273,6 +273,11 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const lighting = createLightingRuntime(core.scene, materials.globals, textures, q, settings, core.bus);
   lighting.setFlickerMode(core.flickerMode);
   const post = createPostStack(r, core.scene, core.camera, q, settings);
+  // the frame graph publishes the pyramid and the pre-shade SSAO into the material globals; presets with split
+  // frames compile its quad programs now, not at the first frame with water in view
+  const frame = postInternals(post)?.scenePass;
+  frame?.bindGlobals(materials.globals);
+  if (frame && q.colorPyramidScale > 0) await warmPassMaterials(r, frame.materials);
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
