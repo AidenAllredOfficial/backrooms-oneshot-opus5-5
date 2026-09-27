@@ -25,7 +25,9 @@ export interface Settings {
   toggleCrouch: boolean;
   brightnessEV: number; // -1..+1 exposure bias
   volume: { master: number; ambience: number; hum: number; sfx: number; ui: number };
-  film: { grain: number; chromaticAberration: number; vignette: number; distortion: number; camcorder: boolean };
+  /** motionBlur: package C.4 camera motion blur (x the camcorder shutter; 0 = off, the motion-sickness opt-out);
+   * flare: C.5 aperture star + lens ghosts on overexposed sources (0 = off) */
+  film: { grain: number; chromaticAberration: number; vignette: number; distortion: number; camcorder: boolean; motionBlur: number; flare: number };
   mainsHz: 50 | 60;
   lastSeed: string;
 }
@@ -45,7 +47,7 @@ export const DEFAULT_SETTINGS: Settings = {
   toggleCrouch: false,
   brightnessEV: 0,
   volume: { master: 0.8, ambience: 0.8, hum: 0.8, sfx: 0.9, ui: 0.6 },
-  film: { grain: 1, chromaticAberration: 1, vignette: 1, distortion: 1, camcorder: false },
+  film: { grain: 1, chromaticAberration: 1, vignette: 1, distortion: 1, camcorder: false, motionBlur: 1, flare: 1 },
   mainsHz: 60,
   lastSeed: '',
 };

@@ -2,7 +2,11 @@
 // after SMAA). EffectAttribute.CONVOLUTION and NO mainUv (it samples `inputBuffer` itself), so it merges with the
 // film grain in the last EffectPass:
 //  - barrel distortion, k = -0.02 * film.distortion (corners stay in frame: the centre is magnified instead);
-//  - radial (lateral) chromatic aberration, 1.5 px at the corners * film.chromaticAberration;
+//  - radial (lateral) chromatic aberration, 1.5 px at the corners * film.chromaticAberration: a 5-tap SPECTRAL
+//    smear (package C.6: taps at [-1, -.5, 0, .5, 1] x the CA scale, each channel a normalised weighting of the taps,
+//    LENS_CA_WEIGHTS), so edges get graded purple-green-yellow fringes instead of hard cyan / orange outlines;
+//  - camcorder mode: CMOS rolling-shutter skew (C.6: uRS, uv shift per unit of row offset from the frame centre, set
+//    from MotionBlurEffect's angular velocity; zero on cuts and pause), applied before the distortion;
 //  - (the cos^4 natural vignetting moved to ExposureEffect in R2-post: it acts on HDR radiance before the clip;
 //    uLens.z stays for a residual display-side vignette and PostStack sets it to 0);
 //  - glitch displacement (bands, RGB split, block dropouts) driven by post.glitch() and simulation time;
@@ -21,6 +25,7 @@ uniform vec4 uLens;     // x distortion K (>0 barrel), y CA px at the corner, z 
 uniform vec4 uGlitch;   // x amount 0..1, y frame index, z band seed, w unused
 uniform vec4 uCam;      // x camcorder 0/1, y frame index, z simulation time, w beat-band amplitude (0..0.03)
 uniform vec2 uMtf;      // x blur mix (0 = off), y unsharp amount
+uniform vec2 uRS;       // rolling shutter: uv shift per unit of (st.y - .5) (camcorder mode; 0 = off)
 float brLensHash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -33,12 +38,17 @@ vec3 brLensYuv(vec3 c) {
 vec3 brLensRgb(vec3 v) {
   return vec3(v.x + 1.403 * v.z, v.x - 0.344 * v.y - 0.714 * v.z, v.x + 1.770 * v.y);
 }
+// spectral lateral CA: 5 full-RGB taps at radial scales [-1, -.5, 0, .5, 1] * caS; each channel a normalised weighting
+// (red spreads outward, blue inward, green centred)
 vec3 brLensFetch(vec2 uvd, float caS) {
   vec2 d = uvd - 0.5;
-  float r = texture2D(inputBuffer, clamp(0.5 + d * (1.0 + caS), 0.0, 1.0)).r;
-  float g = texture2D(inputBuffer, clamp(uvd, 0.0, 1.0)).g;
-  float b = texture2D(inputBuffer, clamp(0.5 + d * (1.0 - caS), 0.0, 1.0)).b;
-  return vec3(r, g, b);
+  vec3 t0 = texture2D(inputBuffer, clamp(0.5 + d * (1.0 - caS), 0.0, 1.0)).rgb;
+  vec3 t1 = texture2D(inputBuffer, clamp(0.5 + d * (1.0 - 0.5 * caS), 0.0, 1.0)).rgb;
+  vec3 t2 = texture2D(inputBuffer, clamp(uvd, 0.0, 1.0)).rgb;
+  vec3 t3 = texture2D(inputBuffer, clamp(0.5 + d * (1.0 + 0.5 * caS), 0.0, 1.0)).rgb;
+  vec3 t4 = texture2D(inputBuffer, clamp(0.5 + d * (1.0 + caS), 0.0, 1.0)).rgb;
+  return vec3(0.0, 0.05, 0.55) * t0 + vec3(0.0, 0.2, 0.35) * t1 + vec3(0.1, 0.5, 0.1) * t2
+    + vec3(0.35, 0.2, 0.0) * t3 + vec3(0.55, 0.05, 0.0) * t4;
 }
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec2 st = uv;
@@ -63,6 +73,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     headBand = hb;
     st.x += hb * (0.012 + 0.02 * brLensHash(vec2(floor(st.y * resolution.y), uCam.y)));
   }
+  // ---- rolling shutter (camcorder): rows are read top to bottom while the camera turns, so vertical edges lean
+  st = clamp(st + uRS * (st.y - 0.5), 0.0, 1.0);
   // ---- barrel distortion (normalised so the corners map to the corners)
   vec2 p = (st - 0.5) * vec2(aspect, 1.0);
   float r2 = dot(p, p) / (0.25 * (aspect * aspect + 1.0));
@@ -130,26 +142,41 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 export const VIGNETTE_FOCAL = 0.55;
 /** Lens MTF defaults (R2-post): blur mix and unsharp amount at film strengths 1. */
 export const LENS_MTF = { MIX: 0.7, UNSHARP: 0.25 } as const;
+/** C.6 spectral CA: tap scales (x the CA scale) and each channel's (normalised) tap weights, as in LENS_FRAG. */
+export const LENS_CA = {
+  SCALES: [-1, -0.5, 0, 0.5, 1] as readonly number[],
+  R: [0, 0, 0.1, 0.35, 0.55] as readonly number[],
+  G: [0.05, 0.2, 0.5, 0.2, 0.05] as readonly number[],
+  B: [0.55, 0.35, 0.1, 0, 0] as readonly number[],
+} as const;
 
 export class LensEffect extends Effect {
   private readonly uLens: THREE.Uniform<THREE.Vector4>;
   private readonly uGlitch: THREE.Uniform<THREE.Vector4>;
   private readonly uCam: THREE.Uniform<THREE.Vector4>;
   private readonly uMtf: THREE.Uniform<THREE.Vector2>;
+  private readonly uRS: THREE.Uniform<THREE.Vector2>;
   constructor() {
     const uLens = new THREE.Uniform(new THREE.Vector4(0.02, 1.5, 1, 0.33));
     const uGlitch = new THREE.Uniform(new THREE.Vector4(0, 0, 0, 0));
     const uCam = new THREE.Uniform(new THREE.Vector4(0, 0, 0, 0));
     const uMtf = new THREE.Uniform(new THREE.Vector2(LENS_MTF.MIX, LENS_MTF.UNSHARP));
+    const uRS = new THREE.Uniform(new THREE.Vector2(0, 0));
     super('LensEffect', LENS_FRAG, {
       attributes: EffectAttribute.CONVOLUTION,
       blendFunction: BlendFunction.SRC,
-      uniforms: new Map<string, THREE.Uniform>([['uLens', uLens], ['uGlitch', uGlitch], ['uCam', uCam], ['uMtf', uMtf]]),
+      uniforms: new Map<string, THREE.Uniform>([['uLens', uLens], ['uGlitch', uGlitch], ['uCam', uCam], ['uMtf', uMtf], ['uRS', uRS]]),
     });
     this.uLens = uLens;
     this.uGlitch = uGlitch;
     this.uCam = uCam;
     this.uMtf = uMtf;
+    this.uRS = uRS;
+  }
+  /** Rolling-shutter skew (uv shift per unit of row offset from the centre; motionBlur rollingShutterUv); 0, 0 = off. */
+  setRollingShutter(x: number, y: number): void {
+    const lim = 0.05; // a wild frame (hitch) must not tear the image apart
+    this.uRS.value.set(Math.max(-lim, Math.min(lim, x)), Math.max(-lim, Math.min(lim, y)));
   }
   /** Lens softness (blur mix 0..1) and camcorder detail enhancement (unsharp amount); 0, 0 = a perfect lens. */
   setMtf(mix: number, unsharp: number): void {

@@ -129,6 +129,10 @@ export function createSettingsPanel(store: SettingsStore, cb: SettingsPanelCallb
       { kind: 'range', label: 'Chromatic aberration', min: 0, max: 1, step: 0.05, get: (s) => s.film.chromaticAberration, set: (v, s) => film('chromaticAberration', v, s), fmt: pct },
       { kind: 'range', label: 'Vignette', min: 0, max: 1, step: 0.05, get: (s) => s.film.vignette, set: (v, s) => film('vignette', v, s), fmt: pct },
       { kind: 'range', label: 'Lens distortion', min: 0, max: 1, step: 0.05, get: (s) => s.film.distortion, set: (v, s) => film('distortion', v, s), fmt: pct },
+      {
+        kind: 'range', label: 'Lens flare', min: 0, max: 1, step: 0.05, get: (s) => s.film.flare, set: (v, s) => film('flare', v, s), fmt: pct,
+        note: 'Star points and faint ghosts around overexposed lights (high and ultra quality).',
+      },
     ],
     comfort: [
       { kind: 'group', label: 'Motion' },
@@ -136,6 +140,10 @@ export function createSettingsPanel(store: SettingsStore, cb: SettingsPanelCallb
       {
         kind: 'range', label: 'Camera shake', min: 0, max: 1, step: 0.05, get: (s) => s.cameraShake, set: (v) => ({ cameraShake: v }), fmt: pct,
         note: 'Handheld sway of the camera. 0% holds it perfectly still.',
+      },
+      {
+        kind: 'range', label: 'Motion blur', min: 0, max: 1, step: 0.05, get: (s) => s.film.motionBlur, set: (v, s) => film('motionBlur', v, s), fmt: pct,
+        note: 'Camera shutter blur when turning (medium quality and up). 0% keeps every frame sharp.',
       },
       {
         kind: 'seg', label: 'Walk pace', options: [['slow', 'Slow'], ['normal', 'Normal'], ['brisk', 'Brisk']],

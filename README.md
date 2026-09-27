@@ -408,7 +408,7 @@ These three run in `workers/`.
 - `textures/`: procedural PBR textures generated on the GPU at startup.
 - `materials/`: the shader patches on `MeshStandardMaterial`, the depth prepass and the planar water reflection.
 - `lighting/`: flicker, atmosphere and haze.
-- `post/`: ambient occlusion, exposure, bloom, AgX, grade, lens and grain.
+- `post/`: ambient occlusion, exposure, camera motion blur, energy-conserving lens glare (aperture star and ghosts on high/ultra), AgX, grade, lens (spectral CA, rolling shutter in camcorder mode) and grain.
 - `audio/`: synthesized sound and propagation.
 
 **Player and app**

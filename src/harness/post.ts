@@ -1,6 +1,7 @@
 // src/harness/post.ts (WP11) — harness page (§7.3): the real PostStack on synthetic HDR scenes.
-//   harness/post.html?scene=panels|dark|shimmer&preset=low|medium|high|ultra[&time=10][&anim=1][&camcorder=1][&glitch=0..1]
-//   [&checks=0[&meter=0]] (skip the checks and their captures; meter=0 also pauses the auto-exposure readback)
+//   harness/post.html?scene=panels|dark|shimmer|psf&preset=low|medium|high|ultra[&time=10][&anim=1][&camcorder=1]
+//   [&glitch=0..1][&checks=0[&meter=0]] (skip the checks and their captures; meter=0 also pauses the auto-exposure
+//   readback)[&src=0.3,0.35] (psf: the source position in screen fractions, default the centre)
 // panels : a Level-0 room (MeshStandardMaterial walls, RectAreaLight-lit, emissive 3300-nit troffers, flashlight).
 //          Checks: clipped fraction outside the panels < 3 %, panels bloom (ring luma with bloom > 1.25 x without), AO draw
 //          calls (AO on - off) <= 3, and two captures at frozen t = 10 are identical.
@@ -8,6 +9,10 @@
 //          Check: the occluded half stays dark, the unoccluded half is lit (shadow map covers the whole range).
 // shimmer: a 16 x 48 quad array evaluating brLensShimmer (LENS_SHIMMER_GLSL) on the GPU for 16 seeds x 8 times x
 //          {DYING, BUZZ} x {standard, reduced, off}; readback compared with lensShimmer (TS) within 1e-2.
+// psf    : package C.1 glare calibration: a black frame with one 3 x 3 px 20000-nit source, exposure locked. Reads the
+//          glare chain's U0 (Float16) back. Checks: its energy matches the source's within 3 % (the glare moves light,
+//          it never adds any) and its encircled energy at 0.5 / 2 / 8 deg is within 20 % of glareEE (this calibrates
+//          GLARE.SIGMA0_PX). The picture shows the halo, the aperture star (high / ultra) and the ghosts (ultra).
 // window.__backrooms = HarnessDebugAPI; stats() returns every measurement; ready once the checks have run.
 
 import * as THREE from 'three';
@@ -25,11 +30,12 @@ import { atmosphereTarget, newAtmosphereState } from '../lighting/atmosphereBlen
 import { createFlashlight } from '../lighting/Flashlight.ts';
 import { FAR_FRACTION, FAR_WARM } from '../lighting/LightingRuntime.ts';
 import { createPostStack, postInternals } from '../post/PostStack.ts';
+import { glareEE } from '../post/glareMath.ts';
 
-type SceneKind = 'panels' | 'dark' | 'shimmer';
+type SceneKind = 'panels' | 'dark' | 'shimmer' | 'psf';
 
 const params = new URLSearchParams(location.search);
-const kind: SceneKind = (['panels', 'dark', 'shimmer'] as const).find((k) => k === params.get('scene')) ?? 'panels';
+const kind: SceneKind = (['panels', 'dark', 'shimmer', 'psf'] as const).find((k) => k === params.get('scene')) ?? 'panels';
 const presetName: QualityName = (['low', 'medium', 'high', 'ultra'] as const).find((k) => k === params.get('preset')) ?? 'high';
 const q = { ...QUALITY[presetName] };
 const tParam = params.get('time');
@@ -60,10 +66,21 @@ function cookieTexture(): THREE.DataTexture {
   return t;
 }
 
+/** The scene pass renders with a depth prepass (materials/prepass.ts): a mesh whose material has no
+ * userData.brDepth is hidden from the prepass and then shaded with depth writes locked off, so stock materials lose
+ * their occlusion. The depth twin is a colorWrite-off clone: it shares the program, so its depth matches exactly. */
+function withDepthTwin<M extends THREE.Material>(m: M): M {
+  if (!m.userData.brDepth) {
+    const d = m.clone();
+    d.colorWrite = false;
+    m.userData.brDepth = d;
+  }
+  return m;
+}
 const stdMat = (rgb: [number, number, number], rough: number, metal = 0): THREE.MeshStandardMaterial => {
   const m = new THREE.MeshStandardMaterial({ roughness: rough, metalness: metal });
   m.color.setRGB(rgb[0], rgb[1], rgb[2], THREE.LinearSRGBColorSpace);
-  return m;
+  return withDepthTwin(m);
 };
 function box(scene: THREE.Scene, m: THREE.Material, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): THREE.Mesh {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), m);
@@ -109,6 +126,7 @@ function buildPanels(scene: THREE.Scene): Built {
   const lensMat = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.3 });
   lensMat.emissive.setRGB(1.0, 0.97, 0.88, THREE.LinearSRGBColorSpace);
   lensMat.emissiveIntensity = 3300;
+  withDepthTwin(lensMat);
   const housing = stdMat([0.5, 0.5, 0.48], 0.4);
   const panels: THREE.Mesh[] = [];
   for (let z = Z0 + 1.8; z < Z1; z += 3.6) {
@@ -153,6 +171,48 @@ function buildDark(scene: THREE.Scene): Built {
     panels: [], eye: new THREE.Vector3(2.5, 1.6, 1.0), yaw: Math.atan2(3.5, 21), pitch: -0.01,
     flash: { on: true, x: DARK.flashEye[0], y: DARK.flashEye[1], z: DARK.flashEye[2], yaw: 0, pitch: 0 },
   };
+}
+
+// ---------------------------------------------------------------- psf scene (glare calibration)
+// ev= / px= (source size) change the picture only: the checks assume the defaults (a 3 px source, no clamping)
+const PSF = {
+  NITS: 20000, EV: Number(params.get('ev') ?? 10), PX: Math.max(1, Math.floor(Number(params.get('px') ?? 3))),
+  ANGLES_DEG: [0.5, 2, 8] as const, ENERGY_TOL: 0.03, EE_TOL: 0.2,
+};
+const psfSrc = ((): [number, number] => {
+  const v = (params.get('src') ?? '').split(',').map(Number);
+  return v.length === 2 && v.every((x) => Number.isFinite(x) && x > 0.05 && x < 0.95) ? [v[0], v[1]] : [0.5, 0.5];
+})();
+/** The source's centre in buffer pixels (gl_FragCoord convention: y up) for a w x h target. */
+const psfCentre = (w: number, h: number): [number, number] => [Math.floor(w * psfSrc[0]) + 0.5, Math.floor(h * (1 - psfSrc[1])) + 0.5];
+function buildPsf(scene: THREE.Scene): Built {
+  const tri = new THREE.BufferGeometry();
+  tri.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+  const m = new THREE.ShaderMaterial({
+    name: 'br-psf-source',
+    uniforms: { uC: { value: new THREE.Vector2() }, uL: { value: PSF.NITS }, uR: { value: PSF.PX / 2 } },
+    vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `
+uniform vec2 uC;
+uniform float uL;
+uniform float uR;
+void main() {
+  vec2 d = abs(gl_FragCoord.xy - uC);
+  gl_FragColor = vec4(vec3(d.x < uR && d.y < uR ? uL : 0.0), 1.0);
+}`,
+    depthTest: false, depthWrite: false, toneMapped: false,
+  });
+  const mesh = new THREE.Mesh(tri, m);
+  mesh.frustumCulled = false;
+  // exactly PX x PX pixels (3 x 3 by default) of the target being rendered (the composer's input buffer)
+  mesh.onBeforeRender = (r) => {
+    const t = r.getRenderTarget();
+    const w = t ? t.width : r.domElement.width, h = t ? t.height : r.domElement.height;
+    const [cx, cy] = psfCentre(w, h);
+    (m.uniforms.uC.value as THREE.Vector2).set(cx, cy);
+  };
+  scene.add(mesh);
+  return { panels: [], eye: new THREE.Vector3(0, 1.6, 0), yaw: 0, pitch: 0, flash: { on: false, x: 0, y: 1.6, z: 0, yaw: 0, pitch: 0 } };
 }
 
 // ---------------------------------------------------------------- shimmer parity (GPU vs TS)
@@ -289,7 +349,7 @@ function main(): void {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(62, innerWidth / Math.max(1, innerHeight), 0.05, 400);
   camera.rotation.order = 'YXZ';
-  const built = kind === 'dark' ? buildDark(scene) : buildPanels(scene);
+  const built = kind === 'dark' ? buildDark(scene) : kind === 'psf' ? buildPsf(scene) : buildPanels(scene);
   camera.position.copy(built.eye);
   camera.rotation.set(built.pitch, built.yaw, 0);
   camera.updateMatrixWorld();
@@ -318,7 +378,11 @@ function main(): void {
     atm.camIrradiance[1] * atm.hazeAlbedo / Math.PI * FAR_FRACTION * atm.hazeTint[1] * FAR_WARM[1],
     atm.camIrradiance[2] * atm.hazeAlbedo / Math.PI * FAR_FRACTION * atm.hazeTint[2] * FAR_WARM[2],
   );
-  scene.background = bg;
+  scene.background = kind === 'psf' ? new THREE.Color(0, 0, 0) : bg;
+  if (kind === 'psf') {
+    post.setEnabled({ ao: false });
+    post.setExposureLock(PSF.EV);
+  }
 
   addEventListener('resize', () => {
     camera.aspect = innerWidth / Math.max(1, innerHeight);
@@ -429,7 +493,42 @@ function main(): void {
         ringLumaBloom: ringOn / Math.max(1, ring), ringLumaNoBloom: ringOff / Math.max(1, ring), meanLum: meanL / (W * H),
         pass: panelPx > 0 && clippedOut / Math.max(1, outside) < 0.03 && ringOn > ringOff * 1.25, // R2-post: visible camcorder bloom
       };
-    } else {
+    } else if (kind === 'psf' && pi) {
+      // the glare chain's U0 (the scattered light, Float16 RGBA at half res): energy and encircled energy
+      const rt = pi.glare.chain.output;
+      const w0 = rt.width, h0 = rt.height;
+      const raw = new Uint16Array(w0 * h0 * 4);
+      await renderer.readRenderTargetPixelsAsync(rt, 0, 0, w0, h0, raw);
+      const bw = pi.composer.inputBuffer.width, bh = pi.composer.inputBuffer.height;
+      const [cx, cy] = psfCentre(bw, bh);
+      const tanHalf = Math.tan((camera.fov * Math.PI) / 360);
+      const half = THREE.DataUtils.fromHalfFloat;
+      const th: number[] = [];
+      const en: number[] = [];
+      let tot = 0;
+      for (let y = 0; y < h0; y++) {
+        for (let x = 0; x < w0; x++) {
+          const o = (y * w0 + x) * 4;
+          const l = 0.2126 * half(raw[o]) + 0.7152 * half(raw[o + 1]) + 0.0722 * half(raw[o + 2]);
+          const r = Math.hypot((x + 0.5) * (bw / w0) - cx, (y + 0.5) * (bh / h0) - cy);
+          th.push(Math.atan((r * 2 * tanHalf) / bh));
+          en.push(l);
+          tot += l;
+        }
+      }
+      const energy = (tot * (bw * bh)) / (w0 * h0) / (PSF.PX * PSF.PX * PSF.NITS);
+      const ee = PSF.ANGLES_DEG.map((deg) => {
+        const t = (deg * Math.PI) / 180;
+        let s = 0;
+        for (let i = 0; i < th.length; i++) if (th[i] <= t) s += en[i];
+        const got = s / Math.max(1e-9, tot), want = glareEE(t);
+        return { deg, got, want, rel: got / want - 1 };
+      });
+      results.psf = {
+        buffer: [bw, bh], u0: [w0, h0], levels: pi.glare.chain.levelCount, energyRatio: energy, ee,
+        pass: Math.abs(energy - 1) <= PSF.ENERGY_TOL && ee.every((e) => Math.abs(e.rel) <= PSF.EE_TOL),
+      };
+    } else if (kind === 'dark') {
       // dark: exposure locked so the 20 m wall is measurable; bloom/grade/lens/grain off for a clean measurement
       post.setEnabled({ lens: false, grain: false, bloom: false, grade: false });
       post.setExposureLock(0.5);

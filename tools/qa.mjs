@@ -29,7 +29,9 @@ export const THRESHOLDS = {
   lit: { meanLum: [0.12, 0.65], clippedMax: 0.08, blackMax: 0.25 },
   dark: { meanLum: [0.01, 0.25], clippedMax: 0.03 },
   darkFlash: { meanLumMin: 0.05, clippedMax: 0.03 },
-  level0: { zones: ['LOBBY', 'MANILA', 'MAZE', 'LOW_EXPANSE'], hueDeg: [38, 65], sat: [0.15, 0.6] },
+  // p5Max (package C.7): the darkest 5 % of a lit Level 0 view must stay below this, so the old frame-wide warm veil
+  // (halation + lifted blacks, LOBBY p5 0.32) cannot creep back
+  level0: { zones: ['LOBBY', 'MANILA', 'MAZE', 'LOW_EXPANSE'], hueDeg: [38, 65], sat: [0.15, 0.6], p5Max: 0.26 },
 };
 
 // ---------------------------------------------------------------- PNG decode (8-bit RGB/RGBA/grey, non-interlaced)
@@ -166,6 +168,7 @@ export function checkShot(shot, entry, qa) {
       if (T.level0.zones.includes(zone) && mood !== 'DARK' && (shot.expect?.level0 ?? true)) {
         range(fails, `hueDeg (${zone})`, img.hueDeg, T.level0.hueDeg);
         range(fails, `sat (${zone})`, img.sat, T.level0.sat);
+        if (!(img.p5 <= T.level0.p5Max)) fails.push(`p5 (${zone}) ${img.p5?.toFixed(3)} > ${T.level0.p5Max}`);
       }
     } else if (cls === 'dark') {
       range(fails, 'meanLum (dark)', img.meanLum, T.dark.meanLum);

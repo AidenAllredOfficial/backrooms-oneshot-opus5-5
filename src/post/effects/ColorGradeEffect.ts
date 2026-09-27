@@ -3,6 +3,9 @@
 // clip to pure white), saturation (reduced toward the shadows), a sensor-style highlight knee (channels bleach
 // toward their max near clip), contrast (a luma S-curve that keeps black and white fixed and chroma ratios
 // unchanged) and the sensor black pedestal (lifted blacks, never #000), then converts back to linear.
+// Package C.7 filmic toe (after the gamma line): e = mix(e, e^2 (1 + k) / (e + k), toe) with k = 0.12 — 0.05 -> 0.017,
+// 0.2 -> 0.14, 0.5 -> 0.45, 1 -> 1: deep reveals fall toward black (then the pedestal), the mids and the clipped
+// white stay put, so the yellow keeps its saturation while the old veil-like lifted shadows go.
 
 import * as THREE from 'three';
 import { BlendFunction, Effect, EffectAttribute } from 'postprocessing';
@@ -17,6 +20,7 @@ uniform vec3 uGain;
 uniform vec3 uShadowTint;
 uniform vec3 uHighTint;
 uniform vec3 uSatCon; // x saturation, y contrast, z pedestal (encoded black level)
+uniform float uToe;   // filmic toe strength 0..1 (0 = off)
 vec3 brGradeEnc(vec3 c) {
   return mix(c * 12.92, 1.055 * pow(max(c, vec3(0.0031308)), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
 }
@@ -30,6 +34,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   vec3 e = brGradeEnc(c);
   e = uGain * (e + uLift * (1.0 - e));
   e = pow(max(e, vec3(0.0)), 1.0 / uGamma);
+  e = mix(e, e * e * 1.12 / (e + 0.12), uToe);
   float y = dot(e, W);
   // split-tone, fading to neutral near white: a clipped troffer stays pure white instead of tinted
   e *= mix(mix(uShadowTint, uHighTint, smoothstep(0.2, 0.8, y)), vec3(1.0), smoothstep(0.85, 1.0, y));
@@ -66,7 +71,7 @@ export class ColorGradeEffect extends Effect {
   private readonly u: {
     on: THREE.Uniform<number>; wb: THREE.Uniform<THREE.Vector3>; lift: THREE.Uniform<THREE.Vector3>;
     gamma: THREE.Uniform<THREE.Vector3>; gain: THREE.Uniform<THREE.Vector3>; sh: THREE.Uniform<THREE.Vector3>;
-    hi: THREE.Uniform<THREE.Vector3>; sc: THREE.Uniform<THREE.Vector3>;
+    hi: THREE.Uniform<THREE.Vector3>; sc: THREE.Uniform<THREE.Vector3>; toe: THREE.Uniform<number>;
   };
   constructor() {
     const u = {
@@ -74,13 +79,14 @@ export class ColorGradeEffect extends Effect {
       lift: new THREE.Uniform(new THREE.Vector3()), gamma: new THREE.Uniform(new THREE.Vector3(1, 1, 1)),
       gain: new THREE.Uniform(new THREE.Vector3(1, 1, 1)), sh: new THREE.Uniform(new THREE.Vector3(1, 1, 1)),
       hi: new THREE.Uniform(new THREE.Vector3(1, 1, 1)), sc: new THREE.Uniform(new THREE.Vector3(1, 1, 0)),
+      toe: new THREE.Uniform(0),
     };
     super('ColorGradeEffect', GRADE_FRAG, {
       attributes: EffectAttribute.NONE,
       blendFunction: BlendFunction.SRC,
       uniforms: new Map<string, THREE.Uniform>([
         ['uGradeOn', u.on], ['uWB', u.wb], ['uLift', u.lift], ['uGamma', u.gamma], ['uGain', u.gain],
-        ['uShadowTint', u.sh], ['uHighTint', u.hi], ['uSatCon', u.sc],
+        ['uShadowTint', u.sh], ['uHighTint', u.hi], ['uSatCon', u.sc], ['uToe', u.toe],
       ]),
     });
     this.u = u;
@@ -99,5 +105,6 @@ export class ColorGradeEffect extends Effect {
     u.sh.value.set(g.shadowTint[0], g.shadowTint[1], g.shadowTint[2]);
     u.hi.value.set(g.highlightTint[0], g.highlightTint[1], g.highlightTint[2]);
     u.sc.value.set(g.saturation, g.contrast, Math.min(0.2, Math.max(0, g.pedestal ?? 0)));
+    u.toe.value = Math.min(1, Math.max(0, g.toe ?? 0));
   }
 }
