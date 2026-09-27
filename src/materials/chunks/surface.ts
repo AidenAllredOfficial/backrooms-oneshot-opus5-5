@@ -4,7 +4,7 @@
 // map_fragment replacement) and stashed in main-scope variables, because in r186 roughnessmap_fragment runs before
 // normal_fragment_maps. Main-scope outputs read later (chunks/materialPost.ts, debug views, packages D/E): brWet,
 // brFilm, brPuddle, brDust, brCov, brWear, brPileLean, brTbn; POM state for chunks/pom.ts FRAG_DIRVIS_GLSL (brPomOn,
-// brPomT/B/N, brPomRep, brPomDepth, brPomHitN, brPomK and the cell transform brPomM/Cells/C0/B0/Gx/Gy); detail state
+// brPomT/B/N, brPomRep, brPomDepth, brPomHitN, brPomK and the height lookup brPomM/Cells/C0/B0/Lod); detail state
 // (brDetUv, brDetSl, brDetVar).
 // Detail maps (BR_DETAIL_MAPS, chunks/detail.ts) and POM (BR_POM, chunks/pom.ts) are package B's high / ultra paths.
 
@@ -115,7 +115,8 @@ vec2 brPomRep = vec2( 1.0 );
 float brPomDepth = 0.0, brPomHitN = 1.0, brPomK = 0.0;
 // the height lookup's cell transform (chunks/pom.ts brPomH), fixed at the march start
 mat2 brPomM = mat2( 1.0 );
-vec2 brPomCells = vec2( 1.0 ), brPomC0 = vec2( 0.5 ), brPomB0 = vec2( 0.5 ), brPomGx = vec2( 0.0 ), brPomGy = vec2( 0.0 );
+vec2 brPomCells = vec2( 1.0 ), brPomC0 = vec2( 0.5 ), brPomB0 = vec2( 0.5 );
+float brPomLod = 0.0;
 {
 	vec3 brQ0 = dFdx( vViewPosition );
 	vec3 brQ1 = dFdy( vViewPosition );
@@ -135,8 +136,8 @@ vec2 brPomCells = vec2( 1.0 ), brPomC0 = vec2( 0.5 ), brPomB0 = vec2( 0.5 ), brP
 		float brShift = brPomDepth * sqrt( 1.0 - brNdV * brNdV ) / ( brNdV * max( max( length( brQ0 ), length( brQ1 ) ), 1e-6 ) );
 		float brFadeP = smoothstep( BR_POM_MIN_PX, BR_POM_FULL_PX, brShift );
 		if ( brFadeP > 0.0 ) {
-			brPomGx = brDx;
-			brPomGy = brDy;
+			// isotropic LOD of the footprint's area (geometric mean of its axes): the lookups skip anisotropic filtering
+			brPomLod = 0.5 * log2( max( length( brDx ) * length( brDy ) * float( textureSize( uBrNormal, 0 ).x * textureSize( uBrNormal, 0 ).x ), 1.0 ) );
 			if ( brLA.x > 0.0 ) {
 				// rotated physical tile: its cell transform is fixed for the whole march (re-hashing per step dominated
 				// the cost on tiled floors); a step past the cell edge reads the start cell's layout continued (the
@@ -147,15 +148,13 @@ vec2 brPomCells = vec2( 1.0 ), brPomC0 = vec2( 0.5 ), brPomB0 = vec2( 0.5 ), brP
 				vec2 brCu = brUv * brPomCells;
 				brPomC0 = floor( brCu ) + 0.5;
 				brPomB0 = brUvR0 * brPomCells - brPomM * ( brCu - brPomC0 );
-				brPomGx = ( brPomM * ( brDx * brPomCells ) ) / brPomCells;
-				brPomGy = ( brPomM * ( brDy * brPomCells ) ) / brPomCells;
 			}
 			vec2 brDUv = - vec2( dot( brV, brPomT ), dot( brV, brPomB ) ) / brPomRep * ( brPomDepth * brFadeP / brNdV );
 			int brSteps = clamp( int( ceil( brShift / BR_POM_STEP_PX ) ), 4, BR_POM_MAX );
 			float brStep = 1.0 / float( brSteps );
 			vec2 brUvP = brUv;
 			float brRayP = 1.0;
-			float brHP = brPomH( brUv, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomGx, brPomGy ) / brTop;
+			float brHP = brPomH( brUv, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomLod ) / brTop;
 			vec2 brUvHit = brUv;
 			float brHitN = 1.0;
 			if ( brHP < 1.0 ) {
@@ -163,7 +162,7 @@ vec2 brPomCells = vec2( 1.0 ), brPomC0 = vec2( 0.5 ), brPomB0 = vec2( 0.5 ), brP
 					if ( i > brSteps ) break;
 					float brRay = 1.0 - float( i ) * brStep;
 					vec2 brUvC = brUv + brDUv * ( 1.0 - brRay );
-					float brHC = brPomH( brUvC, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomGx, brPomGy ) / brTop;
+					float brHC = brPomH( brUvC, brPomM, brPomCells, brPomC0, brPomB0, brLayerF, brPomLod ) / brTop;
 					if ( brHC >= brRay ) {
 						// secant between the last sample above the surface and the first below it
 						float brSa = brRayP - brHP;
