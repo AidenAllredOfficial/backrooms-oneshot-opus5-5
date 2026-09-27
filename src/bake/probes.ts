@@ -14,8 +14,8 @@
 // per flicker channel (hit patch rho_luma * E_dyn / pi, misses: the own cell's floor patch) into a second ambient
 // cube per channel (ProbeSet.dyn), so flickering panels light the ceiling and walls around them indirectly like
 // the static lights do (the old per-light constant 0.3 * rho * Y_mean left a black ceiling around them).
-// With `farR` > 0 (full bakes with the near-field gather) every probe also stores its FAR field (ProbeSet.far*):
-// the same rays with the prop boxes entered within farR m transparent (a ray hitting a desk top 0.3 m above a low
+// With `farR` > 0 (full bakes with the near-field gather) every probe also stores its FAR field (ProbeSet.far*, the
+// dynamic channel cubes included): the same rays with the prop boxes entered within farR m transparent (a ray hitting a desk top 0.3 m above a low
 // probe is traced on past it). Receivers in the near-field region blend towards it by their nearWeight, and the
 // gather then puts the props within its own NEAR.R back (visibility + box bounce): a probe under a desk top or a
 // chair seat no longer darkens the under-desk floor a second time (the traced V multiplied the probe's own view of
@@ -46,9 +46,11 @@ export interface ProbeSet {
   /** Dynamic lights (null when the tile has none): 24 floats per probe, channel ch at ch * 6 + the ambient-cube
    * axis (+x -x +y -y +z -z): cosine-weighted bounced luminance irradiance of that flicker channel. */
   dyn: Float32Array | null;
-  /** Far field (null without `farR`): sh / cube of the same rays with the prop boxes near the probe transparent. */
+  /** Far field (null without `farR`): sh / cube (and the dynamic cubes: farDyn, null without dynamic lights) of
+   * the same rays with the prop boxes near the probe transparent. */
   farSh: Float32Array | null;
   farCube: Float32Array | null;
+  farDyn: Float32Array | null;
 }
 
 const PROP_RHO = 0.3;
@@ -83,9 +85,10 @@ const cub = new Float64Array(18);
 const dcub = new Float64Array(24);
 const facc = new Float64Array(12);
 const fcub = new Float64Array(18);
+const fdcub = new Float64Array(24);
 
-/** Accumulate a ray's dynamic luminance (4 channels at e[o + PATCH_DYN ..], x k) into the per-channel cubes. */
-function addDynCube(dx: number, dy: number, dz: number, e: Float32Array, o: number, k: number): void {
+/** Accumulate a ray's dynamic luminance (4 channels at e[o + PATCH_DYN ..], x k) into the per-channel cubes `cube`. */
+function addDynCube(dx: number, dy: number, dz: number, e: Float32Array, o: number, k: number, cube = dcub): void {
   const a0 = dx > 0 ? 0 : 1, c0 = dx > 0 ? dx : -dx;
   const a1 = dy > 0 ? 2 : 3, c1 = dy > 0 ? dy : -dy;
   const a2 = dz > 0 ? 4 : 5, c2 = dz > 0 ? dz : -dz;
@@ -93,7 +96,7 @@ function addDynCube(dx: number, dy: number, dz: number, e: Float32Array, o: numb
     const v = e[o + PATCH_DYN + ch] * k;
     if (v === 0) continue;
     const b = ch * 6;
-    dcub[b + a0] += v * c0; dcub[b + a1] += v * c1; dcub[b + a2] += v * c2;
+    cube[b + a0] += v * c0; cube[b + a1] += v * c1; cube[b + a2] += v * c2;
   }
 }
 const dirX = new Float64Array(512), dirY = new Float64Array(512), dirZ = new Float64Array(512), missR = new Uint8Array(512);
@@ -142,6 +145,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
     n: N, off, sh: new Float32Array(count * 12), cube: new Float32Array(count * 18), rho: new Float32Array(count * 3), valid: new Uint8Array(count),
     dyn: withDyn ? new Float32Array(count * 24) : null,
     farSh: far ? new Float32Array(count * 12) : null, farCube: far ? new Float32Array(count * 18) : null,
+    farDyn: far && withDyn ? new Float32Array(count * 24) : null,
   };
   const nRays = job.q.probeRays;
   const dirs = fibonacciDirs(nRays);
@@ -163,7 +167,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
         hashRotation(g.gi0 + hi, g.gj0 + hj, layer + (tower ? 16 : 0), rotM);
         acc.fill(0); cub.fill(0);
         const farP = far && propWithin(job, c, px, py, pz, group, farR); // (else far = full)
-        if (farP) { facc.fill(0); fcub.fill(0); }
+        if (farP) { facc.fill(0); fcub.fill(0); if (withDyn) fdcub.fill(0); }
         if (withDyn) dcub.fill(0);
         let miss0 = 0, miss1 = 0, miss2 = 0, miss3 = 0, rhoR = 0, rhoG = 0, rhoB = 0, hits = 0;
         for (let r = 0; r < nRays; r++) {
@@ -191,7 +195,8 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
             if (hitFar.kind === HIT_NONE) { farMiss[r] = 1; continue; }
             if (!isHit(hitFar.kind)) continue;
             hitRadiance(job, hitFar, hitFar.t * len, rad);
-          }
+            if (withDyn) addDynCube(dx, dy, dz, pref.e, pref.o, luma(rho3[0], rho3[1], rho3[2]) * INV_PI, fdcub);
+          } else if (withDyn) addDynCube(dx, dy, dz, pref.e, pref.o, rhoL * INV_PI, fdcub);
           addSh(facc, rad, s1, s2, s3);
           addCube(dx, dy, dz, rad[0], rad[1], rad[2], fcub);
         }
@@ -215,10 +220,12 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
           }
           if (farP) { // (the far field's misses: the same ambient)
             amb3[0] = ar; amb3[1] = ag; amb3[2] = ab;
+            const rhoP = luma(rhoR, rhoG, rhoB);
             for (let r = 0; r < nRays; r++) {
               if (farMiss[r] === 0) continue;
               addSh(facc, amb3, Y1 * dirY[r], Y1 * dirZ[r], Y1 * dirX[r]);
               addCube(dirX[r], dirY[r], dirZ[r], ar, ag, ab, fcub);
+              if (withDyn) addDynCube(dirX[r], dirY[r], dirZ[r], e, o, rhoP * INV_PI, fdcub);
             }
           }
         }
@@ -231,6 +238,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
           for (let k = 0; k < 18; k++) P.farCube[pIdx * 18 + k] = fc[k] * norm;
         }
         if (P.dyn) for (let k = 0; k < 24; k++) P.dyn[pIdx * 24 + k] = dcub[k] * norm;
+        if (P.farDyn) { const fd = farP ? fdcub : dcub; for (let k = 0; k < 24; k++) P.farDyn[pIdx * 24 + k] = fd[k] * norm; }
         P.rho[pIdx * 3] = rhoR; P.rho[pIdx * 3 + 1] = rhoG; P.rho[pIdx * 3 + 2] = rhoB;
         P.valid[pIdx] = 1;
       }

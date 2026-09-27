@@ -20,10 +20,10 @@ import { luma } from './util.ts';
 import type { VisGrid } from './visgrid.ts';
 
 /** Interpolated SH (12), ambient cube (18), dynamic channel cubes (24, when the ProbeSet has them) and RGB rho of
- * the last `interpolateProbes` call (farSh / farCube: scratch of the probes' far field, see `farW`). */
+ * the last `interpolateProbes` call (farSh / farCube / farDcube: scratch of the probes' far field, see `farW`). */
 export const interp = {
   sh: new Float64Array(12), cube: new Float64Array(18), dcube: new Float64Array(24), rho3: new Float64Array(3), w: 0,
-  farSh: new Float64Array(12), farCube: new Float64Array(18),
+  farSh: new Float64Array(12), farCube: new Float64Array(18), farDcube: new Float64Array(24),
 };
 
 /** Multi-bounce gain of one channel's (or the luma) probe albedo. */
@@ -121,6 +121,7 @@ function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, 
       if (wantCube) for (let j = 0; j < 18; j++) interp.farCube[j] += f * fc[oc + j];
     }
     if (P.dyn) { const od = cp[k] * 24, d = P.dyn; for (let j = 0; j < 24; j++) interp.dcube[j] += f * d[od + j]; }
+    if (wantFar && P.farDyn) { const od = cp[k] * 24, d = P.farDyn; for (let j = 0; j < 24; j++) interp.farDcube[j] += f * d[od + j]; }
     const r = interp.rho3, o3 = cp[k] * 3;
     r[0] += f * P.rho[o3]; r[1] += f * P.rho[o3 + 1]; r[2] += f * P.rho[o3 + 2];
   }
@@ -132,12 +133,12 @@ const clampT = (t: number): number => (t < 0.02 ? 0.02 : t > CELL - 0.02 ? CELL 
 
 /** Interpolate the probe SH (`sh`) and / or ambient cube (`cube`) at (x, y, z) (halo cells / m) owned by cell c
  * into `interp` (the other one is left zero). `farW` > 0 (a near-field receiver's nearWeight, when the ProbeSet has
- * the far field): the result blends towards the probes' far field (prop boxes next to the probe transparent) by
- * farW. Returns false if none. */
+ * the far field): the result (dynamic cubes included) blends towards the probes' far field (prop boxes next to the
+ * probe transparent) by farW. Returns false if none. */
 export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, c: number, sh = true, cube = true, farW = 0): boolean {
   interp.sh.fill(0); interp.cube.fill(0); interp.dcube.fill(0); interp.rho3.fill(0); interp.w = 0;
   wantSh = sh; wantCube = cube; wantFar = farW > 0 && P.farSh !== null;
-  if (wantFar) { interp.farSh.fill(0); interp.farCube.fill(0); }
+  if (wantFar) { interp.farSh.fill(0); interp.farCube.fill(0); interp.farDcube.fill(0); }
   const g = job.g;
   const h = job.cellH;
   const h0 = h[c * 3], h1 = h[c * 3 + 1], h2 = h[c * 3 + 2];
@@ -170,13 +171,18 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
     for (let j = 0; j < 18; j++) interp.cube[j] *= s;
     for (let j = 0; j < 24; j++) interp.dcube[j] *= s;
     interp.rho3[0] *= s; interp.rho3[1] *= s; interp.rho3[2] *= s;
-    if (wantFar) { for (let j = 0; j < 12; j++) interp.farSh[j] *= s; for (let j = 0; j < 18; j++) interp.farCube[j] *= s; }
+    if (wantFar) {
+      for (let j = 0; j < 12; j++) interp.farSh[j] *= s;
+      for (let j = 0; j < 18; j++) interp.farCube[j] *= s;
+      for (let j = 0; j < 24; j++) interp.farDcube[j] *= s;
+    }
     interp.w = 1;
   }
   if (wantFar) {
     const fw = farW > 1 ? 1 : farW;
     for (let j = 0; j < 12; j++) interp.sh[j] += fw * (interp.farSh[j] - interp.sh[j]);
     for (let j = 0; j < 18; j++) interp.cube[j] += fw * (interp.farCube[j] - interp.cube[j]);
+    if (P.farDyn) for (let j = 0; j < 24; j++) interp.dcube[j] += fw * (interp.farDcube[j] - interp.dcube[j]);
   }
   return true;
 }

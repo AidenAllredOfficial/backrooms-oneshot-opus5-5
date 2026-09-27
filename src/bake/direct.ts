@@ -242,15 +242,17 @@ let sunPartial = false;
  * factor it used per light (`latVis[slot * latStride + i]`: static lights i < m, then the dynamic ones; -1 = not
  * evaluated: zero window or form factor). An off-lattice texel that has to be evaluated (its lattice neighbours
  * disagree in total irradiance: some light's shadow edge passes) takes a PARTIAL light's visibility from its
- * lattice neighbours when they all recorded the same value for THAT light, and casts shadow rays only for the lights
- * whose visibility changes around it. Rack uprights and decks put a shadow edge of one of up to 16 lights through
+ * lattice neighbours when their values for THAT light agree within REUSE_SPREAD (their mean), and casts shadow rays
+ * only for the lights whose visibility changes around it (a value already cast for the texel itself, as a sub-block
+ * corner, is used first). Rack uprights and decks put a shadow edge of one of up to 16 lights through
  * most warehouse floor sub-blocks, and every off-lattice texel there re-sampled all 16 (73% of the per-texel shadow
  * rays). The same trade as the existing interpolation (features narrower than the lattice step between agreeing
  * lattice texels are not resolved), applied per light; texels next to chart ends (seams) never reuse.
  */
 let latVis = new Float32Array(1024);
-export let REUSE_SPREAD = 0.5;
-export const setReuseSpread = (v: number): void => { REUSE_SPREAD = v; };
+/** Max spread of the lattice neighbours' visibilities of one light for which an off-lattice texel reuses their
+ * mean (the sub-block interpolation criterion INTERP_SPREAD). */
+const REUSE_SPREAD = 0.5;
 let latStride = 0;
 /** Slot (patch list position) evalPoint records into, -1 = none (off-lattice texels). */
 let latSlot = -1;
@@ -263,8 +265,8 @@ function latReset(np: number, m: number): void {
   if (latVis.length < need) latVis = new Float32Array(2 * need);
   latVis.fill(-1, 0, need);
 }
-/** The mean visibility the reuse neighbours recorded for light column j when they agree within INTERP_SPREAD
- * (the sub-block interpolation criterion), else -1 (or when one has none). */
+/** The mean visibility the reuse neighbours recorded for light column j when they agree within REUSE_SPREAD, else
+ * -1 (or when one has none). */
 function agreedVis(j: number): number {
   let lo = 2, hi = -1, sum = 0;
   for (let k = 0; k < reuseN; k++) {
@@ -300,13 +302,14 @@ function evalPoint(job: BakeJob, x: number, y: number, z: number, nx: number, ny
     if (f <= 0) continue;
     if (mode === 0 && c === CLS_PARTIAL) {
       const wx = ff.wx, wy = ff.wy, wz = ff.wz;
-      const r = reuseN > 0 ? agreedVis(i) : -1;
-      if (r >= 0) vis = r;
-      else if (memoSlot >= 0) {
-        const k = memoSlot * memoStride + i;
-        vis = memo[k];
-        if (vis < 0) { vis = shadowFraction(job, l, x, y, z, group, tower, 0, adaptL[i] !== 0 && !curSeam); memo[k] = vis; }
-      } else vis = shadowFraction(job, l, x, y, z, group, tower, 0, false);
+      // (a value already cast for this texel -- a sub-block corner -- before the lattice neighbours' mean)
+      const k = memoSlot >= 0 ? memoSlot * memoStride + i : -1;
+      vis = k >= 0 ? memo[k] : -1;
+      if (vis < 0 && reuseN > 0) vis = agreedVis(i);
+      if (vis < 0) {
+        vis = shadowFraction(job, l, x, y, z, group, tower, 0, k >= 0 && adaptL[i] !== 0 && !curSeam);
+        if (k >= 0) memo[k] = vis;
+      }
       if (rec >= 0) latVis[rec + i] = vis;
       if (vis <= 0) continue;
       ff.wx = wx; ff.wy = wy; ff.wz = wz;
@@ -328,13 +331,13 @@ function evalPoint(job: BakeJob, x: number, y: number, z: number, nx: number, ny
     const f = formFactor(L, l, x, y, z, nx, ny, nz, exact);
     if (f <= 0) continue;
     if (mode === 0 && c === CLS_PARTIAL) {
-      const r = reuseN > 0 ? agreedVis(m + i) : -1;
-      if (r >= 0) vis = r;
-      else if (memoSlot >= 0) {
-        const k = memoSlot * memoStride + m + i;
-        vis = memo[k];
-        if (vis < 0) { vis = shadowFraction(job, l, x, y, z, group, tower, DYN_SHADOW_SAMPLES); memo[k] = vis; }
-      } else vis = shadowFraction(job, l, x, y, z, group, tower, DYN_SHADOW_SAMPLES);
+      const k = memoSlot >= 0 ? memoSlot * memoStride + m + i : -1;
+      vis = k >= 0 ? memo[k] : -1;
+      if (vis < 0 && reuseN > 0) vis = agreedVis(m + i);
+      if (vis < 0) {
+        vis = shadowFraction(job, l, x, y, z, group, tower, DYN_SHADOW_SAMPLES);
+        if (k >= 0) memo[k] = vis;
+      }
     }
     if (rec >= 0) latVis[rec + m + i] = vis;
     const Y = f * w * vis * L.radLum[l];
@@ -749,13 +752,13 @@ function denoiseShadows(T: TexelSet, R: DirectResult, noisy: Uint8Array): void {
   }
 }
 
+/** Lattice-neighbour count (in latNbr) of the last `interpolate` call. */
+let interpN = 0;
 /**
  * Interpolate texel t from its lattice neighbours of the same patch where they agree within 2%. The static term
  * (E, V) and the dynamic channels are decided separately, so static irradiance never depends on dynamic lights.
  * Returns the parts still to evaluate: bit 1 static, bit 2 dynamic (0 = fully interpolated).
  */
-/** Lattice-neighbour count (in latNbr) of the last `interpolate` call. */
-let interpN = 0;
 function interpolate(T: TexelSet, R: DirectResult, t: number, p: number, gridOff: number): number {
   const cnt = latticeNeighbours(T, t, p, gridOff);
   interpN = cnt;

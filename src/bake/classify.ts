@@ -326,7 +326,8 @@ export function visibleFraction(job: BakeJob, l: number, group: number): number 
 export function bitsetClass(job: BakeJob, l: number, c: number, need: number, tower: boolean, yMin = -Infinity): number {
   if (tower) return CLS_PARTIAL;
   if (visUnion9(job, l, c) === 0) return CLS_NONE;
-  // (yTop: the owner cell's ceiling bounds every receiver of the cell, tile-independently)
-  if ((visAll9(job, l, c) & need) === need && !boxesBetween(job, c, l, Math.min(yMin, lightLowY(job, l)), Math.max(job.g.ceil[c], lightHighY(job, l)))) return CLS_FULL;
+  // (yTop: the owner cell's ceiling bounds every receiver of the cell, tile-independently; + 5 cm for ceiling texels
+  // that sit a few mm above it)
+  if ((visAll9(job, l, c) & need) === need && !boxesBetween(job, c, l, Math.min(yMin, lightLowY(job, l)), Math.max(job.g.ceil[c] + 0.05, lightHighY(job, l)))) return CLS_FULL;
   return CLS_PARTIAL;
 }
