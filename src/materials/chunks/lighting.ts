@@ -166,9 +166,10 @@ vec3 brRefl = vec3( 0.0 );
 	float brFres = F_Schlick( 0.04, 1.0, brDotNV );
 	float brGloss = pow2( 1.0 - material.roughness );
 	bool brPlanar = false;
-#ifndef BR_SSR
+#if ! defined( BR_SSR ) && ! defined( BR_VOLUMETRIC )
 	// planar reflection: only the plane currently mirrored by PlanarReflection (uReflY). SSR supersedes it on floors
-	// (and frees uReflTex from the surface sampler budget); the water material keeps the planar path.
+	// (and frees uReflTex from the surface sampler budget); the water material keeps the planar path. Package F's
+	// froxel volume (uVolTex, high / ultra, where SSR is on as well) takes the unit in the surface budget too.
 	if ( uReflOn > 0.5 && ( brF & BR_F_REFLECTIVE ) != 0 && brNWg.y > 0.9 && abs( vBrLocal.y + uTileOrigin.y - uReflY ) < BR_PLANE_EPS ) {
 		vec4 brRc = uReflMatrix * vec4( - vViewPosition, 1.0 );
 		vec2 brRuv = brRc.xy / brRc.w + brNWp.xz * BR_REFL_DISTORT;

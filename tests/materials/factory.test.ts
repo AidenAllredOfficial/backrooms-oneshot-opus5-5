@@ -322,6 +322,7 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
       if (d.waterWaves > 0) wd.BR_WATER_WAVES = String(d.waterWaves);
       if (d.waterRipple) wd.BR_WATER_RIPPLE = '';
       if (d.waterDebris) wd.BR_WATER_DEBRIS = '';
+      if (d.volumetric) wd.BR_VOLUMETRIC = ''; // package F: the water's haze reads the froxel volume
       expect((t.water as THREE.ShaderMaterial).defines, name).toEqual(wd);
       expect((t.water as THREE.ShaderMaterial).uniforms.uBrRippleLerp, name).toBe(RIPPLE_LERP);
       expect(definesKey(d)).toBe(expectedKey(d));
@@ -376,10 +377,12 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
     sys.setQuality({ ...QUALITY.high });
     expect(t.shell.version).toBe(v0);
     // floorRefl and airlight unchanged: the old early return skipped this
-    const q: QualityConfig = { ...QUALITY.high, detailMaps: true, flashlightBounce: 4 };
+    // (high has the detail maps and 4 bounce VPLs since B and F landed: switch them away from the preset)
+    const q: QualityConfig = { ...QUALITY.high, detailMaps: false, flashlightBounce: 1 };
     sys.setQuality(q);
     expect(t.shell.version).toBeGreaterThan(v0);
-    expect(t.shell.defines).toMatchObject({ BR_DETAIL_MAPS: '', BR_BOUNCE_N: '4' });
+    expect(t.shell.defines).toMatchObject({ BR_BOUNCE_N: '1' });
+    expect(t.shell.defines).not.toHaveProperty('BR_DETAIL_MAPS');
     expect(keyOf(t.props)).toBe(`${CACHE_KEY_PREFIX}|props|${expectedKey(qualityDefinesOf(q))}`);
     expect(keyOf(t.water!)).toBe(`br-water-v2|${expectedKey(qualityDefinesOf(q))}`);
   });

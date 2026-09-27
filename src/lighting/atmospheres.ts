@@ -120,8 +120,32 @@ function buildAtmospheres(): Record<number, AtmosphereParams> {
   t[Zone.WAREHOUSE] = row({ haze: 0.007, tint: DEEP_TINT, albedo: 0.5, ev: [5, 11], bias: 0.1, bloom: 0.4, ao: 2.2, grain: 0.6, grade: GRADE_INDUSTRIAL });
   t[Zone.CONCRETE] = row({ haze: 0.006, tint: DEEP_TINT, albedo: 0.5, ev: [5, 11], bias: 0.1, bloom: 0.45, ao: 2.2, grain: 0.6, grade: GRADE_INDUSTRIAL });
   for (let z = 0; z < ZONE_COUNT; z++) if (!t[z]) throw new Error(`ATMOSPHERES: zone ${z} missing`);
+  for (let z = 0; z < ZONE_COUNT; z++) Object.assign(t[z], VOL_ROWS[z]);
   return t;
 }
+
+/** Package F: the living air of each zone (froxel volumetrics and dust motes, high / ultra). dustDensity (1/m) of
+ * drifting dust and dustNoise (0..1) its patchiness; mistDensity (1/m at the surface) over pool / flooded water;
+ * hazePhase the forward-lobe weight of the dual HG (lighting/phase.ts; absent = 0.7); moteDensity the visible
+ * fraction of the dust motes (<= 0.35 in lit zones, or the air reads as snow). */
+type VolRow = Pick<AtmosphereParams, 'dustDensity' | 'dustNoise' | 'mistDensity' | 'hazePhase' | 'moteDensity'>;
+const vol = (dustDensity: number, dustNoise: number, mistDensity: number, moteDensity: number, hazePhase?: number): VolRow =>
+  hazePhase === undefined ? { dustDensity, dustNoise, mistDensity, moteDensity } : { dustDensity, dustNoise, mistDensity, moteDensity, hazePhase };
+const VOL_ROWS: Readonly<Record<number, VolRow>> = {
+  [Zone.LOBBY]: vol(0.002, 0.5, 0, 0.3),
+  [Zone.MANILA]: vol(0.002, 0.5, 0, 0.3),
+  [Zone.DARK]: vol(0.012, 0.6, 0, 1.0),
+  [Zone.MAZE]: vol(0.002, 0.5, 0, 0.3),
+  [Zone.LOW_EXPANSE]: vol(0.004, 0.5, 0.012, 0.3),
+  [Zone.PILLAR_HALL]: vol(0.003, 0.4, 0.012, 0.3),
+  [Zone.OFFICE]: vol(0.0015, 0.4, 0, 0.25),
+  // warm water under soft light: the mist carries the air; droplets scatter forward
+  [Zone.POOLROOMS]: vol(0, 0.3, 0.15, 0.1, 0.85),
+  [Zone.PARKING]: vol(0.004, 0.5, 0, 0.5),
+  [Zone.PIPEWORKS]: vol(0.010, 0.6, 0.02, 1.0),
+  [Zone.WAREHOUSE]: vol(0.006, 0.5, 0, 0.7),
+  [Zone.CONCRETE]: vol(0.006, 0.5, 0, 0.7),
+};
 
 /** By ZoneId. */
 export const ATMOSPHERES: Readonly<Record<number, AtmosphereParams>> = buildAtmospheres();
@@ -143,13 +167,14 @@ export const MOOD_MODS: readonly { evShift: number; evMin: number; hazeMul: numb
 export const LANDMARK_EV_MIN: Readonly<Partial<Record<number, number>>> = { [LandmarkKind.RED_ROOM]: 6.5 };
 
 /** Extra per-mood modifiers not carried by the MOOD_MODS contract type (bloom and grain, DESIGN table "DARK (mood)"). */
-export const MOOD_EXTRA: readonly { bloomMul: number; grainMul: number; saturationMul: number; biasMul: number }[] = [
+export const MOOD_EXTRA: readonly { bloomMul: number; grainMul: number; saturationMul: number; biasMul: number; dustMul: number }[] = [
   // R2-post: grain multipliers reduced (1.2/1.35/1.6 -> 1.1/1.2/1.25): the post stack's low-light sensor gain
   // already makes dim footage noisier, and base grain rose 0.5 -> 0.8. biasMul scales the zone's exposureBias:
   // the +1 EV "over-exposed camcorder" look belongs to the lit rooms; a DARK sector must not be lifted by it.
-  /* NORMAL */ { bloomMul: 1, grainMul: 1, saturationMul: 1, biasMul: 1 },
-  /* SPARSE */ { bloomMul: 1.05, grainMul: 1.1, saturationMul: 0.97, biasMul: 0.85 },
-  /* DYING  */ { bloomMul: 1.1, grainMul: 1.2, saturationMul: 0.93, biasMul: 0.7 },
-  /* DARK   */ { bloomMul: 1.2, grainMul: 1.25, saturationMul: 0.9, biasMul: 0.35 },
+  // dustMul (package F): neglected sectors hold more dust (x the zone's dustDensity, capped at VD.DUST_MAX)
+  /* NORMAL */ { bloomMul: 1, grainMul: 1, saturationMul: 1, biasMul: 1, dustMul: 1 },
+  /* SPARSE */ { bloomMul: 1.05, grainMul: 1.1, saturationMul: 0.97, biasMul: 0.85, dustMul: 1.2 },
+  /* DYING  */ { bloomMul: 1.1, grainMul: 1.2, saturationMul: 0.93, biasMul: 0.7, dustMul: 1.6 },
+  /* DARK   */ { bloomMul: 1.2, grainMul: 1.25, saturationMul: 0.9, biasMul: 0.35, dustMul: 2.2 },
 ];
 

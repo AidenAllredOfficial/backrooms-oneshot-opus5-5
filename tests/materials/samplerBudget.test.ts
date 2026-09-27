@@ -245,9 +245,16 @@ describe('surface sampler budget (16 texture units)', () => {
   it('BR_SSR compiles the floor planar path (uReflTex) out of every surface program; water keeps it', () => {
     const on = CASES.find(([n]) => n === 'every define on')![1];
     for (const b of on) expect(b.samplers.has('uReflTex'), b.variant).toBe(b.variant === 'water');
-    // without SSR: the shell / props floors and water read the planar reflection (decals have no reflection block)
-    const high = CASES.find(([n]) => n === 'high')![1];
-    for (const b of high) expect(b.samplers.has('uReflTex'), b.variant).toBe(b.variant !== 'decal');
+    // without SSR and the froxel volume: the shell / props floors and water read the planar reflection (decals have
+    // no reflection block); package F's volume (high / ultra) takes that unit until SSR supersedes the path anyway
+    const medium = CASES.find(([n]) => n === 'medium')![1];
+    for (const b of medium) expect(b.samplers.has('uReflTex'), b.variant).toBe(b.variant !== 'decal');
+    for (const n of ['high', 'ultra']) {
+      for (const b of CASES.find(([c]) => c === n)![1]) {
+        expect(b.samplers.has('uReflTex'), `${n} ${b.variant}`).toBe(b.variant === 'water');
+        expect(b.samplers.has('uVolTex'), `${n} ${b.variant}`).toBe(true);
+      }
+    }
   });
 
   it('the preprocessor twin evaluates #if expressions like GLSL', () => {

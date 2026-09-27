@@ -103,6 +103,7 @@ and `high` for everything else.
 | Water reflections | off | on | on | on |
 | Water surface: analytic waves / ripple simulation (texels) | 0 / off | 3 / 128² | 6 / 256² | 8 / 512² |
 | Water caustics above pools, flashlight caustics through water | off | off | on | on |
+| Volumetric haze (froxels) and dust motes | off | off | on, 3000 motes | on, 6000 motes |
 | Render scale | 0.75 | 0.9 | 1.0 | 1.5 (supersampled) |
 
 Every preset uses dynamic resolution unless you turn it off. It budgets for at least 11 ms per frame, so on a
@@ -186,9 +187,13 @@ and shaders are not built twice. Under XWayland the loss does not happen, and `n
   (coloured multi-bounce), ambient occlusion and, on high and ultra, a ray-traced near-field gather that darkens the
   floor under desks, cars and racks and lights the props from their own sub-patches. Furniture, cars (on their
   wheels) and warehouse racks (uprights and decks) are baked as part boxes. A fast preview bake appears first and the
-  full bake replaces it. The flashlight is the only runtime light: an LED reflector beam (hot core, phosphor ring,
-  flat spill, crisp rim, lens dirt) whose lit patch bounces a soft fill into the room on medium and above.
-  Flickering fixtures are driven by shader uniforms on top of the baked result.
+  full bake replaces it. The flashlight is the only runtime light: an LED reflector beam (a bright hotspot, a smooth
+  falloff into a dim wide spill with a soft edge, lens dirt) whose lit patch bounces a soft fill into the room on
+  medium and above. Flickering fixtures are driven by shader uniforms on top of the baked result.
+- **Air.** On high and ultra the haze is a froxel volume lit by the baked light field and the shadowed flashlight:
+  lamps glow in the haze, lit air veils dark doorways, dark rooms stay dark, and the torch beam shows in the air with
+  shafts behind obstacles. Dust drifts through it (thicker in neglected sectors), mist hangs over the pools, and
+  individual dust motes catch the torch and the lamps.
 - **Audio.** All sound is synthesized: fluorescent hum, footsteps by surface, room reverb, and sounds that bend
   around doorways.
 

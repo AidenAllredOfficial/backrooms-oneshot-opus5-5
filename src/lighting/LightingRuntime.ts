@@ -9,7 +9,11 @@
 //     writes the MaterialGlobals and scene.background;
 //  4. flashlight rig;
 //  5. flashlight bounce (package F, lighting/FlashlightBounce.ts): QualityConfig.flashlightBounce VPLs at the
-//     beam's hit points, uploaded to the fb* globals relative to this frame's eye (URL bounce=0 disables them).
+//     beam's hit points, uploaded to the fb* globals relative to this frame's eye (URL bounce=0 disables them);
+//  6. package F volumetrics (high / ultra): the light atlas plan (lighting/LightAtlas.ts: which resident tiles'
+//     light volumes to upload, the flicker rows), the froxels' atmosphere (haze, dust, mist over the water rects
+//     nearest the eye) and the dust motes' time and density. Their GPU work runs in the frame graph's afterDepth
+//     hooks 'lightAtlas' (30) and 'volumetrics' (40), which boot registers from lightingFrameHooks().
 // Allocation-free per frame (payload objects for bus events are reused: handlers must copy what they keep).
 
 import * as THREE from 'three';
@@ -33,6 +37,12 @@ import { createFlashlight } from './Flashlight.ts';
 import type { FlashlightRig } from './Flashlight.ts';
 import { createFlashlightBounce } from './FlashlightBounce.ts';
 import type { BounceInput } from './FlashlightBounce.ts';
+import { chunkOriginX, chunkOriginZ } from '../core/grid.ts';
+import type { FrameHook } from '../post/ScenePass.ts';
+import { VolumetricFog } from '../post/VolumetricFog.ts';
+import { DustMotes } from './dustMotes.ts';
+import { LightAtlas } from './LightAtlas.ts';
+import { VD } from './volumetricDensity.ts';
 
 export const FLICKER_MODE_INDEX: Readonly<Record<FlickerMode, number>> = { standard: 0, reduced: 1, off: 2 };
 /** Camcorder metering while the torch is on (AtmosphereState.flashlight -> AutoExposurePass centre focus). Full spot
@@ -135,6 +145,101 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
     bin.dt = dt;
     bounce.update(bin, world, globals);
   };
+
+  // ---- package F volumetrics: light atlas + froxels + dust motes (created on presets that use them)
+  const inertVolTex = globals.volTex.value;
+  let atlas: LightAtlas | null = null;
+  let fog: VolumetricFog | null = null;
+  let motes: DustMotes | null = null;
+  const setupVolumetrics = (nq: QualityConfig): void => {
+    const fogOn = nq.volumetrics !== 'off';
+    if (!fogOn) {
+      // the motes take their torch from the froxel pass: both are high / ultra features
+      motes?.dispose(); motes = null;
+      fog?.dispose(); fog = null;
+      atlas?.dispose(); atlas = null;
+      globals.volZ.value.w = 0;
+      globals.volTex.value = inertVolTex;
+      return;
+    }
+    atlas ??= new LightAtlas();
+    if (fog) fog.setGrid(nq.volumetrics as 'high' | 'ultra');
+    else fog = new VolumetricFog(atlas, flashlight.light, nq.volumetrics as 'high' | 'ultra');
+    const count = nq.dustMotes > 0 ? nq.dustMotes : 0;
+    if (motes && motes.points.geometry.getAttribute('aSeed').count !== count) { motes.dispose(); motes = null; }
+    if (!motes && count > 0) {
+      motes = new DustMotes(count, atlas.uniforms, fog.torch);
+      scene.add(motes.points);
+    }
+  };
+  setupVolumetrics(q);
+  const mistCand = new Float64Array(64 * 7); // x0, z0, x1, z1, y, k, distance
+  /** The water rects nearest the eye (world; up to VD.MIST_MAX, nearest first) into the froxels' atmosphere. */
+  const gatherMist = (world: WorldQuery, ex: number, ey: number, ez: number, f: VolumetricFog): void => {
+    const a = f.atmosphere;
+    a.mistCount = 0;
+    if (!(a.mist > 0)) return;
+    let n = 0;
+    const pcx = Math.floor(worldToCell(ex) / CHUNK_CELLS), pcz = Math.floor(worldToCell(ez) / CHUNK_CELLS);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const l = world.layoutAt(pcx + dx, pcz + dz);
+        if (!l || l.water.length === 0) continue;
+        const ox = chunkOriginX(pcx + dx), oz = chunkOriginZ(pcz + dz);
+        for (let i = 0; i < l.water.length && n < 64; i++) {
+          const w = l.water[i];
+          const k = VD.MIST_KIND[w.kind] ?? 0;
+          if (k <= 0 || Math.abs(w.y - ey) > 4) continue;
+          const x0 = ox + Math.min(w.x0, w.x1), x1 = ox + Math.max(w.x0, w.x1);
+          const z0 = oz + Math.min(w.z0, w.z1), z1 = oz + Math.max(w.z0, w.z1);
+          const cx = Math.min(Math.max(ex, x0), x1), cz = Math.min(Math.max(ez, z0), z1);
+          const o = n * 7;
+          mistCand[o] = x0; mistCand[o + 1] = z0; mistCand[o + 2] = x1; mistCand[o + 3] = z1; mistCand[o + 4] = w.y;
+          mistCand[o + 5] = k; mistCand[o + 6] = Math.hypot(cx - ex, cz - ez);
+          n++;
+        }
+      }
+    }
+    // the nearest MIST_MAX, nearest first (selection: n <= 64)
+    const m = Math.min(n, VD.MIST_MAX);
+    for (let i = 0; i < m; i++) {
+      let best = i;
+      for (let j = i + 1; j < n; j++) if (mistCand[j * 7 + 6] < mistCand[best * 7 + 6]) best = j;
+      if (best !== i) for (let c = 0; c < 7; c++) { const t = mistCand[i * 7 + c]; mistCand[i * 7 + c] = mistCand[best * 7 + c]; mistCand[best * 7 + c] = t; }
+      for (let c = 0; c < 6; c++) a.mistRects[i * 6 + c] = mistCand[i * 7 + c];
+    }
+    a.mistCount = m;
+  };
+  const updateVolumetrics = (t: number, tiles: Iterable<TileRuntime>, player: PlayerState, world: WorldQuery): void => {
+    if (!atlas) return;
+    atlas.plan(tiles, player.s, player.eyeX, player.eyeZ, world);
+    if (fog) {
+      const a = fog.atmosphere;
+      a.hazeDensity = atm.hazeDensity;
+      a.hazeAlbedo = atm.hazeAlbedo;
+      a.tint[0] = atm.hazeTint[0]; a.tint[1] = atm.hazeTint[1]; a.tint[2] = atm.hazeTint[2];
+      a.dust = atm.dustDensity ?? 0;
+      a.dustNoise = atm.dustNoise ?? 0.5;
+      a.mist = atm.mistDensity ?? 0;
+      a.phase = atm.hazePhase ?? 0.7;
+      a.t = t;
+      gatherMist(world, player.eyeX, player.eyeY, player.eyeZ, fog);
+    }
+    motes?.update(t, atm.moteDensity ?? 0);
+  };
+  let volOn = true; // URL vol=0 (Systems.features.vol): the analytic haze, no motes (A/B checks)
+  const hooks: FrameHook[] = [
+    { name: 'lightAtlas', order: 30, run: (ctx) => { if (volOn) atlas?.sync(ctx.renderer, ctx.camera); } },
+    {
+      name: 'volumetrics', order: 40,
+      run: (ctx) => {
+        if (fog && volOn) fog.render(ctx);
+        else if (ctx.globals) ctx.globals.volZ.value.w = 0;
+        // no specks over the debug views
+        motes?.prepare(ctx.camera, volOn && fog !== null && fog.on && ctx.debugView === 0);
+      },
+    },
+  ];
 
   // ---- dynamic light state (per id)
   const stamp = new Map<number, number>(); // id -> frame of last evaluation
@@ -311,6 +416,8 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
       flashlight.update(player, camera, dt);
       // 5. its bounce off what the beam hits (after the rig: this frame's pose)
       updateBounce(player, camera, dt, world);
+      // 6. volumetrics (CPU side)
+      updateVolumetrics(t, tiles, player, world);
     },
     intensityOf(lightId) {
       const ov = overrides.get(lightId);
@@ -332,6 +439,7 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
     setQuality(nq) {
       quality = nq;
       flashlight.setQuality(nq);
+      setupVolumetrics(nq);
       setEdgeFog();
       writeGlobals();
     },
@@ -342,6 +450,9 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
     get mode() { return mode; },
     get bounceVpls() { return bounce.active; },
     setBounce(on: boolean) { bounceOn = on; },
+    hooks,
+    get passMaterials() { return fog ? [...fog.materials] : []; },
+    setVolumetrics(on: boolean) { volOn = on; },
   });
   return rt;
 }
@@ -351,12 +462,28 @@ interface LightingInfo {
   readonly mode: FlickerMode;
   readonly bounceVpls: number;
   setBounce(on: boolean): void;
+  readonly hooks: readonly FrameHook[];
+  readonly passMaterials: THREE.ShaderMaterial[];
+  setVolumetrics(on: boolean): void;
 }
 const lightingInfo = new WeakMap<LightingRuntime, LightingInfo>();
 /** Debug counters of a runtime created by createLightingRuntime (WP14 F3 overlay / stats). */
 export function lightingStats(rt: LightingRuntime): { dynamicResident: number; flickerMode: FlickerMode; bounceVpls: number } {
   const i = lightingInfo.get(rt);
   return { dynamicResident: i ? i.dynamicResident : 0, flickerMode: i ? i.mode : 'standard', bounceVpls: i ? i.bounceVpls : 0 };
+}
+/** The frame-graph hooks of package F's volumetrics (afterDepth 'lightAtlas' 30 and 'volumetrics' 40; boot registers
+ * them on the ScenePass). They are no-ops on presets without volumetrics. */
+export function lightingFrameHooks(rt: LightingRuntime): readonly FrameHook[] {
+  return lightingInfo.get(rt)?.hooks ?? [];
+}
+/** The froxel pass's quad programs of the current preset (compiled ahead by boot and the quality switch). */
+export function lightingPassMaterials(rt: LightingRuntime): THREE.ShaderMaterial[] {
+  return lightingInfo.get(rt)?.passMaterials ?? [];
+}
+/** URL vol=0 / Systems.features.vol: the froxel volumetrics and dust motes off (the analytic haze; on by default). */
+export function setVolumetricsEnabled(rt: LightingRuntime, on: boolean): void {
+  lightingInfo.get(rt)?.setVolumetrics(on);
 }
 /** URL bounce=0 / Systems.features.bounce: enable or disable the flashlight bounce VPLs (on by default). */
 export function setFlashlightBounce(rt: LightingRuntime, on: boolean): void {

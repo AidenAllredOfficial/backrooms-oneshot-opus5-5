@@ -21,7 +21,7 @@ import { generateDetailTextures } from '../textures/DetailBaker.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
 import { createPlanarReflection } from '../materials/PlanarReflection.ts';
 import { createWaterRipples } from '../materials/water/WaterRipples.ts';
-import { createLightingRuntime } from '../lighting/LightingRuntime.ts';
+import { createLightingRuntime, lightingFrameHooks, lightingPassMaterials, setVolumetricsEnabled } from '../lighting/LightingRuntime.ts';
 import { createAnomalyDirector } from '../lighting/anomalyDirector.ts';
 import { createPostStack, postInternals } from '../post/PostStack.ts';
 import { collectPassMaterials, warmPassMaterials } from '../materials/warmup.ts';
@@ -104,6 +104,7 @@ export function applyLaunchToggles(core: AppCore): void {
   if (!p.ssr) s.post.setEnabled({ ssr: false });
   if (p.reflView !== 'off') s.post.setReflectionDebug?.(p.reflView);
   s.materials.globals.csOn.value = p.cs ? 1 : 0;
+  setVolumetricsEnabled(s.lighting, p.vol); // package F: vol=0 keeps the analytic haze
 }
 
 /** The two one-shot world queries the spawn resolution needs (the streamer's, or the bare pool's during boot). */
@@ -282,6 +283,9 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const frame = postInternals(post)?.scenePass;
   frame?.bindGlobals(materials.globals);
   if (frame && q.colorPyramidScale > 0) await warmPassMaterials(r, frame.materials);
+  // package F: the light atlas (30) and froxel volumetrics (40) afterDepth hooks (no-ops on presets without them)
+  if (frame) for (const h of lightingFrameHooks(lighting)) frame.addHook('afterDepth', h);
+  await warmPassMaterials(r, lightingPassMaterials(lighting));
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
@@ -379,6 +383,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
     // the frame graph's own quad programs (pyramid, MRT composite) on presets with split frames; already-linked
     // programs cost nothing here
     if (internals && nq.colorPyramidScale > 0) mats.push(...internals.scenePass.materials);
+    mats.push(...lightingPassMaterials(s.lighting)); // package F: the froxel pass of the new grid
     await warmPassMaterials(r, mats);
   } finally {
     fresh.forEach((p, i) => { p.enabled = wasEnabled[i]; });

@@ -15,8 +15,10 @@ import { createPlayerState } from '../../src/core/player.ts';
 import { QUALITY } from '../../src/core/quality.ts';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.ts';
 import type { FixtureRef, MaterialGlobals, TextureSet, TileRuntime, WorldQuery } from '../../src/core/runtime.ts';
-import { ATMOSPHERES, MOOD_MODS } from '../../src/lighting/atmospheres.ts';
-import { atmosphereTarget, createAtmosphereBlender, newParams } from '../../src/lighting/atmosphereBlend.ts';
+import { ATMOSPHERES, MOOD_EXTRA, MOOD_MODS } from '../../src/lighting/atmospheres.ts';
+import {
+  atmosphereTarget, copyParams, createAtmosphereBlender, DARK_MOTES_MIN, DUST_MAX, lerpParams, newParams, VOL_DEFAULTS,
+} from '../../src/lighting/atmosphereBlend.ts';
 import { createLightingRuntime, FAR_FRACTION, FAR_WARM, FLASH_METER_FOCUS, sampleLightVolume } from '../../src/lighting/LightingRuntime.ts';
 import { createAnomalyDirector, sparkBurstTime, lightDiesRoll } from '../../src/lighting/anomalyDirector.ts';
 import { FLASHLIGHT, handSway, type FlashlightRig } from '../../src/lighting/Flashlight.ts';
@@ -141,6 +143,42 @@ describe('atmospheres', () => {
 });
 
 // ---------------------------------------------------------------- lighting runtime
+describe('atmosphere: the living-air fields (package F)', () => {
+  it('copy / lerp carry dust, mist, phase and motes; absent fields read as the defaults', () => {
+    const a = newParams(), b = newParams(), d = newParams();
+    copyParams(a, ATMOSPHERES[Zone.POOLROOMS]);
+    expect(a.mistDensity).toBeGreaterThan(0);
+    expect(a.hazePhase).toBe(0.85);
+    copyParams(b, ATMOSPHERES[Zone.DARK]);
+    lerpParams(d, a, b, 0.5);
+    expect(d.dustDensity).toBeCloseTo(0.5 * ((a.dustDensity ?? 0) + (b.dustDensity ?? 0)), 12);
+    expect(d.mistDensity).toBeCloseTo(0.5 * (a.mistDensity ?? 0), 12);
+    expect(d.moteDensity).toBeCloseTo(0.5 * ((a.moteDensity ?? 0) + (b.moteDensity ?? 0)), 12);
+    // a row without the fields (older tables, the harness) reads as the defaults
+    const bare = { ...ATMOSPHERES[Zone.LOBBY] };
+    delete bare.dustDensity; delete bare.hazePhase; delete bare.moteDensity;
+    copyParams(d, bare);
+    expect(d.dustDensity).toBe(VOL_DEFAULTS.dustDensity);
+    expect(d.hazePhase).toBe(VOL_DEFAULTS.hazePhase);
+    expect(d.moteDensity).toBe(VOL_DEFAULTS.moteDensity);
+    lerpParams(d, bare, bare, 0.3);
+    expect(d.dustNoise).toBe(VOL_DEFAULTS.dustNoise);
+  });
+
+  it('moods multiply the dust (capped) and a DARK mood shows most motes; lit zones keep motes sparse', () => {
+    expect(MOOD_EXTRA.map((m) => m.dustMul)).toEqual([1, 1.2, 1.6, 2.2]);
+    const n = atmosphereTarget(Zone.LOBBY, Mood.NORMAL, newParams()), y = atmosphereTarget(Zone.LOBBY, Mood.DYING, newParams());
+    expect(y.dustDensity).toBeCloseTo((n.dustDensity ?? 0) * 1.6, 12);
+    for (let z = 0; z < ZONE_COUNT; z++) {
+      expect(atmosphereTarget(z, Mood.DARK, newParams()).dustDensity).toBeLessThanOrEqual(DUST_MAX);
+      expect(atmosphereTarget(z, Mood.DARK, newParams()).moteDensity).toBeGreaterThanOrEqual(DARK_MOTES_MIN);
+    }
+    for (const z of [Zone.LOBBY, Zone.MANILA, Zone.MAZE, Zone.OFFICE, Zone.POOLROOMS]) {
+      expect(ATMOSPHERES[z].moteDensity).toBeLessThanOrEqual(0.35);
+    }
+  });
+});
+
 describe('atmosphere blender robustness', () => {
   it('an invalid zone/mood (unloaded cell) does not restart the crossfade every frame', () => {
     const b = createAtmosphereBlender();
