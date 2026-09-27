@@ -5034,9 +5034,11 @@ full key. Every surface / water uniform is declared once in `chunks/common.ts`, 
 inert and is bound by reference, and each package plugs in through a stub chunk file it owns (screenspace, gbuffer: A;
 detail, pom, materialPost: B; emitters: C; probe: D; water: E; volumetric, bounce: F). Surface programs may use at
 most 16 texture units (`tests/materials/samplerBudget.test.ts`; dev builds also check the linked programs in
-`materials/warmup.ts`): at high / ultra the shell's final set is albedo, normal, ormh, grime, lmIrr, lmDir, lmMask,
-lmFlick, emission, volMask, the flashlight shadow map and cookie, probe, SSAO, froxel volume and detail array, so
-`uReflTex` is compiled out under `BR_SSR` and `uVolA` is referenced by the props program only.
+`materials/warmup.ts`). `uReflTex` is compiled out under `BR_SSR` and `uVolA` is referenced by the props program only.
+At high / ultra the shell and decal programs then use 13 units before the new features: albedo, normal, ormh, grime,
+lmIrr, lmDir, lmMask, lmFlick, emission, volMask, the flashlight shadow map and cookie, and three's own `dfgLUT`
+(material.dfg in `lights_fragment_begin`). The planned probe, SSAO, froxel volume and detail array make 17, so one
+more sampler must go before the last of them lands (props: 12 + 4 = 16; water: 9 today).
 
 
 ---

@@ -227,6 +227,15 @@ describe('surface sampler budget (16 texture units)', () => {
     });
   }
 
+  it('three\'s own samplers: every surface program samples dfgLUT (material.dfg, lights_fragment_begin); water does not', () => {
+    // the plan's inventory (12 shell samplers + probe, SSAO, froxel volume, detail = 16) did not count dfgLUT: with it
+    // the high / ultra shell and decal programs reach 17 once all four land, and the budget checks above fail
+    // (A.0 with stubs, high / ultra final flags: shell 13, props 12, decal 13, water 9 units)
+    for (const [, built] of CASES) {
+      for (const b of built) expect(b.samplers.has('dfgLUT'), b.variant).toBe(b.variant !== 'water');
+    }
+  });
+
   it('uVolA is referenced by the props program only', () => {
     for (const [, built] of CASES) {
       for (const b of built) expect(b.samplers.has('uVolA'), b.variant).toBe(b.variant === 'props');
