@@ -49,16 +49,20 @@ export const FRAG_DIRVIS_GLSL = /* glsl */ `
 #if defined( BR_POM ) && BR_POM >= 2
 	if ( brPomOn ) {
 		// POM self-shadow: from the parallax hit toward the light up to the relief top (the same faded depth as the
-		// view march); a less directional bake (small w) is shadowed less
+		// view march), in steps of the view march's pixel length, skipped when the shadow would be under half a pixel
+		// long (light near the normal: floors under their lamps); a less directional bake (small w) is shadowed less
 		float brPl = dot( brPomN, brLv );
-		if ( brPl > 0.02 ) {
+		float brLen = brPomDepth * brPomK * ( 1.0 - brPomHitN ) * sqrt( max( 1.0 - brPl * brPl, 0.0 ) ) / ( max( brPl, 0.02 ) * brPomPx );
+		if ( brPl > 0.02 && brLen > BR_POM_MIN_PX ) {
 			vec2 brDuL = vec2( dot( brLv, brPomT ), dot( brLv, brPomB ) ) / brPomRep * ( brPomDepth * brPomK * ( 1.0 - brPomHitN ) / brPl );
 			float brPTop = uBrLayerC[ brL ].y;
 			float brOcc = 0.0;
 			vec2 brSc = vec2( - 1e9 ), brSb = vec2( 0.0 );
 			mat2 brSm = mat2( 1.0 );
+			int brSn = clamp( int( ceil( brLen / BR_POM_STEP_PX ) ), 1, BR_POM_SH_STEPS );
 			for ( int i = 1; i <= BR_POM_SH_STEPS; i ++ ) {
-				float brT = float( i ) / float( BR_POM_SH_STEPS );
+				if ( i > brSn ) break;
+				float brT = float( i ) / float( brSn );
 				float brRay = mix( brPomHitN, 1.0, brT );
 				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brPomLod, brSc, brSm, brSb ) / brPTop;
 				brOcc = max( brOcc, ( brHs - brRay ) * BR_POM_SH_K * ( 1.0 - 0.5 * brT ) );

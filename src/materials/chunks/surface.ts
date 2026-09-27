@@ -112,7 +112,7 @@ if ( brRoll ) {
 bool brPomOn = false;
 vec3 brPomT = vec3( 1.0, 0.0, 0.0 ), brPomB = vec3( 0.0, 1.0, 0.0 ), brPomN = vec3( 0.0, 0.0, 1.0 );
 vec2 brPomRep = vec2( 1.0 );
-float brPomDepth = 0.0, brPomHitN = 1.0, brPomK = 0.0;
+float brPomDepth = 0.0, brPomHitN = 1.0, brPomK = 0.0, brPomPx = 1.0; // brPomPx: metres per pixel
 uint brPomSalt = 0u; // rotated-tile salt of the height lookups (chunks/pom.ts brPomH)
 float brPomLod = 0.0; // their isotropic LOD
 {
@@ -131,14 +131,15 @@ float brPomLod = 0.0; // their isotropic LOD
 		brPomRep = brHoriz ? vec2( brLB.x ) : brLB.xy; // metres per uv unit
 		brPomDepth = uBrLayerC[ brL ].x * brTop * BR_POM_GAIN; // metres from the top plane down to height 0
 		// largest visible parallax (pixels): the relief depth seen at this angle over the pixel footprint
-		float brShift = brPomDepth * sqrt( 1.0 - brNdV * brNdV ) / ( brNdV * max( max( length( brQ0 ), length( brQ1 ) ), 1e-6 ) );
+		brPomPx = max( max( length( brQ0 ), length( brQ1 ) ), 1e-6 );
+		float brShift = brPomDepth * sqrt( 1.0 - brNdV * brNdV ) / ( brNdV * brPomPx );
 		float brFadeP = smoothstep( BR_POM_MIN_PX, BR_POM_FULL_PX, brShift );
 		if ( brFadeP > 0.0 ) {
 			// isotropic LOD of the footprint's area (geometric mean of its axes): the lookups skip anisotropic filtering
 			brPomLod = 0.5 * log2( max( length( brDx ) * length( brDy ) * float( textureSize( uBrNormal, 0 ).x * textureSize( uBrNormal, 0 ).x ), 1.0 ) );
 			brPomSalt = brTileSalt( brNWg );
 			vec2 brDUv = - vec2( dot( brV, brPomT ), dot( brV, brPomB ) ) / brPomRep * ( brPomDepth * brFadeP / brNdV );
-			int brSteps = clamp( int( ceil( brShift / BR_POM_STEP_PX ) ), 4, BR_POM_MAX );
+			int brSteps = clamp( int( ceil( brShift / BR_POM_STEP_PX ) ), BR_POM_MIN_STEPS, BR_POM_MAX );
 			float brStep = 1.0 / float( brSteps );
 			vec2 brUvP = brUv;
 			float brRayP = 1.0;

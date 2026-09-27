@@ -124,7 +124,8 @@ describe('WP9 parameters', () => {
     expect(TUNE.RIPPLE).toBeGreaterThan(0);
     expect(TUNE.RIPPLE).toBeLessThan(0.05); // still water trembles, it does not wave
     expect(TUNE.POM_MIN_PX).toBeLessThan(TUNE.POM_FULL_PX);
-    expect(TUNE.POM_MAX_1).toBeGreaterThanOrEqual(4); // the minimum step count of the march
+    expect(TUNE.POM_MIN_STEPS).toBeGreaterThanOrEqual(1);
+    expect(TUNE.POM_MAX_1).toBeGreaterThanOrEqual(TUNE.POM_MIN_STEPS);
     expect(TUNE.POM_MAX_1).toBeLessThanOrEqual(TUNE.POM_MAX_2);
     expect(TUNE.POM_SH_STEPS).toBeGreaterThan(0);
     const g = glslConstants();

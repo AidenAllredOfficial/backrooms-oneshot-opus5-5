@@ -237,9 +237,10 @@ export const TUNE = {
   POM_FULL_PX: 1.5, // ...full depth from here
   POM_PX_PER_STEP: 1.5, // linear-search step length (pixels), then one secant refinement
   POM_PX_PER_STEP_2: 2.25, // BR_POM 2 (ultra renders at 1.5x: the same 1.5 display pixels)
+  POM_MIN_STEPS: 2, // fewest march steps (plus the start sample and the secant): the step length bounds the error
   POM_MAX_1: 12, // steps, BR_POM 1 (high)
   POM_MAX_2: 16, // steps, BR_POM 2 (ultra)
-  POM_SH_STEPS: 4, // self-shadow steps toward the baked light (BR_POM 2)
+  POM_SH_STEPS: 4, // most self-shadow steps toward the baked light (BR_POM 2), one per march step length
   POM_SH_K: 8.0, // occlusion per unit of normalised height above the shadow ray
   // --- prop dust (aux.z bits 2-7 = dust level from the anchor cell's decay, props/tileProps.ts)
   DUST_COLOR: [0.36, 0.34, 0.3] as const, // linear (sRGB ~161/157/149)
@@ -421,6 +422,7 @@ export function glslConstants(): string {
 #define BR_POM_FULL_PX ${f(TUNE.POM_FULL_PX)}
 #define BR_POM_PX_PER_STEP ${f(TUNE.POM_PX_PER_STEP)}
 #define BR_POM_PX_PER_STEP_2 ${f(TUNE.POM_PX_PER_STEP_2)}
+#define BR_POM_MIN_STEPS ${TUNE.POM_MIN_STEPS}
 #define BR_POM_MAX_1 ${TUNE.POM_MAX_1}
 #define BR_POM_MAX_2 ${TUNE.POM_MAX_2}
 #define BR_POM_SH_STEPS ${TUNE.POM_SH_STEPS}
