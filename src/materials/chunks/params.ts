@@ -254,9 +254,21 @@ export const TUNE = {
   // --- lighting
   DIRECT_MIN_ROUGH: 0.25, // baked dominant-direction specular never sharper than this (it is an area estimate)
   NG_MIN: 0.2,
-  // props: up-facing surfaces look up n.y * this many light-volume levels (chunks/lighting.ts lvLookup; a whole level:
-  // a seat top never blends in the samples under its own frame)
-  LV_BIAS_LEVELS: 1.0,
+  // props: an up-facing surface drops the light-volume level below it once that level lies this far (m) behind its
+  // plane (common.ts brLvK, TS twin lvLevels): a seat top 0.16 m over the 0.2 m level (the samples under its own
+  // frame) reads the 0.8 m level alone; a surface right at a level still reads it
+  LV_BACK_D: 0.1,
+  // ... gated (chunks/lighting.ts lvBackGate / lvGatePoint), both levels read LV_GATE_OFF (m) behind the surface in
+  // xz: a sloped surface (n.y <= NY0) drops as the level above gives an up-facing receiver from LO to HI times the
+  // light of the level below (a lounge chair's frame shadow is 16-100x at high, ~13x at low / medium; a room's own
+  // vertical gradient 1-1.8x, a car hood corner in front of its windshield ~1.5x), a flat top (n.y >= NY1) from 1 to
+  // FLAT_HI times (no transition to squeeze); a level below that is brighter (a rack deck's load) is always kept
+  LV_GATE_LO: 1.5,
+  LV_GATE_HI: 3.0,
+  LV_GATE_FLAT_HI: 1.35,
+  LV_GATE_NY0: 0.75,
+  LV_GATE_NY1: 0.95,
+  LV_GATE_OFF: 0.3,
   // --- emission-map reflections
   EM_LOD_PER_ROUGH: 5.0,
   EM_ROUGH_CUT: 0.5, // emission-map reflections at full weight below this roughness (spec gate)
@@ -432,7 +444,13 @@ export function glslConstants(): string {
 #define BR_POM_SH_K ${f(TUNE.POM_SH_K)}
 #define BR_DIRECT_MIN_ROUGH ${f(TUNE.DIRECT_MIN_ROUGH)}
 #define BR_NG_MIN ${f(TUNE.NG_MIN)}
-#define BR_LV_BIAS_K ${f(TUNE.LV_BIAS_LEVELS)}
+#define BR_LV_BACK_D ${f(TUNE.LV_BACK_D)}
+#define BR_LV_GATE_LO ${f(TUNE.LV_GATE_LO)}
+#define BR_LV_GATE_HI ${f(TUNE.LV_GATE_HI)}
+#define BR_LV_GATE_OFF ${f(TUNE.LV_GATE_OFF)}
+#define BR_LV_GATE_FLAT_HI ${f(TUNE.LV_GATE_FLAT_HI)}
+#define BR_LV_GATE_NY0 ${f(TUNE.LV_GATE_NY0)}
+#define BR_LV_GATE_NY1 ${f(TUNE.LV_GATE_NY1)}
 #define BR_EM_LOD ${f(TUNE.EM_LOD_PER_ROUGH)}
 #define BR_EM_ROUGH_CUT ${f(TUNE.EM_ROUGH_CUT)}
 #define BR_EM_ROUGH_END ${f(TUNE.EM_ROUGH_END)}
