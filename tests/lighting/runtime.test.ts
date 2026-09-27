@@ -166,7 +166,7 @@ describe('atmosphere: the living-air fields (package F)', () => {
   });
 
   it('moods multiply the dust (capped) and a DARK mood shows most motes; lit zones keep motes sparse', () => {
-    expect(MOOD_EXTRA.map((m) => m.dustMul)).toEqual([1, 1.2, 1.6, 2.2]);
+    expect(MOOD_EXTRA.map((m) => m.dustMul)).toEqual([1, 1.2, 1.6, 1.9]);
     const n = atmosphereTarget(Zone.LOBBY, Mood.NORMAL, newParams()), y = atmosphereTarget(Zone.LOBBY, Mood.DYING, newParams());
     expect(y.dustDensity).toBeCloseTo((n.dustDensity ?? 0) * 1.6, 12);
     for (let z = 0; z < ZONE_COUNT; z++) {

@@ -21,7 +21,7 @@ import { CELL, CHUNK_CELLS, CHUNK_SIZE, EDGE_FOG, LV, TILE_SIZE } from '../core/
 import type { GameBus, GameEvents } from '../core/events.ts';
 import { flicker } from '../core/flicker.ts';
 import type { FlickerSample } from '../core/flicker.ts';
-import { worldToCell } from '../core/grid.ts';
+import { chunkOriginX, chunkOriginZ, worldToCell } from '../core/grid.ts';
 import { fromHalf } from '../core/half.ts';
 import { CellFlag } from '../core/ids.ts';
 import type { LightStateId } from '../core/ids.ts';
@@ -37,7 +37,6 @@ import { createFlashlight } from './Flashlight.ts';
 import type { FlashlightRig } from './Flashlight.ts';
 import { createFlashlightBounce } from './FlashlightBounce.ts';
 import type { BounceInput } from './FlashlightBounce.ts';
-import { chunkOriginX, chunkOriginZ } from '../core/grid.ts';
 import type { FrameHook } from '../post/ScenePass.ts';
 import { VolumetricFog } from '../post/VolumetricFog.ts';
 import { DustMotes } from './dustMotes.ts';

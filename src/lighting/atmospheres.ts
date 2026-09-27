@@ -132,13 +132,13 @@ type VolRow = Pick<AtmosphereParams, 'dustDensity' | 'dustNoise' | 'mistDensity'
 const vol = (dustDensity: number, dustNoise: number, mistDensity: number, moteDensity: number, hazePhase?: number): VolRow =>
   hazePhase === undefined ? { dustDensity, dustNoise, mistDensity, moteDensity } : { dustDensity, dustNoise, mistDensity, moteDensity, hazePhase };
 const VOL_ROWS: Readonly<Record<number, VolRow>> = {
-  [Zone.LOBBY]: vol(0.002, 0.5, 0, 0.3),
-  [Zone.MANILA]: vol(0.002, 0.5, 0, 0.3),
-  [Zone.DARK]: vol(0.012, 0.6, 0, 1.0),
-  [Zone.MAZE]: vol(0.002, 0.5, 0, 0.3),
-  [Zone.LOW_EXPANSE]: vol(0.004, 0.5, 0.012, 0.3),
-  [Zone.PILLAR_HALL]: vol(0.003, 0.4, 0.012, 0.3),
-  [Zone.OFFICE]: vol(0.0015, 0.4, 0, 0.25),
+  [Zone.LOBBY]: vol(0.002, 0.5, 0, 0.2),
+  [Zone.MANILA]: vol(0.002, 0.5, 0, 0.2),
+  [Zone.DARK]: vol(0.010, 0.6, 0, 1.0),
+  [Zone.MAZE]: vol(0.002, 0.5, 0, 0.2),
+  [Zone.LOW_EXPANSE]: vol(0.004, 0.5, 0.012, 0.25),
+  [Zone.PILLAR_HALL]: vol(0.003, 0.4, 0.012, 0.25),
+  [Zone.OFFICE]: vol(0.0015, 0.4, 0, 0.15),
   // warm water under soft light: the mist carries the air; droplets scatter forward
   [Zone.POOLROOMS]: vol(0, 0.3, 0.15, 0.1, 0.85),
   [Zone.PARKING]: vol(0.004, 0.5, 0, 0.5),
@@ -175,6 +175,6 @@ export const MOOD_EXTRA: readonly { bloomMul: number; grainMul: number; saturati
   /* NORMAL */ { bloomMul: 1, grainMul: 1, saturationMul: 1, biasMul: 1, dustMul: 1 },
   /* SPARSE */ { bloomMul: 1.05, grainMul: 1.1, saturationMul: 0.97, biasMul: 0.85, dustMul: 1.2 },
   /* DYING  */ { bloomMul: 1.1, grainMul: 1.2, saturationMul: 0.93, biasMul: 0.7, dustMul: 1.6 },
-  /* DARK   */ { bloomMul: 1.2, grainMul: 1.25, saturationMul: 0.9, biasMul: 0.35, dustMul: 2.2 },
+  /* DARK   */ { bloomMul: 1.2, grainMul: 1.25, saturationMul: 0.9, biasMul: 0.35, dustMul: 1.9 },
 ];
 

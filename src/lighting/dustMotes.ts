@@ -26,18 +26,19 @@ import { VD } from './volumetricDensity.ts';
 export const MOTES = {
   /** m: side of the camera-centred box */
   L: 6,
-  /** m^2: effective scattering cross-section of a mote (calibrated: a mote 1.5 m into the DARK-zone beam reads about
-   * as bright as the lit wall behind it; real grains are far smaller, their glints far brighter than their mean) */
-  CROSS: 1.2e-5,
-  /** weight of the room's diffuse (ambient and flicker) light on the motes, relative to directional light */
-  AMBIENT: 0.1,
+  /** m^2: effective scattering cross-section of a mote (calibrated: a mote 1.5 m into the torch's hotspot reads about
+   * as bright as the lit wall behind it, while specks in the dim spill fade into the dark instead of a starfield) */
+  CROSS: 4e-6,
+  /** weight of the room's diffuse (ambient and flicker) light on the motes relative to directional light: a lit room
+   * full of bright dots reads as salt noise; dust shows in a strong beam, forward toward a lamp or in the torch */
+  AMBIENT: 0.3,
   /** m: no motes closer than this (they would cover the lens) */
   NEAR: 0.25,
   /** m: the camcorder's focus distance and aperture diameter (defocus disc of near specks) */
   FOCUS: 2.5,
   APERTURE: 0.0025,
   /** px: sprite diameter range (the gaussian's support) */
-  SIZE_MIN: 1.6,
+  SIZE_MIN: 2,
   SIZE_MAX: 7,
   /** m/s: settling */
   SETTLE: 0.003,
@@ -121,8 +122,8 @@ void main() {
 	vec3 E, Ld, Ef;
 	float w;
 	vec3 I = vec3( 0.0 );
-	// the diffuse fill of the room lights the specks only weakly (AMBIENT): against the dark they would read as a
-	// starfield; what makes dust visible is a strong directional light, the lamp ahead or the torch
+	// the room's diffuse fill shows the specks only weakly (AMBIENT): what makes dust visible is a strong beam,
+	// forward toward a lamp or in the torch
 	if ( brLaSample( rel, E, w, Ld, Ef ) ) I += w * E * brMotePhase( dot( Ld, rd ) ) + ( 2.0 * ( 1.0 - w ) * E + Ef ) * ${f(MOTES.AMBIENT / (4 * Math.PI))};
 	if ( uFlOn > 0.5 ) {
 		vec3 L = uFlPos - rel;
