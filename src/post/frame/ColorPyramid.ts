@@ -93,6 +93,11 @@ export class ColorPyramid {
     this.quad.render(renderer, m, this.target);
   }
 
+  /** Free the GL target (quality switch to a preset without split frames); the next build reallocates it. */
+  release(): void {
+    this.target.dispose();
+  }
+
   dispose(): void {
     this.target.dispose();
     this.full.dispose();

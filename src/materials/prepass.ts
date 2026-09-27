@@ -31,7 +31,8 @@ export interface PrepassOptions {
 }
 
 /** Whether the last renderWithPrepass call WITH options hid a LAYER_LATE mesh (non-empty draw range) whose world
- * bounding sphere intersects the view frustum. Always false when the prepass is disabled. */
+ * bounding sphere intersects the view frustum, for a camera that renders LAYER_LATE. Always false when the prepass
+ * is disabled. */
 export const PREPASS_LATE = { visible: false };
 
 // swap bookkeeping, reused every frame (cleared slot by slot, never shrunk, so no reallocation)
@@ -110,9 +111,10 @@ export function renderWithPrepass(renderer: THREE.WebGLRenderer, scene: THREE.Sc
   const autoClear = renderer.autoClear;
   renderer.autoClear = false;
   try {
-    trackLate = opts !== undefined;
+    if (opts) PREPASS_LATE.visible = false;
+    // a camera without the late layer never draws those meshes, so they cannot ask for a split
+    trackLate = opts !== undefined && (camera.layers.mask & lateBit) !== 0;
     if (trackLate) {
-      PREPASS_LATE.visible = false;
       // three's render does the same update first (idempotent)
       if (camera.parent === null && camera.matrixWorldAutoUpdate) camera.updateMatrixWorld();
       frustum.setFromProjectionMatrix(viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));

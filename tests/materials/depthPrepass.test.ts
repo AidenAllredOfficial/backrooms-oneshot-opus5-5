@@ -180,6 +180,7 @@ describe('renderWithPrepass', () => {
   it('records whether a hidden LAYER_LATE mesh is in view (options only; idle draw ranges do not count)', () => {
     const t = setup();
     const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+    cam.layers.enable(LAYER_LATE);
     const water = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial());
     water.layers.set(LAYER_LATE);
     t.scene.add(water);
@@ -200,6 +201,9 @@ describe('renderWithPrepass', () => {
     renderWithPrepass(t.renderer as unknown as THREE.WebGLRenderer, t.scene, cam);
     expect(PREPASS_LATE.visible).toBe(true);
     expect(water.visible).toBe(true);
+    // a camera that does not render the late layer never asks for a split
+    cam.layers.disable(LAYER_LATE);
+    expect(at(-5)).toBe(false);
   });
 
   it('renders once when disabled', () => {

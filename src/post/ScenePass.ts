@@ -113,6 +113,7 @@ export class ScenePass extends RenderPass {
   setQuality(q: QualityConfig): void {
     this.quality = q;
     if (q.ssr === 'off') this.disposeSceneRT();
+    if (q.colorPyramidScale <= 0) this.releasePyramid();
   }
 
   /** The URL / debug `ssr` toggle (PostStack.setEnabled): off renders the plain non-MRT path. */
@@ -248,6 +249,10 @@ export class ScenePass extends RenderPass {
         depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType),
       });
       rt.textures[0].name = 'Frame.Colour';
+      // bilinear: the ColorPyramid's 4-tap box (colorPyramidScale < 1) relies on filtered taps; texelFetch readers
+      // (MrtComposite) ignore the filter
+      rt.textures[0].minFilter = THREE.LinearFilter;
+      rt.textures[0].magFilter = THREE.LinearFilter;
       rt.textures[1].name = 'Frame.Specular';
       rt.textures[2].name = 'Frame.NormalRough';
       this.sceneRT = rt;
@@ -262,6 +267,14 @@ export class ScenePass extends RenderPass {
     this.sceneRT.depthTexture?.dispose();
     this.sceneRT.dispose();
     this.sceneRT = null;
+  }
+
+  /** A preset without split frames: free the pyramid's GL target (reallocated if a later preset splits again) and
+   * hand the globals back their inert sceneColor. */
+  private releasePyramid(): void {
+    this.pyramid.release();
+    const g = this.globals;
+    if (g && g.sceneColor.value === this.pyramid.texture) g.sceneColor.value = null;
   }
 
   override dispose(): void {

@@ -158,6 +158,10 @@ describe('ScenePass frame graph', () => {
     expect(ev('late').target).toBe('input');
     expect(t.ctxs[0].mrt).not.toBeNull();
     expect(t.ctxs[0].depth).toBe(t.ctxs[0].mrt?.depthTexture);
+    // the pyramid's 4-tap box (ultra) reads the colour attachment bilinearly; the G-buffer stays nearest
+    const tex = (t.ctxs[0].mrt as THREE.WebGLRenderTarget).textures;
+    expect([tex[0].minFilter, tex[0].magFilter]).toEqual([THREE.LinearFilter, THREE.LinearFilter]);
+    expect([tex[1].minFilter, tex[2].minFilter]).toEqual([THREE.NearestFilter, THREE.NearestFilter]);
     expect(t.pass.lastFrame).toEqual({ mrt: true, split: true });
     expect(t.renderer.autoClearColor).toBe(true);
     expect(MRT_PASS.value).toBe(0);
@@ -186,6 +190,19 @@ describe('ScenePass frame graph', () => {
     expect(t.ctxs[0].globals).toBe(t.globals);
     remove();
     expect(t.pass.hooks.afterDepth.map((h) => h.name)).toEqual(['ssao', 'hiz', 'atlas']);
+  });
+
+  it('a switch to a preset without split frames frees the pyramid target and resets sceneColor', () => {
+    const t = setup(QUALITY.high);
+    t.run();
+    expect(t.globals.sceneColor.value).toBe(t.pass.pyramid.texture);
+    let freed = 0;
+    t.pass.pyramid.target.addEventListener('dispose', () => { freed++; });
+    t.pass.setQuality(QUALITY.ultra);
+    expect(freed).toBe(0);
+    t.pass.setQuality(QUALITY.medium);
+    expect(freed).toBe(1);
+    expect(t.globals.sceneColor.value).toBeNull();
   });
 
   it('keeps the composer depth textures (needsDepthTexture)', () => {
