@@ -9,6 +9,7 @@ import type { MatId } from '../../core/ids.ts';
 import { DYN_SLOT_OFFSETS } from '../../core/mesh.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../core/materials.ts';
 import type { GrimeProfile } from '../../core/materials.ts';
+import { DETAIL_RECIPES, DETAIL_REPEAT, DETAIL_RIPPLE, DETAIL_SIZE } from '../../textures/detail.ts';
 import { LAYER_RECIPES } from '../../textures/registry.ts';
 
 /** GLSL float literal (always has a decimal point). */
@@ -44,7 +45,7 @@ const MACRO_AMOUNT: Partial<Record<MatId, number>> = {
  *   alpha-tested layers);
  * - tok: weight of the Toksvig (mip-filtered normal) variance in the roughness (1 = all of it is lobe broadening;
  *   < 1 where most of the filtered variance is structural: grout bevels, tilted tiles, joints, ribs);
- * - det / detS: detail-map layer (D0..D10, -1 = none) and strength;
+ * - det / detS: detail-map layer (textures/detail.ts D0..D10, -1 = none; D11 is the puddle ripple) and strength;
  * - sheen / sheenR: textile sheen amount and roughness (USE_SHEEN);
  * - glaze / roughComp: two-lobe unmixing of bimodal layers (glaze lobe roughness and rough-component roughness:
  *   the mip-filtered roughness is their coverage mixture); 0 = single lobe.
@@ -61,7 +62,7 @@ export const SURFACE_PHYS: Readonly<Record<MatId, SurfacePhys>> = {
   [Mat.PANEL_LENS]: phys(0),
   [Mat.TRIM_PAINT]: phys(0.1, { det: 3, detS: 0.5 }),
   [Mat.WALLPAPER_MANILA]: phys(0.35, { det: 2, detS: 0.8 }),
-  [Mat.CARPET_OFFICE]: phys(1, { det: 1, detS: 1, sheen: 0.4, sheenR: 0.6 }),
+  [Mat.CARPET_OFFICE]: phys(1, { det: 1, detS: 0.7, sheen: 0.4, sheenR: 0.6 }),
   [Mat.DRYWALL]: phys(0.5, { det: 3, detS: 1 }),
   [Mat.VINYL_VCT]: phys(0.05, { tok: 0.5, det: 6, detS: 0.5, glaze: 0.34, roughComp: 0.75 }),
   [Mat.CONCRETE_FLOOR]: phys(0.6, { det: 4, detS: 1 }),
@@ -218,6 +219,26 @@ export const TUNE = {
   // --- geometric specular AA (Tokuyoshi & Kaplanyan 2019): alpha^2 += min(2 SIGMA2 (|dn/dx|^2 + |dn/dy|^2), KAPPA)
   SAA_SIGMA2: 0.25,
   SAA_KAPPA: 0.18,
+  // --- detail maps (uBrDetail, textures/detail.ts): full detail up to FAR0 detail texels per pixel, faded to the
+  // layer mean (pure LEAN micro-roughness) by FAR1 (~4 m at 1080p, ~6 m at ultra)
+  DETAIL_FAR0: 8,
+  DETAIL_FAR1: 16,
+  // --- puddle micro-ripples (detail layer DETAIL_RIPPLE): normalised slope x this, one repeat per RIPPLE_SCALE
+  // metres (divides NOISE_WRAP), drifting at RIPPLE_DRIFT repeats per second (frozen under time=)
+  RIPPLE: 0.004, // ~0.13 degrees rms: still water that only trembles (drips, draughts)
+  RIPPLE_SCALE: 0.6,
+  RIPPLE_DRIFT: [0.004, -0.003] as const,
+  RIPPLE_NEAR0: 1.5, // ripple texels per pixel: full ripples up to here (~1 m at 1080p)...
+  RIPPLE_NEAR1: 4, // ...none from here
+  // --- parallax occlusion mapping (shell, pomTop layers): steps follow the visible parallax in pixels
+  POM_GAIN: 1.0, // relief depth x this
+  POM_MIN_PX: 0.5, // no POM below this much parallax (pixels)...
+  POM_FULL_PX: 1.5, // ...full depth from here
+  POM_PX_PER_STEP: 1.5, // linear-search step length (pixels), then one secant refinement
+  POM_MAX_1: 12, // steps, BR_POM 1 (high)
+  POM_MAX_2: 16, // steps, BR_POM 2 (ultra)
+  POM_SH_STEPS: 4, // self-shadow steps toward the baked light (BR_POM 2)
+  POM_SH_K: 8.0, // occlusion per unit of normalised height above the shadow ray
   // --- prop dust (aux.z bits 2-7 = dust level from the anchor cell's decay, props/tileProps.ts)
   DUST_COLOR: [0.36, 0.34, 0.3] as const, // linear (sRGB ~161/157/149)
   DUST_MAX: 0.7,
@@ -282,6 +303,7 @@ export function glslConstants(): string {
   const wrapCells = (cell: number): number => Math.round(NOISE_WRAP / cell);
   const yCells = (cell: number): number => Math.round(STOREY_PITCH / cell);
   const v3 = (c: readonly number[]): string => `vec3(${c.map(f).join(', ')})`;
+  const nd = DETAIL_RECIPES.length;
   return `
 #define BR_PI 3.141592653589793
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
@@ -382,6 +404,24 @@ export function glslConstants(): string {
 #define BR_DUST_ROUGH ${f(TUNE.DUST_ROUGH)}
 #define BR_DUST_CELL ${f(TUNE.DUST_CELL)}
 #define BR_DUST_P ${wrapCells(TUNE.DUST_CELL)}
+#define BR_DETAIL_REPEAT ${f(DETAIL_REPEAT)}
+#define BR_DETAIL_RES ${f(DETAIL_SIZE)}
+#define BR_DETAIL_FAR0 ${f(TUNE.DETAIL_FAR0)}
+#define BR_DETAIL_FAR1 ${f(TUNE.DETAIL_FAR1)}
+#define BR_DETAIL_RIPPLE ${f(DETAIL_RIPPLE)}
+#define BR_RIPPLE ${f(TUNE.RIPPLE)}
+#define BR_RIPPLE_SCALE ${f(TUNE.RIPPLE_SCALE)}
+#define BR_RIPPLE_DRIFT vec2(${TUNE.RIPPLE_DRIFT.map(f).join(', ')})
+#define BR_RIPPLE_NEAR0 ${f(TUNE.RIPPLE_NEAR0)}
+#define BR_RIPPLE_NEAR1 ${f(TUNE.RIPPLE_NEAR1)}
+#define BR_POM_GAIN ${f(TUNE.POM_GAIN)}
+#define BR_POM_MIN_PX ${f(TUNE.POM_MIN_PX)}
+#define BR_POM_FULL_PX ${f(TUNE.POM_FULL_PX)}
+#define BR_POM_PX_PER_STEP ${f(TUNE.POM_PX_PER_STEP)}
+#define BR_POM_MAX_1 ${TUNE.POM_MAX_1}
+#define BR_POM_MAX_2 ${TUNE.POM_MAX_2}
+#define BR_POM_SH_STEPS ${TUNE.POM_SH_STEPS}
+#define BR_POM_SH_K ${f(TUNE.POM_SH_K)}
 #define BR_DIRECT_MIN_ROUGH ${f(TUNE.DIRECT_MIN_ROUGH)}
 #define BR_NG_MIN ${f(TUNE.NG_MIN)}
 #define BR_EM_LOD ${f(TUNE.EM_LOD_PER_ROUGH)}
@@ -415,5 +455,7 @@ export function glslConstants(): string {
 #define BR_DEBUG_LUX ${f(TUNE.DEBUG_LUX)}
 const int BR_SLOT_LUT[9] = int[9](${lut.join(', ')});
 const float BR_LV_Y[${LV.NY}] = float[${LV.NY}](${LV.Y.map(f).join(', ')});
+const float BR_DETAIL_SLOPE[${nd}] = float[${nd}](${DETAIL_RECIPES.map((r) => f(r.slope)).join(', ')});
+const float BR_DETAIL_ROUGH_K[${nd}] = float[${nd}](${DETAIL_RECIPES.map((r) => f(r.roughK)).join(', ')});
 `;
 }

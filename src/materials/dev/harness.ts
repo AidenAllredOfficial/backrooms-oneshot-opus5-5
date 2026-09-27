@@ -20,6 +20,7 @@ import { createPlanarReflection } from '../PlanarReflection.ts';
 import { DEBUG_VIEW_ROTATION } from '../chunks/debug.ts';
 import { createFakeTextureSet } from './fakeTextures.ts';
 import { generateTextures } from '../../textures/TextureBaker.ts';
+import { generateDetailTextures } from '../../textures/DetailBaker.ts';
 import { buildDevTile } from './testTile.ts';
 import type { DevTile } from './testTile.ts';
 
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
   const textures = P.get('tex') === 'real'
     ? await generateTextures(renderer, q.textureSize, q.anisotropy)
     : createFakeTextureSet(512, q.anisotropy, { isoVct: tests.includes('antitile') });
+  if (q.detailMaps && q.shaderDetail !== 'lite') textures.detail = await generateDetailTextures(renderer, q.anisotropy);
   const texMs = performance.now() - t0;
   const tile: DevTile = buildDevTile({ vctOnly: sceneKind === 'vct' });
 

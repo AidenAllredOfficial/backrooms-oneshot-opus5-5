@@ -17,6 +17,7 @@ import type { Settings } from '../core/settings.ts';
 import type { WorkerInit, WorkerRequest } from '../core/worker.ts';
 import type { SpawnPoint } from '../core/world.ts';
 import { generateTextures } from '../textures/TextureBaker.ts';
+import { generateDetailTextures } from '../textures/DetailBaker.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
 import { createPlanarReflection } from '../materials/PlanarReflection.ts';
 import { createLightingRuntime } from '../lighting/LightingRuntime.ts';
@@ -263,6 +264,8 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   cb.phase('textures');
   mark('textures');
   const textures = await generateTextures(r, q.textureSize, q.anisotropy, (f) => cb.progress('textures', f));
+  // package B: the LEAN detail-map array, only when the preset uses it (generated lazily on a later quality switch)
+  if (q.detailMaps && q.shaderDetail !== 'lite') textures.detail = await generateDetailTextures(r, q.anisotropy);
   cb.progress('textures', 1);
 
   // 4 [shaders]
@@ -359,6 +362,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   s.lighting.setQuality(nq);
   s.reflection.setQuality(nq);
   s.audio.setQuality(nq);
+  if (nq.detailMaps && nq.shaderDetail !== 'lite' && !s.textures.detail) s.textures.detail = await generateDetailTextures(r, nq.anisotropy);
   s.materials.setQuality(nq);
   s.dynRes = createDynamicResolution(s.post, r, nq);
   try {

@@ -3,7 +3,9 @@
 // and two-lobe (glaze) roughness, metalness, normal mapping and emission. Albedo/normal/ormh are sampled ONCE (in the
 // map_fragment replacement) and stashed in main-scope variables, because in r186 roughnessmap_fragment runs before
 // normal_fragment_maps. Main-scope outputs read later (chunks/materialPost.ts, debug views, packages D/E): brWet,
-// brFilm, brPuddle, brDust, brCov, brWear, brPileLean, brTbn.
+// brFilm, brPuddle, brDust, brCov, brWear, brPileLean, brTbn; POM state for chunks/pom.ts FRAG_DIRVIS_GLSL (brPomOn,
+// brPomT/B/N, brPomRep, brPomDepth, brPomHitN, brPomK, brPomSalt); detail state (brDetUv, brDetSl, brDetVar).
+// Detail maps (BR_DETAIL_MAPS, chunks/detail.ts) and POM (BR_POM, chunks/pom.ts) are package B's high / ultra paths.
 
 import { DecalKind } from '../../core/ids.ts';
 
@@ -29,6 +31,22 @@ uint brTileSalt( vec3 n ) {
 	vec3 a = abs( n );
 	uint axis = a.y >= max( a.x, a.z ) ? ( n.y > 0.0 ? 1u : 2u ) : ( a.x > a.z ? 3u : 4u );
 	return uint( t.x ) * 73856093u ^ uint( t.y ) * 19349663u ^ axis * 83492791u;
+}
+// rotated physical tiles: the texel uv of uv under its cell's hashed 90-degree rotation + flip (M acts in square cell
+// space) and random cell offset. Shared by the main sampling and the POM height lookups (chunks/pom.ts brPomH), so the
+// parallax march and the shading never drift apart
+vec2 brRotUv( vec2 uv, vec2 cells, uint salt, out mat2 M, out int rotIdx ) {
+	vec2 cu = uv * cells;
+	vec2 cc = floor( cu );
+	vec2 fr = cu - cc - 0.5;
+	uint h = brHash2u( ivec2( cc ), salt );
+	int rot = int( h & 3u );
+	float flp = ( h & 4u ) != 0u ? - 1.0 : 1.0;
+	vec2 cs = rot == 0 ? vec2( 1.0, 0.0 ) : rot == 1 ? vec2( 0.0, 1.0 ) : rot == 2 ? vec2( - 1.0, 0.0 ) : vec2( 0.0, - 1.0 );
+	M = mat2( cs.x, cs.y, - cs.y, cs.x ) * mat2( flp, 0.0, 0.0, 1.0 );
+	vec2 offs = floor( vec2( brU01( brPcg( h ) ), brU01( brPcg( h ^ 0x68bc21ebu ) ) ) * cells );
+	rotIdx = rot + ( flp < 0.0 ? 4 : 0 );
+	return ( cc + offs + 0.5 + M * fr ) / cells;
 }
 bool brIsChalk( vec2 uv ) {
 	ivec2 s = ivec2( clamp( uv * 4.0, vec2( 0.0 ), vec2( 3.999 ) ) );
@@ -61,6 +79,19 @@ vec2 brS2 = brSurf2D( brPW, brNWg );
 vec2 brUv = vBrUv;
 vec2 brDx = dFdx( brUv );
 vec2 brDy = dFdy( brUv );
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+// detail maps: world-anchored on the shell (periodic over NOISE_WRAP and STOREY_PITCH), part-local metres on props
+vec4 brDetL = uBrLayerD[ brL ]; // (detail layer, strength, sheen, sheen roughness)
+#ifdef BR_PROPS
+vec2 brDetUv = vBrUv * floor( brLB.x / BR_DETAIL_REPEAT + 0.5 );
+#else
+vec2 brDetUv = brS2 / BR_DETAIL_REPEAT;
+#endif
+vec2 brDetDx = dFdx( brDetUv );
+vec2 brDetDy = dFdy( brDetUv );
+vec2 brDetSl = vec2( 0.0 ); // resolved detail slope (m / m) for FRAG_NORMAL
+float brDetVar = 0.0; // unresolved detail slope variance (LEAN) for FRAG_ROUGHNESS
+#endif
 // wallpaper rolls (world-anchored 0.6 m strips): each roll is hung with its own vertical pattern offset (the print
 // mismatches at the seams) and has its own shade / warmth (dye lot, fading)
 bool brRoll = ! brHoriz && ( brL == BR_M_WALLPAPER_L0 || brL == BR_M_WALLPAPER_MANILA );
@@ -71,6 +102,73 @@ if ( brRoll ) {
 	brRollH = brHash2u( brWrap( ivec2( int( floor( brS2.x / BR_WALL_ROLL ) ), 0 ), ivec2( BR_WALL_ROLL_P, 1 ) ), 611u + brOr * 13u );
 	brUv.y += ( brU01( brRollH ) - 0.5 ) * 0.06 / brLB.y;
 }
+#ifdef BR_POM
+// ---- parallax occlusion mapping (pomTop layers on the shell: CMU, cast concrete, pool tile / mosaic, metal deck).
+// The geometric face is the relief top (height pomTop): the view ray is marched down through the height field at
+// <= BR_POM_PX_PER_STEP pixels per step, then refined by one secant step, and only the texture lookup moves (depth,
+// discards and silhouettes stay those of the flat face, as in DepthMaterial). brDx / brDy stay the unshifted
+// footprint (continuous gradients); the rotated-tile sampling below re-derives the cell of the shifted uv.
+bool brPomOn = false;
+vec3 brPomT = vec3( 1.0, 0.0, 0.0 ), brPomB = vec3( 0.0, 1.0, 0.0 ), brPomN = vec3( 0.0, 0.0, 1.0 );
+vec2 brPomRep = vec2( 1.0 );
+float brPomDepth = 0.0, brPomHitN = 1.0, brPomK = 0.0;
+uint brPomSalt = 0u;
+{
+	vec3 brQ0 = dFdx( vViewPosition );
+	vec3 brQ1 = dFdy( vViewPosition );
+	float brTop = uBrLayerC[ brL ].y;
+	// per-face layer: quad-uniform; the planar mirror pass (water) skips it
+	if ( brTop > 0.0 && ( brF & BR_F_DECAL ) == 0 && uBrReflPass < 0.5 ) {
+		vec3 brNv = normalize( ( viewMatrix * vec4( brNWg, 0.0 ) ).xyz );
+		mat3 brPF = brTangentFrame( - vViewPosition, brNv, vBrUv );
+		vec3 brV = normalize( vViewPosition );
+		float brNdV = max( dot( brNv, brV ), 0.06 );
+		brPomT = brPF[ 0 ] * inversesqrt( max( dot( brPF[ 0 ], brPF[ 0 ] ), 1e-12 ) ); // zero-safe (degenerate quads)
+		brPomB = brPF[ 1 ] * inversesqrt( max( dot( brPF[ 1 ], brPF[ 1 ] ), 1e-12 ) );
+		brPomN = brNv;
+		brPomRep = brHoriz ? vec2( brLB.x ) : brLB.xy; // metres per uv unit
+		brPomDepth = uBrLayerC[ brL ].x * brTop * BR_POM_GAIN; // metres from the top plane down to height 0
+		// largest visible parallax (pixels): the relief depth seen at this angle over the pixel footprint
+		float brShift = brPomDepth * sqrt( 1.0 - brNdV * brNdV ) / ( brNdV * max( max( length( brQ0 ), length( brQ1 ) ), 1e-6 ) );
+		float brFadeP = smoothstep( BR_POM_MIN_PX, BR_POM_FULL_PX, brShift );
+		if ( brFadeP > 0.0 ) {
+			brPomSalt = brTileSalt( brNWg );
+			vec2 brDUv = - vec2( dot( brV, brPomT ), dot( brV, brPomB ) ) / brPomRep * ( brPomDepth * brFadeP / brNdV );
+			int brSteps = clamp( int( ceil( brShift / BR_POM_PX_PER_STEP ) ), 4, BR_POM_MAX );
+			float brStep = 1.0 / float( brSteps );
+			vec2 brUvP = brUv;
+			float brRayP = 1.0;
+			float brHP = brPomH( brUv, brLA.xy, brPomSalt, brLayerF, brDx, brDy ) / brTop;
+			vec2 brUvHit = brUv;
+			float brHitN = 1.0;
+			if ( brHP < 1.0 ) {
+				for ( int i = 1; i <= BR_POM_MAX; i ++ ) {
+					if ( i > brSteps ) break;
+					float brRay = 1.0 - float( i ) * brStep;
+					vec2 brUvC = brUv + brDUv * ( 1.0 - brRay );
+					float brHC = brPomH( brUvC, brLA.xy, brPomSalt, brLayerF, brDx, brDy ) / brTop;
+					if ( brHC >= brRay ) {
+						// secant between the last sample above the surface and the first below it
+						float brSa = brRayP - brHP;
+						float brSb = brHC - brRay;
+						float brSt = brSa / max( brSa + brSb, 1e-5 );
+						brUvHit = mix( brUvP, brUvC, brSt );
+						brHitN = mix( brRayP, brRay, brSt );
+						break;
+					}
+					brUvP = brUvC;
+					brRayP = brRay;
+					brHP = brHC;
+				}
+			}
+			brUv = brUvHit;
+			brPomOn = true;
+			brPomHitN = brHitN;
+			brPomK = brFadeP;
+		}
+	}
+}
+#endif
 vec4 brAlb;
 vec4 brNrm; // xyz: filtered tangent normal (length |n̄|) in the continuous uv frame, w: height
 vec4 brOrmh;
@@ -79,16 +177,8 @@ int brRotIdx = - 1;
 if ( brLA.x > 0.0 ) {
 	// ---- physical tiles: hashed 90° rotation + flip per tile cell, anisotropic footprint follows the rotation
 	vec2 cells = brLA.xy;
-	vec2 cu = brUv * cells;
-	vec2 cc = floor( cu );
-	vec2 fr = cu - cc - 0.5;
-	uint h = brHash2u( ivec2( cc ), brTileSalt( brNWg ) );
-	int rot = int( h & 3u );
-	float flp = ( h & 4u ) != 0u ? - 1.0 : 1.0;
-	vec2 cs = rot == 0 ? vec2( 1.0, 0.0 ) : rot == 1 ? vec2( 0.0, 1.0 ) : rot == 2 ? vec2( - 1.0, 0.0 ) : vec2( 0.0, - 1.0 );
-	mat2 M = mat2( cs.x, cs.y, - cs.y, cs.x ) * mat2( flp, 0.0, 0.0, 1.0 );
-	vec2 offs = floor( vec2( brU01( brPcg( h ) ), brU01( brPcg( h ^ 0x68bc21ebu ) ) ) * cells );
-	vec2 uvR = ( cc + offs + 0.5 + M * fr ) / cells;
+	mat2 M;
+	vec2 uvR = brRotUv( brUv, cells, brTileSalt( brNWg ), M, brRotIdx );
 	// d(uvR) = diag(1/cells) · M · diag(cells) · d(uv) (the rotation acts in square cell space)
 	vec2 gx = ( M * ( brDx * cells ) ) / cells;
 	vec2 gy = ( M * ( brDy * cells ) ) / cells;
@@ -99,7 +189,6 @@ if ( brLA.x > 0.0 ) {
 	brNLen = length( nd );
 	nd.xy = transpose( M ) * nd.xy; // counter-rotate into the continuous uv frame (M orthonormal)
 	brNrm = vec4( nd, nt.w );
-	brRotIdx = rot + ( flp < 0.0 ? 4 : 0 );
 } else if ( BR_DETAIL == 1 && brLA.z > 0.0 ) {
 	// ---- stochastic (offset-only) tiling on a world-anchored sheared triangle lattice: vertices at
 	// (i·hexX + j·hexX/2, j·hexR), near-equilateral triangles whose vertex (blend) cells are hexagons of ~hexM.
@@ -188,6 +277,27 @@ if ( ( brF & BR_F_DECAL ) != 0 && brAlb.a < 0.5 ) discard;
 #endif
 
 vec3 brA = brAlb.rgb;
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+// ---- detail maps (LEAN; textures/detail.ts): a mean-preserving albedo multiplier (pits and gaps also a little
+// rougher), the resolved slope for FRAG_NORMAL and the unresolved slope variance for FRAG_ROUGHNESS
+// (per-face layer: quad-uniform; the planar mirror pass skips it; a missing array reads mean 0 and is ignored)
+if ( brDetL.x >= 0.0 && uBrReflPass < 0.5 ) {
+	int brDi = int( brDetL.x + 0.5 );
+	vec4 brDmu;
+	vec4 brDt = brDetailFetch( brDetUv, brDetL.x, brDetDx, brDetDy, brDmu );
+	if ( brDmu.b <= 0.0 ) {
+		brDt = vec4( 0.5, 0.5, 0.5, 0.0 );
+		brDmu.b = 0.5;
+	}
+	float brDs = BR_DETAIL_SLOPE[ brDi ];
+	vec2 brDsl = ( brDt.rg * 2.0 - 1.0 ) * brDs;
+	brDetVar = max( brDt.a * 2.0 * brDs * brDs - dot( brDsl, brDsl ), 0.0 ) * brDetL.y * brDetL.y; // E[s^2] - |E[s]|^2
+	brDetSl = brDsl * brDetL.y;
+	float brAm = brDt.b / brDmu.b;
+	brA *= mix( 1.0, brAm, brDetL.y );
+	brOrmh.g = clamp( brOrmh.g + BR_DETAIL_ROUGH_K[ brDi ] * ( 1.0 - brAm ) * brDetL.y, 0.02, 1.0 );
+}
+#endif
 float brMacro = brLB.w;
 // ---- macro variation: value ±6 %, hue ±2 % from low-frequency world noise + the coarse-mip luminance
 if ( BR_DETAIL == 1 && brMacro > 0.0 ) {
@@ -451,6 +561,21 @@ if ( brNWg.y > 0.9 && brPor < 0.95 ) {
 // damp pile / fibres clump (stronger relief); a saturated film and standing water flatten it; still water adds no
 // filtered-normal (Toksvig) variance
 brNrmScale *= ( 1.0 + BR_WET_CLUMP * brAbs * ( 1.0 - brFilm ) ) * ( 1.0 - BR_SOAK_FLAT * brFilm * brPor ) * ( 1.0 - brPuddle );
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+// water fills the micro-relief: standing water has no detail slope, a film keeps some of the variance
+brDetSl *= 1.0 - brPuddle;
+brDetVar *= 1.0 - max( brPuddle, 0.7 * brFilm );
+#ifdef BR_SHELL
+// micro-ripples on standing water (drips, draughts): the ripple layer at BR_RIPPLE_SCALE metres per repeat, drifting
+// slowly, only near the viewer (unresolved ripples far away would only blur the mirror through the specular AA)
+float brRk = BR_DETAIL_REPEAT / BR_RIPPLE_SCALE;
+float brRn = 1.0 - smoothstep( BR_RIPPLE_NEAR0, BR_RIPPLE_NEAR1, max( length( brDetDx ), length( brDetDy ) ) * brRk * BR_DETAIL_RES );
+if ( brPuddle > 0.0 && brRn > 0.0 && uBrReflPass < 0.5 ) { // per-pixel branch: explicit gradients
+	vec2 brRp = textureGrad( uBrDetail, vec3( brDetUv * brRk + uTime * BR_RIPPLE_DRIFT, BR_DETAIL_RIPPLE ), brDetDx * brRk, brDetDy * brRk ).rg * 2.0 - 1.0;
+	brDetSl += brRp * ( BR_RIPPLE * smoothstep( 0.5, 1.0, brPuddle ) * brRn ); // not on the shoreline film
+}
+#endif
+#endif
 brNLen = mix( brNLen, 1.0, brPuddle );
 brRoughTo = mix( BR_WET_FILM_ROUGH + BR_WET_FILM_ROUGH_POROUS * brPor, BR_PUDDLE_ROUGH, brPuddle );
 brRoughToW = max( brFilm, brPuddle );
@@ -475,6 +600,9 @@ if ( BR_DETAIL == 1 && ( brF & BR_F_PROP_AUX ) != 0 && ( brF & ( BR_F_NO_GRIME |
 	brRoughToW = max( brRoughToW, brDust );
 	brNrmScale *= 1.0 - 0.6 * brDust;
 	brMetal *= 1.0 - brDust;
+#ifdef BR_DETAIL_MAPS
+	brDetSl *= 1.0 - 0.6 * brDust;
+#endif
 }
 #endif
 `;
@@ -501,6 +629,9 @@ if ( brLE.x > 0.0 ) {
 	float brGz = min( brOrmh.g, brLE.x );
 	brRt = sqrt( brGz * brGz + BR_GLAZE_TOKSVIG * brVar );
 }
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+brRt = sqrt( sqrt( pow4( brRt ) + brDetVar ) ); // LEAN: the unresolved detail slope variance adds to alpha^2
+#endif
 float roughnessFactor = clamp( mix( brRt * brRoughMul, brRoughTo, brRoughToW ), 0.02, 1.0 );
 `;
 
@@ -518,6 +649,15 @@ mat3 brTbn = brTangentFrame( - vViewPosition, normal, vBrUv );
 	vec3 brMapN = vec3( brNrm.xy * brNrmScale, max( brNrm.z, 1e-3 ) );
 	normal = normalize( brTbn * brMapN );
 }
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+{
+	// detail slope in the detail uv's own cotangent frame (a second frame: world-anchored on the shell), added to the
+	// mapped normal (UDN style); |slope| <= 1, so a steep base bevel is never flipped
+	mat3 brDf = brTangentFrame( - vViewPosition, brNg, brDetUv );
+	vec2 brSl = brDetSl / max( 1.0, length( brDetSl ) );
+	normal = normalize( normal - brDf[ 0 ] * brSl.x - brDf[ 1 ] * brSl.y );
+}
+#endif
 `;
 
 /** Replaces `#include <emissivemap_fragment>`. LENS_SHIMMER_GLSL (core/flicker.ts, WP11) provides brLensShimmer. */

@@ -8,6 +8,7 @@ import { MAT_COUNT, Mat } from '../../src/core/ids.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../src/core/materials.ts';
 import { DYN_SLOT_OFFSETS } from '../../src/core/mesh.ts';
 import { buildLayerTable, f, glazeUnmix, glslConstants, GRIME_ID, hexLattice, slotLut, SURFACE_PHYS, TUNE } from '../../src/materials/chunks/params.ts';
+import { DETAIL_COUNT, DETAIL_RECIPES, DETAIL_RIPPLE } from '../../src/textures/detail.ts';
 import { LAYER_RECIPES } from '../../src/textures/registry.ts';
 import { ShaderLib } from 'three';
 import { buildSurfaceFragment } from '../../src/materials/SurfaceMaterial.ts';
@@ -116,6 +117,20 @@ describe('WP9 parameters', () => {
     expect(TUNE.DUST_MAX).toBeLessThanOrEqual(1);
     expect(TUNE.SAA_KAPPA).toBeLessThan(1);
     expect(TUNE.CARPET_PILE_SHADE).toBeLessThan(0.07); // the sheen lobe supplies the view dependence now
+  });
+
+  it('detail, ripple and POM constants are ordered and emitted', () => {
+    expect(TUNE.DETAIL_FAR0).toBeLessThan(TUNE.DETAIL_FAR1);
+    expect(TUNE.RIPPLE).toBeGreaterThan(0);
+    expect(TUNE.RIPPLE).toBeLessThan(0.05); // still water trembles, it does not wave
+    expect(TUNE.POM_MIN_PX).toBeLessThan(TUNE.POM_FULL_PX);
+    expect(TUNE.POM_MAX_1).toBeGreaterThanOrEqual(4); // the minimum step count of the march
+    expect(TUNE.POM_MAX_1).toBeLessThanOrEqual(TUNE.POM_MAX_2);
+    expect(TUNE.POM_SH_STEPS).toBeGreaterThan(0);
+    const g = glslConstants();
+    expect(g).toContain(`const float BR_DETAIL_SLOPE[${DETAIL_COUNT}] = float[${DETAIL_COUNT}](${DETAIL_RECIPES.map((r) => f(r.slope)).join(', ')});`);
+    expect(g).toContain(`const float BR_DETAIL_ROUGH_K[${DETAIL_COUNT}]`);
+    expect(g).toContain(`#define BR_DETAIL_RIPPLE ${f(DETAIL_RIPPLE)}`);
   });
 
   it('every grime profile has a distinct id; "none" is 0', () => {
