@@ -47,8 +47,8 @@ describe('light volume near a desk', () => {
     expect(lv(near, 14, 1, 14)).toBeGreaterThan(1.5 * lv(far, 14, 1, 14));
   });
 
-  it('the sample 1.5 m up changes < 10%, the one at 2.3 m < 3%', () => {
-    for (const [k, tol] of [[2, 0.1], [3, 0.03]]) {
+  it('the samples 1.5 m and 2.3 m up change < 2%', () => {
+    for (const [k, tol] of [[2, 0.02], [3, 0.02]]) {
       const a = lv(far, 14, k, 14), b = lv(near, 14, k, 14);
       expect(a).toBeGreaterThan(20);
       expect(Math.abs(b - a) / a, `k ${k}`).toBeLessThan(tol);

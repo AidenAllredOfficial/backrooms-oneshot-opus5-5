@@ -4,8 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { TileKey } from '../../src/core/grid.ts';
-import { fromHalf } from '../../src/core/half.ts';
-import { PropKind } from '../../src/core/ids.ts';
+import { PropKind, Zone } from '../../src/core/ids.ts';
 import { ChartKind, type LightmapData } from '../../src/core/mesh.ts';
 import type { BakeQuality } from '../../src/core/quality.ts';
 import type { LayoutNeighborhood } from '../../src/core/world.ts';
@@ -14,7 +13,7 @@ import { bakeTile, createBakeCache, lastBake } from '../../src/bake/index.ts';
 import { setupTexels, TX_VALID } from '../../src/bake/context.ts';
 import { createJob } from '../../src/bake/job.ts';
 import { NEAR_MAX, NU, NV, nearRegion } from '../../src/bake/nearfield.ts';
-import { Q_HIGH, addLight, carveRoom, findChart, gridTexel, handNeighborhood, sampleGrid, solidLayout, surfacesOf, texelLum } from './helpers.ts';
+import { Q_HIGH, addLight, carveRoom, findChart, gridTexel, handNeighborhood, sampleGrid, solidLayout, surfacesOf, texelLum, zoneNeighborhood } from './helpers.ts';
 
 const TILE: TileKey = { s: 0, cx: 0, cz: 0, q: 0 };
 const Q16: BakeQuality = { ...Q_HIGH, nearRays: 16 };
@@ -99,28 +98,67 @@ describe('near-field gather', () => {
 });
 
 describe('seams', () => {
-  it('a desk straddling a tile seam: the shared floor texels agree on both tiles', () => {
+  const SIDE = 16 * 12 + 2;
+  /** Shared border texels of a grid chart kind (A's last interior + apron columns = B's apron + first interior):
+   * the number of VALID pairs compared, how many differ in any irr half (bit-exact), and how many of A's differ
+   * from A's far-field bake (the near-field correction is active on the seam). */
+  function validMask(nb: LayoutNeighborhood, tile: TileKey, s: ReturnType<typeof surfacesOf>): Uint8Array {
+    const T = setupTexels(createJob(nb, tile, Q16, null), s);
+    const valid = new Uint8Array(s.atlasW * s.atlasH);
+    for (let t = 0; t < T.n; t++) if (T.state[t] === TX_VALID) valid[T.atlas[t]] = 1;
+    return valid;
+  }
+  function seamPairs(nb: LayoutNeighborhood, tA: TileKey, A: LightmapData, sA: ReturnType<typeof surfacesOf>, tB: TileKey,
+    B: LightmapData, sB: ReturnType<typeof surfacesOf>, far: LightmapData, kind: number, v0 = 0, v1 = SIDE): { n: number; diff: number; near: number } {
+    const ca = findChart(sA, kind), cb = findChart(sB, kind);
+    const va = validMask(nb, tA, sA), vb = validMask(nb, tB, sB);
+    let n = 0, diff = 0, near = 0;
+    for (const [ua, ub] of [[SIDE - 2, 0], [SIDE - 1, 1]]) {
+      for (let v = v0; v < v1; v++) {
+        const pa = (ca.y + v) * A.width + ca.x + ua, pb = (cb.y + v) * B.width + cb.x + ub;
+        if (!va[pa] || !vb[pb]) continue;
+        const ia = pa * 4, ib = pb * 4;
+        n++;
+        let d = false, f = false;
+        for (let k = 0; k < 4; k++) {
+          if (A.irr[ia + k] !== B.irr[ib + k]) d = true;
+          if (A.irr[ia + k] !== far.irr[ia + k]) f = true;
+        }
+        if (d) diff++;
+        if (f) near++;
+      }
+    }
+    return { n, diff, near };
+  }
+
+  it('a desk straddling a tile seam: the shared floor texels are bit-identical on both tiles', () => {
     const nb = deskRoom(19.2, 8.4); // tile line q0 | q1 at x = 19.2 m
     const tA: TileKey = { s: 0, cx: 0, cz: 0, q: 0 }, tB: TileKey = { s: 0, cx: 0, cz: 0, q: 1 };
     const sA = surfacesOf(nb, tA, 12), sB = surfacesOf(nb, tB, 12);
     const A = bakeTile(nb, tA, sA, 'full', Q16, 'indirect', createBakeCache());
     expect(lastBake.nearTexels).toBeGreaterThan(20);
     const B = bakeTile(nb, tB, sB, 'full', Q16, 'indirect', createBakeCache());
-    const ca = findChart(sA, ChartKind.FLOOR_GRID), cb = findChart(sB, ChartKind.FLOOR_GRID);
-    const SIDE = 16 * 12 + 2;
-    let n = 0, worst = 0;
-    for (const [ua, ub] of [[SIDE - 2, 0], [SIDE - 1, 1]]) {
-      for (let v = 60; v < 140; v++) { // z 6-14 m: across the desk
-        const ia = ((ca.y + v) * A.width + ca.x + ua) * 4, ib = ((cb.y + v) * B.width + cb.x + ub) * 4;
-        for (let k = 0; k < 3; k++) {
-          const x = fromHalf(A.irr[ia + k]), y = fromHalf(B.irr[ib + k]);
-          if (Math.max(x, y) < 0.5) continue;
-          n++;
-          worst = Math.max(worst, Math.abs(x - y) / Math.max(x, y));
-        }
-      }
-    }
-    expect(n).toBeGreaterThan(300);
-    expect(worst).toBeLessThan(1e-3);
+    const far = bakeTile(nb, tA, sA, 'full', Q_HIGH, 'indirect', createBakeCache());
+    const r = seamPairs(nb, tA, A, sA, tB, B, sB, far, ChartKind.FLOOR_GRID, 60, 140); // z 6-14 m: across the desk
+    expect(r.n).toBeGreaterThan(150);
+    expect(r.near).toBeGreaterThan(20);
+    expect(r.diff).toBe(0);
   });
+
+  it('WAREHOUSE (racks, boxes on the decks): q0 | q1 floor and ceiling seams are bit-identical with near rays', () => {
+    const nb = zoneNeighborhood(Zone.WAREHOUSE, 0, 0);
+    const tA: TileKey = { s: 0, cx: 0, cz: 0, q: 0 }, tB: TileKey = { s: 0, cx: 0, cz: 0, q: 1 };
+    const sA = surfacesOf(nb, tA, 12), sB = surfacesOf(nb, tB, 12);
+    const A = bakeTile(nb, tA, sA, 'full', Q16, 'all', createBakeCache());
+    const B = bakeTile(nb, tB, sB, 'full', Q16, 'all', createBakeCache());
+    const far = bakeTile(nb, tA, sA, 'full', Q_HIGH, 'all', createBakeCache());
+    let near = 0;
+    for (const kind of [ChartKind.FLOOR_GRID, ChartKind.CEIL_GRID]) {
+      const r = seamPairs(nb, tA, A, sA, tB, B, sB, far, kind);
+      expect(r.diff, `kind ${kind}`).toBe(0);
+      if (kind === ChartKind.FLOOR_GRID) expect(r.n).toBeGreaterThan(300);
+      near += r.near;
+    }
+    expect(near).toBeGreaterThan(50);
+  }, 120_000);
 });

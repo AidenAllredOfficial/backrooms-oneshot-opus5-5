@@ -10,8 +10,9 @@
 //     probe's far field; rays that hit a prop box return that face's first-bounce radiance.
 //     Solid boxes (pillars, slabs, trusses, stairs) stay far field: they keep the analytic box AO everywhere.
 //     A prop face's radiance is rho * E / pi of its own world-anchored 0.3 m sub-patch (`propFaceRadiance`: K lights,
-//     form factor and one visibility ray each, cached per bake), not the shell patch of the cell it stands in (a desk
-//     side panel under the desk top is not lit like the partition wall behind it).
+//     form factor and one visibility ray each, plus the skylight sun like the shell patches, cached per bake), not the
+//     shell patch of the cell it stands in (a desk side panel under the desk top is not lit like the partition wall
+//     behind it).
 //     V  = sum over far-field rays of w_i / sum of w_i, w_i = the probe SH radiance (luma) along the ray (blocking
 //          the bright ceiling costs more than blocking a dark wall), floored at W_MIN of the mean;
 //     Vg = 1 - boxHits / N (geometric, for the specular occlusion in irr.a);
@@ -31,6 +32,7 @@ import { boxesAround, boxesAroundList } from './ao.ts';
 import { FILTER_CELL, isTowerCell, selectLights } from './classify.ts';
 import { worldQ, wq } from './context.ts';
 import { HIT_BOX_BOTTOM, HIT_BOX_SIDE, HIT_BOX_TOP, hit, occluded, traceHit } from './dda.ts';
+import { sunAt, sunOut } from './direct.ts';
 import type { BakeJob } from './job.ts';
 import { albedoOf } from './probes.ts';
 import { Y00, Y1, fibonacciDirs, hashRotation } from './sh.ts';
@@ -140,7 +142,8 @@ const rho3 = new Float64Array(3);
  * Radiance (RGB, nits) of the prop face at the current `hit` (a HIT_BOX_* hit on a MAT_PROP box), written to out:
  * rho * E / pi with E the direct irradiance of the face's 0.3 m sub-patch (anchored at the box's min corner, so a pure
  * function of world geometry): the K_MAX strongest lights, each with its form factor, window and one DDA ray from
- * the sub-patch centre to the emitter centre. Cached per bake job.
+ * the sub-patch centre to the emitter centre, plus the direct sun of skylight halls (one aperture sample). Cached per
+ * bake job.
  */
 export function propFaceRadiance(job: BakeJob, out: Float64Array): void {
   if (faceJob !== job) { faceJob = job; faceMap.clear(); faceN = 0; }
@@ -200,6 +203,12 @@ function faceIrradiance(job: BakeJob, b: number, face: number, u: number, v: num
         if (occluded(g, px, py, pz, L.vis[lo], L.vis[lo + 1], L.vis[lo + 2], group, false)) continue;
         const k = f * w;
         er += k * L.rad[lo]; eg += k * L.rad[lo + 1]; eb += k * L.rad[lo + 2];
+      }
+      // direct sun through skylight glazing, as the shell patches get it (patches.ts): a sunlit prop face bounces it
+      const S = job.sun;
+      if (S !== null && group === 0 && nx * S.dx + ny * S.dy + nz * S.dz > 0) {
+        sunAt(job, px, py, pz, nx, ny, nz, group, 1);
+        er += sunOut.r; eg += sunOut.g; eb += sunOut.b;
       }
     }
   }
