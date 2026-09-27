@@ -69,8 +69,10 @@ describe('detail recipes', () => {
   });
 
   it('the 0.3 m repeat divides NOISE_WRAP, STOREY_PITCH and TILE_SIZE; the ripple repeat too', () => {
+    // the shell samples the detail (and the ripple) at tile-local surface coordinates, which is the world pattern only
+    // because both repeats divide TILE_SIZE (tile origins, and the wrapped noise origins, are multiples of it)
     for (const span of [NOISE_WRAP, STOREY_PITCH, TILE_SIZE]) expect(integral(span / DETAIL_REPEAT), `${span}`).toBe(true);
-    expect(integral(NOISE_WRAP / TUNE.RIPPLE_SCALE)).toBe(true);
+    for (const span of [NOISE_WRAP, TILE_SIZE]) expect(integral(span / TUNE.RIPPLE_SCALE), `${span}`).toBe(true);
     expect(integral(TUNE.RIPPLE_SCALE / DETAIL_REPEAT)).toBe(true);
   });
 

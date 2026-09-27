@@ -81,12 +81,15 @@ vec2 brUv = vBrUv;
 vec2 brDx = dFdx( brUv );
 vec2 brDy = dFdy( brUv );
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
-// detail maps: world-anchored on the shell (periodic over NOISE_WRAP and STOREY_PITCH), part-local metres on props
+// detail maps: world-anchored on the shell, part-local metres on props. The shell uses the tile-local surface
+// coordinate: the repeat divides TILE_SIZE (and STOREY_PITCH), so it is the same world pattern as brS2 / repeat, but
+// in 0..64 instead of up to 4096 uv units (brS2 carries the wrapped noise origin, up to NOISE_WRAP). At 4096 a float
+// resolves only ~1/4 of a detail texel, and the uv derivatives of the close-range cotangent frame were a third noise.
 vec4 brDetL = uBrLayerD[ brL ]; // (detail layer, strength, sheen, sheen roughness)
 #ifdef BR_PROPS
 vec2 brDetUv = vBrUv * floor( brLB.x / BR_DETAIL_REPEAT + 0.5 );
 #else
-vec2 brDetUv = brS2 / BR_DETAIL_REPEAT;
+vec2 brDetUv = brSurf2D( vBrLocal, brNWg ) / BR_DETAIL_REPEAT;
 #endif
 vec2 brDetDx = dFdx( brDetUv );
 vec2 brDetDy = dFdy( brDetUv );
