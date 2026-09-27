@@ -368,6 +368,10 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   }
   core.debug.ready = false;
   core.debug.readyPhase = 'shaders';
+  // package B's detail array first, while every system still runs the old preset: the frames rendered during this
+  // await must not see the new frame graph (an MRT sceneRT) with the old surface programs, which lack the G-buffer
+  // outputs (GL_INVALID_OPERATION, dropped draws). From here to materials.setQuality nothing yields.
+  if (nq.detailMaps && nq.shaderDetail !== 'lite' && !s.textures.detail) s.textures.detail = await generateDetailTextures(r, nq.anisotropy);
   s.q = nq;
   r.setPixelRatio(pixelRatioFor(nq, devicePixelRatio));
   // new post passes (AO mode, SMAA preset) stay out of the frame until their programs are linked in parallel
@@ -386,7 +390,6 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
   s.probe.setQuality(nq);
   s.ripples.setQuality(nq);
   s.audio.setQuality(nq);
-  if (nq.detailMaps && nq.shaderDetail !== 'lite' && !s.textures.detail) s.textures.detail = await generateDetailTextures(r, nq.anisotropy);
   s.materials.setQuality(nq);
   s.dynRes = createDynamicResolution(s.post, r, nq);
   try {

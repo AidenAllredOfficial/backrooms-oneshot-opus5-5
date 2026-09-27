@@ -96,7 +96,14 @@ export async function runWarmup(renderer: THREE.WebGLRenderer, camera: THREE.Cam
   scene.add(group);
   try {
     renderer.setRenderTarget(rt);
-    await renderer.compileAsync(scene, camera);
+    // compileAsync compiles synchronously, then polls on timers: the app's frames keep rendering meanwhile, and must
+    // not draw the warmup triangles (1 m ahead of the eye; the water one on layer 0 would also land in the MRT
+    // sceneRT of a split frame, which it has no outputs for: GL_INVALID_OPERATION). Hidden while waiting, shown again
+    // for the real draw right below (no frame can run in between).
+    const compiled = renderer.compileAsync(scene, camera);
+    group.visible = false;
+    await compiled;
+    group.visible = true;
     renderer.setRenderTarget(rt);
     renderer.render(scene, camera);
     if (import.meta.env.DEV) {
