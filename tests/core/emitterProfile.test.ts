@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGED_P, computeEpNorm, defaultShapeInput, emitterShape, EP, EP_NORM, epNormIndex, LENS_TILE, lensAux, lensParam,
-  lensVariant, LOUVER_P, nadirMean, prismAngular, profileBits, recessedProfile, unpackLensParam, unpackProfile,
+  lensVariant, LOUVER_P, nadirMean, PRISM, prismAngular, profileBits, recessedProfile, unpackLensParam, unpackProfile,
   type ShapeInput,
 } from '../../src/core/emitterProfile.ts';
 import { FixtureKind, LightState, Zone } from '../../src/core/ids.ts';
@@ -125,6 +125,31 @@ describe('emitter profiles: angular behaviour', () => {
     }
     expect(2 * acc).toBeGreaterThan(0.9);
     expect(2 * acc).toBeLessThan(1.05);
+  });
+
+  it('prism facet sparkle: resolved up close, gone before a 4 mm cell shrinks to 4 px (no moire)', () => {
+    // facet modulation inside one pyramid cell at a lamp-band edge (lamps along u: the lamp images are constant
+    // along u there, so any change along u within the cell is the facet pattern), footprint 1 / pxPerCell cells
+    const spread = (pxPerCell: number): number => {
+      const inp = defaultShapeInput();
+      inp.fp = PRISM.PITCH / pxPerCell / LENS_TILE;
+      inp.vx = 0.3; inp.vy = 0.2; inp.vz = Math.sqrt(1 - 0.13);
+      const out = [0, 0, 0];
+      let worst = 0;
+      for (let j = 0; j < 8; j++) {
+        let lo = Infinity, hi = -Infinity;
+        for (let i = 0; i < 8; i++) {
+          inp.u = 1 + (PRISM.PITCH * (i + 0.5)) / 8 / LENS_TILE; inp.v = 0.5 + (0.025 + (PRISM.PITCH * (j + 0.5)) / 8) / LENS_TILE;
+          const l = luma(emitterShape(inp, out));
+          lo = Math.min(lo, l); hi = Math.max(hi, l);
+        }
+        worst = Math.max(worst, hi - lo);
+      }
+      return worst;
+    };
+    expect(spread(20)).toBeGreaterThan(0.05);
+    expect(spread(4)).toBeLessThan(1e-3);
+    expect(PRISM.FAR1 * 4).toBeLessThanOrEqual(1);
   });
 
   it('louver: bright cells from below, dark past the cutoff', () => {

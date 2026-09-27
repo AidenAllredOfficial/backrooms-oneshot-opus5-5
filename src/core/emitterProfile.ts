@@ -49,8 +49,14 @@ export const PRISM = {
   BAND: 0.95, // lamp image gain
   END_IN: 0.04, // lamp holders: the lamp glow stops this far inside the lens ends
   CAV: 0.62, CAV_W: 0.05, // housing walls shade the lens rim
-  FAR0: 0.35, FAR1: 0.9, // footprint / PITCH over which the facet sparkle fades into the 4-image mean
+  // footprint / PITCH over which the facet sparkle fades into the 4-image mean. It is gone before a facet cell
+  // shrinks to 4 px: the 4 mm lattice beats with the pixel grid (moire arcs that crawl as the camera moves) well
+  // before its 2 px Nyquist limit, and ultra's 1.5x supersampled buffer is resampled to the screen, so a period of
+  // 3 buffer px is already 2 screen px there.
+  FAR0: 0.07, FAR1: 0.25,
 } as const;
+/** Pixel footprint (m) at which the EP_NORM recipe integrates the lens: far field (4 mm facets fully averaged). */
+const NORM_FP = 0.0144;
 /** Parabolic louver (18-cell 2x4 / 9-cell 2x2): specular aluminium cells H deep, lamps D above the cells. */
 export const LOUVER = {
   CELL: 0.2, H: 0.075, D: 0.11, BLADE_T: 0.003,
@@ -487,7 +493,7 @@ export function epNorm(ep: number, n: number, La: number, Wx: number): number {
 export function nadirMean(ep: number, n: number, U: number, V: number): number {
   const inp = defaultShapeInput();
   inp.ep = ep; inp.variant = lensVariant(n, false); inp.param = lensParam(U, V, 0);
-  inp.fp = 4 * PRISM.FAR1 * PRISM.PITCH / LENS_TILE; // far field
+  inp.fp = NORM_FP / LENS_TILE; // far field (the lamp images are area-normalised: the mean hardly depends on it)
   const out = [0, 0, 0];
   let s = 0;
   const NU = 96, NV = 48;
