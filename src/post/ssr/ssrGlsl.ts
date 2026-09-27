@@ -291,6 +291,13 @@ layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_SOFT ${f(SSR.THICK_SOFT)}
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
 ${SSR_OCT_GLSL}
+vec2 brOctEnc( vec3 n ) {
+	n /= abs( n.x ) + abs( n.y ) + abs( n.z );
+	vec2 e = n.xy;
+	if ( n.z < 0.0 ) e = ( 1.0 - abs( n.yx ) ) * vec2( n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0 );
+	return e;
+}
+float pow4( float x ) { float x2 = x * x; return x2 * x2; }
 ${SSR_TRACE_GLSL}
 // view-space position of window depth d at full-resolution uv (perspective)
 vec3 brViewPos( float d, vec2 uv ) {
@@ -324,12 +331,26 @@ void main() {
 	vec4 s1 = texelFetch( tSpec, p, 0 );
 	vec4 g = texelFetch( tGNR, p, 0 );
 	if ( s1.a < 1e-4 || g.a < 0.5 ) return;
-	float rough = g.b;
+	// the texel stands for its block: average the lobes of the glossy pixels of its top-left 2x2 (a normal map finer
+	// than the trace grid, corrugated metal or grout, would otherwise alias into dots); the spread of their normals
+	// widens the cone (Toksvig: alpha^2 + (1 - |n|) / |n|)
+	vec3 nSum = brOctDec( g.rg );
+	float rSum = g.b, cnt = 1.0;
+	ivec2 lim = ivec2( uFull ) - 1;
+	for ( int k = 1; k < 4; k ++ ) {
+		vec4 gk = texelFetch( tGNR, min( p + ivec2( k & 1, k >> 1 ), lim ), 0 );
+		if ( gk.a < 0.5 ) continue;
+		nSum += brOctDec( gk.rg );
+		rSum += gk.b;
+		cnt += 1.0;
+	}
+	float nLen = max( length( nSum ) / cnt, 1e-3 );
+	vec3 N = normalize( nSum );
+	float rough = rSum / cnt;
 	float d = texelFetch( tDepth, p, 0 ).x;
 	vec3 P = brViewPos( d, ( vec2( p ) + 0.5 ) / uFull );
-	outMeta = vec4( - P.z, g.rg, rough );
+	outMeta = vec4( - P.z, brOctEnc( N ), rough );
 	if ( rough > uMaxRough ) return;
-	vec3 N = brOctDec( g.rg );
 	vec3 V = - normalize( P );
 	float nv = dot( N, V );
 	if ( nv < 0.01 ) return;
@@ -345,7 +366,7 @@ void main() {
 	// along the screen-projected normal (grazing views of floors: the vertical streaks of lamps)
 	vec3 Ph = brViewPos( 1.0, hitUv );
 	Ph *= hitZ / - Ph.z;
-	float a = rough * rough;
+	float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );
 	float D = max( 2.0 * BR_SSR_CONE * a * length( Ph - P ) * 0.5 * uPyrSize.y * uProj[ 1 ][ 1 ] / hitZ, 1e-3 );
 	vec2 nS = brProjPx( P + N * ( 0.01 * - P.z ) ) - brProjPx( P );
 	nS = dot( nS, nS ) > 1e-10 ? normalize( nS ) : vec2( 0.0, 1.0 );
