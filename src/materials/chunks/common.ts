@@ -259,7 +259,7 @@ int brChannelSlot( int k, vec2 local, vec2 parity ) {
 }
 
 // ---- light-volume v coordinate for a storey-relative height (LV.Y levels are not uniform), shifted by dk levels
-// (the props' front-side lookup, chunks/lighting.ts; TS twin lvLevel / lvLookup)
+// (up-facing props look one level up, chunks/lighting.ts; TS twin lvLevel / lvLookup)
 float brLvV( float y, float dk ) {
 	y = clamp( y, BR_LV_Y[ 0 ], BR_LV_Y[ BR_LV_NYI - 1 ] );
 	float k = 0.0;
