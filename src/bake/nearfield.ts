@@ -9,18 +9,20 @@
 //     the texel's quantized world position. Rays that leave the region or hit a wall / floor / ceiling keep the
 //     probe's far field; rays that hit a prop box return that face's first-bounce radiance.
 //     Solid boxes (pillars, slabs, trusses, stairs) stay far field: they keep the analytic box AO everywhere.
-//     A prop face's radiance is rho * E / pi of its own world-anchored 0.3 m sub-patch (`propFaceRadiance`: K lights,
-//     form factor and one visibility ray each, plus the skylight sun like the shell patches, cached per bake), not the
-//     shell patch of the cell it stands in (a desk side panel under the desk top is not lit like the partition wall
-//     behind it).
+//     A prop face's radiance is rho * E / pi of its own world-anchored 0.3 m sub-patch (1.2 m along thin faces;
+//     `propFaceRadiance`: K lights, form factor and one visibility ray each, plus the skylight sun like the shell
+//     patches, cached per bake), not the shell patch of the cell it stands in (a desk side panel under the desk top is
+//     not lit like the partition wall behind it).
 //     V  = sum over far-field rays of w_i / sum of w_i, w_i = the probe SH radiance (luma) along the ray (blocking
 //          the bright ceiling costs more than blocking a dark wall), floored at W_MIN of the mean;
 //     Vg = 1 - boxHits / N (geometric, for the specular occlusion in irr.a);
 //     E  = pi / N * sum of the box radiances (RGB).
-//   The estimator is E_ind = (E_cube(n) * V + E) * mb with the unchanged ambient cube and per-channel multi-bounce;
-//   the whole full bake leaves out the analytic AO of prop boxes and the contact AO of footprints with boxes (ao.ts
-//   skipProps). The correction is scaled by `nearWeight`, which fades it to 0 (V = 1, E = 0: the value outside the
-//   region) over the region's outer NEAR.TAPER, so the region's edge is seamless.
+//   The estimator is E_ind = (E_cube(n) * V + E) * mb with per-channel multi-bounce, E_cube (and the SH weighting V)
+//   blended by `nearWeight` towards the probes' far field (probes.ts: prop boxes within NEAR.PROBE_FAR of the probe
+//   transparent), so the props the rays put back are not also in the probe; the whole full bake leaves out the
+//   analytic AO of prop boxes and the contact AO of footprints with boxes standing on the floor (ao.ts skipProps).
+//   The correction is scaled by `nearWeight`, which fades it to 0 (V = 1, E = 0, the probes with their props: the
+//   value outside the region) over the region's outer NEAR.TAPER, so the region's edge is seamless.
 //   light-volume samples (`nearSphereCorrect`): M sphere directions (Fibonacci, hash-rotated per sample), and a
 //     delta-form SH correction D_c = (L_box,c - max(0, L_sh,c(w))) * 4 pi / M for every box hit.
 // Every ray is exact halo arithmetic (translation invariant) and every pattern is seeded by world positions, so
@@ -52,6 +54,12 @@ export const NEAR = {
   SALT: 0x6e4f,
   /** hashRotation layer offset of the light-volume sphere pattern */
   LV_LAYER: 40,
+  /** probes' far field (probes.ts): prop boxes entered within this distance (m) of a probe are transparent. Half the
+   * ray length: a prop that close to the probe is within NEAR.R of every receiver that interpolates the probe with
+   * the main weight, so the gather puts it back (a 1.2 m radius left props out that no gather ray reaches: the
+   * under-desk floor overshot a brute-force reference by 30%, with 0.6 m by 17%; the probes with the props
+   * undershot it by 50%) */
+  PROBE_FAR: 0.6,
 } as const;
 
 /** 32-point (0,2)-sequence: u = van der Corput over 5 bits, v = Sobol dimension 2 (direction numbers
@@ -129,6 +137,10 @@ const rad = new Float64Array(3);
 
 /** Prop face sub-patch size (m) and the offset of its evaluation point off the face (m). */
 const FACE_SUB = 0.3, FACE_OFF = 0.02;
+/** Thin faces (narrower than FACE_THIN m: rack uprights -- 16 cm where two racks' merge --, deck and desk-top
+ * edges, panel edges) use FACE_LONG m sub-patches along their long side: a 4.2 m rack upright face had 14
+ * sub-patches, each with its own light selection and one visibility ray per light, for a 7 cm wide strip. */
+const FACE_THIN = 0.2, FACE_LONG = 1.2;
 /** Exact-polygon factor of the face sub-patches (as the shell patches). */
 const FACE_EXACT = 1.5;
 let faceJob: BakeJob | null = null;
@@ -161,7 +173,8 @@ export function propFaceRadiance(job: BakeJob, out: Float64Array): void {
     face = hit.dir + 2;
     u = (hit.x - x0) * CELL; v = hit.y - y0; lu = (x1 - x0) * CELL; lv = y1 - y0;
   }
-  const nu = Math.min(64, Math.max(1, Math.round(lu / FACE_SUB))), nv = Math.min(64, Math.max(1, Math.round(lv / FACE_SUB)));
+  const su = lv < FACE_THIN ? FACE_LONG : FACE_SUB, sv = lu < FACE_THIN ? FACE_LONG : FACE_SUB;
+  const nu = Math.min(64, Math.max(1, Math.round(lu / su))), nv = Math.min(64, Math.max(1, Math.round(lv / sv)));
   let iu = Math.floor((u / lu) * nu), iv = Math.floor((v / lv) * nv);
   iu = iu < 0 ? 0 : iu >= nu ? nu - 1 : iu; iv = iv < 0 ? 0 : iv >= nv ? nv - 1 : iv;
   const key = ((b * 6 + face) * 64 + iu) * 64 + iv;

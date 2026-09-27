@@ -216,11 +216,11 @@ export const patchCorners = new Float64Array(3 * PATCH_PTS);
  * bounding box of every receiver point the class will stand for; a clear beam (beam.ts) is FULL without rays (the
  * segment tests would all pass: the result is the same).
  */
-export function classifyPatch(job: BakeJob, l: number, c: number, group: number, bitsEarlyOut: boolean, need: number, yMin = -Infinity, beam = false): number {
+export function classifyPatch(job: BakeJob, l: number, c: number, group: number, bitsEarlyOut: boolean, need: number, yMin = -Infinity, beam = false, yMax = Infinity): number {
   const g = job.g;
   if (bitsEarlyOut) {
     if (visUnion9(job, l, c) === 0) return CLS_NONE;
-    if ((visAll9(job, l, c) & need) === need && !boxesBetween(job, c, l, Math.min(yMin, lightLowY(job, l)))) return CLS_FULL;
+    if ((visAll9(job, l, c) & need) === need && !boxesBetween(job, c, l, Math.min(yMin, lightLowY(job, l)), Math.max(yMax, lightHighY(job, l)))) return CLS_FULL;
   }
   // ray-free proof that every segment is unoccluded (beam.ts; the receiver box is in `beamBox`)
   if (beam && beamOpts.enabled && beamClear(job, l, group)) return CLS_FULL;
@@ -244,12 +244,13 @@ export function boxesNear(job: BakeJob, c: number, yCut = -Infinity): boolean {
 
 /**
  * Any occluder box bucketed in the 3x3 cells around c that could cut a segment between (any point of) cell c and
- * (any point of) light l's emitter: its top is above yCut AND its xz extent overlaps the xz bounding box of the
- * cell and the emitter footprint (every such segment lies inside that box). Exact refinement of `boxesNear` (a desk
- * in the next cell, on the far side from the light, no longer blocks the FULL early-out); tile-independent (cell
- * extent, not the patch's).
+ * (any point of) light l's emitter: its top is above yCut, its bottom below yTop AND its xz extent overlaps the xz
+ * bounding box of the cell and the emitter footprint (every such segment lies inside that box). Exact refinement of
+ * `boxesNear` (a desk in the next cell, on the far side from the light, no longer blocks the FULL early-out; nor
+ * does the WAREHOUSE roof truss above the high-bays and every receiver); tile-independent (cell extent, not the
+ * patch's) when yCut / yTop are.
  */
-export function boxesBetween(job: BakeJob, c: number, l: number, yCut: number): boolean {
+export function boxesBetween(job: BakeJob, c: number, l: number, yCut: number, yTop = Infinity): boolean {
   if (!(job.boxTop9[c] > yCut)) return false;
   const g = job.g, n = g.n, L = job.L, o = l * 3;
   const hi = c % n, hj = (c - hi) / n;
@@ -272,7 +273,7 @@ export function boxesBetween(job: BakeJob, c: number, l: number, yCut: number): 
       if (!(job.boxTop[cc] > yCut)) continue;
       for (let k = g.boxStart[cc], ke = g.boxStart[cc + 1]; k < ke; k++) {
         const b = g.boxList[k], bo = b * 6;
-        if (g.box[bo + 4] <= yCut) continue;
+        if (g.box[bo + 4] <= yCut || g.box[bo + 1] >= yTop) continue;
         if (g.box[bo + 3] <= x0 || g.box[bo] >= x1 || g.box[bo + 5] <= z0 || g.box[bo + 2] >= z1) continue;
         return true;
       }
@@ -283,11 +284,17 @@ export function boxesBetween(job: BakeJob, c: number, l: number, yCut: number): 
 
 /** Lowest point of light l's emitter (m). */
 export function lightLowY(job: BakeJob, l: number): number {
+  return job.L.pos[l * 3 + 1] - lightExtY(job, l);
+}
+/** Highest point of light l's emitter, with its sample offset along the emitting normal (m). */
+export function lightHighY(job: BakeJob, l: number): number {
+  return job.L.pos[l * 3 + 1] + lightExtY(job, l) + 0.05;
+}
+function lightExtY(job: BakeJob, l: number): number {
   const L = job.L, o = l * 3;
-  const ext = L.shape[l] === SHAPE_RECT
-    ? Math.abs(L.tan[o + 1]) * L.w[l] * 0.5 + Math.abs(L.bit[o + 1]) * L.h[l] * 0.5
+  return L.shape[l] === SHAPE_RECT
+    ? Math.abs(L.tan[o + 1]) * L.w[l] * 0.5 + Math.abs(L.bit[o + 1]) * L.h[l] * 0.5 + Math.abs(L.nrm[o + 1]) * 0.02
     : L.w[l] * 0.5;
-  return L.pos[o + 1] - ext;
 }
 
 /** Visibility bits a patch spanning heights [y0, y1] in cell c needs for the FULL early-out. */
@@ -319,6 +326,7 @@ export function visibleFraction(job: BakeJob, l: number, group: number): number 
 export function bitsetClass(job: BakeJob, l: number, c: number, need: number, tower: boolean, yMin = -Infinity): number {
   if (tower) return CLS_PARTIAL;
   if (visUnion9(job, l, c) === 0) return CLS_NONE;
-  if ((visAll9(job, l, c) & need) === need && !boxesBetween(job, c, l, Math.min(yMin, lightLowY(job, l)))) return CLS_FULL;
+  // (yTop: the owner cell's ceiling bounds every receiver of the cell, tile-independently)
+  if ((visAll9(job, l, c) & need) === need && !boxesBetween(job, c, l, Math.min(yMin, lightLowY(job, l)), Math.max(job.g.ceil[c], lightHighY(job, l)))) return CLS_FULL;
   return CLS_PARTIAL;
 }

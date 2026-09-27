@@ -8,7 +8,8 @@
 //   4. indirect: full (SH-L1 probes gathered from the world-anchored patch cache, per-channel multi-bounce) or
 //      preview (2D edge-aware diffusion), times the analytic AO; full bakes with q.nearRays > 0 trace a near-field
 //      gather at texels with an occluder box within 1.2 m (nearfield.ts: radiance-weighted visibility of the far
-//      field plus the boxes' bounce, replacing the analytic box and contact AO there);
+//      field -- the probes' far field without the props next to them, blended in by the texel's nearWeight --
+//      plus the boxes' bounce, replacing the analytic box and contact AO there);
 //   5. flicker channels (dynamic lights only; direct luminance + per-light bounce), surface mask, emission map,
 //      light volume + wall mask;
 //   6. chart-local dilation and encoding. `term !== 'all'` zeroes the other term (debug bakes).
@@ -34,7 +35,7 @@ import { growF32 } from './util.ts';
 import { cellsLinked, dynIndirect, indirectAt, indirectOut, interp, interpolateProbes } from './indirect.ts';
 import { createJob, type BakeDiag, type BakeJob } from './job.ts';
 import { createMaskCache, maskAt, maskOut } from './mask.ts';
-import { NEAR_REACH, nearDist, nearFieldAt, nearOut, nearWeight } from './nearfield.ts';
+import { NEAR, NEAR_REACH, nearDist, nearFieldAt, nearOut, nearWeight } from './nearfield.ts';
 import { computeDiffusion, diffusedAt, surfaceFactor, type Diffusion } from './preview.ts';
 import { computeProbes, type ProbeSet } from './probes.ts';
 import { bakeVolume } from './volume.ts';
@@ -146,7 +147,8 @@ export function bakeTile(
   const t2 = performance.now();
 
   // ---- indirect + AO + mask per texel
-  const P: ProbeSet | null = variant === 'full' && doIndirect ? computeProbes(job, anyDyn) : null;
+  // (full bakes with the near-field gather: the probes also store their far field, see probes.ts)
+  const P: ProbeSet | null = variant === 'full' && doIndirect ? computeProbes(job, anyDyn, (q.nearRays ?? 0) > 0 ? NEAR.PROBE_FAR : 0) : null;
   const D: Diffusion | null = variant === 'preview' && doIndirect ? computeDiffusion(job) : null;
   const n = T.n;
   const E = R.e, V = R.v, F = R.flick;
@@ -212,7 +214,7 @@ export function bakeTile(
       if (P) {
         const nw = NF !== null ? nearWeight(job, c, x, y, z, nx, ny, nz, group, true) : 0;
         const near = nw > 0;
-        indirectAt(job, P, x, y, z, nx, ny, nz, c, ind3, near);
+        indirectAt(job, P, x, y, z, nx, ny, nz, c, ind3, near, nw);
         if (NF && NS && interp.w > 0) {
           const no = nearOff(T, T.chart[t]);
           const exact = (((T.u[t] - no) | (T.v[t] - no)) & 3) === 0 || T.seam[t] !== 0;
@@ -273,9 +275,10 @@ export function bakeTile(
         ND[o] = v; ND[o + 1] = vg; ND[o + 2] = e0; ND[o + 3] = e1; ND[o + 4] = e2;
       } else {
         const x = T.x[t], y = T.y[t], z = T.z[t], c = T.cell[t], nx = T.nx[t], ny = T.ny[t], nz = T.nz[t], group = T.group[t];
-        interpolateProbes(job, P, x, y, z, c, true, false);
+        const nw = nearWeight(job, c, x, y, z, nx, ny, nz, group, true);
+        interpolateProbes(job, P, x, y, z, c, true, false, nw);
         const tn = performance.now();
-        nearFieldAt(job, x, y, z, nx, ny, nz, group, nearRays, interp.sh, nearWeight(job, c, x, y, z, nx, ny, nz, group, true));
+        nearFieldAt(job, x, y, z, nx, ny, nz, group, nearRays, interp.sh, nw);
         nearMs += performance.now() - tn;
         nearTexels++;
         storeNear(NS[t]);
@@ -342,7 +345,7 @@ export function bakeTile(
   const tEnc = performance.now();
   const emission = bakeEmission(job);
   const tEm = performance.now();
-  const volume = bakeVolume(job, P, D, dyn, term, variant === 'full' ? (q.nearRays ?? 0) : 0);
+  const volume = bakeVolume(job, P, D, dyn, term, variant === 'full' ? (q.nearRays ?? 0) : 0, variant === 'full');
   const t4 = performance.now();
 
   const L = job.L;

@@ -1,6 +1,7 @@
 // tests/bake/volumeNear.test.ts — prop light volume near-field (bake/volume.ts with BakeQuality.nearRays): samples
 // under a desk are in its shadow and lose the far-field light the desk hides, samples above it are lit (the cell
-// bitset's point below the desk top is not), samples well above are nearly unchanged.
+// bitset's point below the desk top is not), samples well above are nearly unchanged; without near rays (low /
+// medium), samples in a cell whose bitset point lies inside a filing cabinet are lit by per-sample rays too.
 
 import { describe, expect, it } from 'vitest';
 import { LV } from '../../src/core/constants.ts';
@@ -34,6 +35,7 @@ describe('light volume near a desk', () => {
   const far = bakeTile(nb, TILE, s, 'full', Q_HIGH, 'all').volume.a;
   const near = bakeTile(nb, TILE, s, 'full', Q16, 'all').volume.a;
   const nearDirect = bakeTile(nb, TILE, s, 'full', Q16, 'direct').volume.a;
+  const bitsetDirect = bakeTile(nb, TILE, s, 'preview', Q_HIGH, 'direct').volume.a; // (preview: cell bitset only)
 
   it('the sample under the desk (0.2 m) gets <= 0.6x the light of the sample 1.8 m beside it', () => {
     const under = lv(near, 14, 0, 14), beside = lv(near, 17, 0, 14);
@@ -44,6 +46,7 @@ describe('light volume near a desk', () => {
   it('the sample over the desk top (0.8 m) is lit by the troffer above it (the bitset point under the desk top is not)', () => {
     const over = lv(nearDirect, 14, 1, 14);
     expect(over).toBeGreaterThan(0.5 * lv(nearDirect, 17, 1, 14));
+    expect(over).toBeGreaterThan(1.5 * lv(bitsetDirect, 14, 1, 14));
     expect(lv(near, 14, 1, 14)).toBeGreaterThan(1.5 * lv(far, 14, 1, 14));
   });
 
@@ -53,5 +56,24 @@ describe('light volume near a desk', () => {
       expect(a).toBeGreaterThan(20);
       expect(Math.abs(b - a) / a, `k ${k}`).toBeLessThan(tol);
     }
+  });
+});
+
+describe('light volume beside a filing cabinet around the cell centre (no near rays: low / medium)', () => {
+  // cabinet (0.47 x 1.33 x 0.62 m) centred on the cell centre (9.0, 9.0): the cell's bitset points below 1.33 m lie
+  // inside it; the LV sample (8.7, 0.8, 8.7) beside its -x side sees the troffer on that side
+  const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+  carveRoom(l, 1, 1, 15, 15);
+  addLight(l, { px: 6.6, pz: 9.0, py: 2.7 });
+  l.props.push({ kind: PropKind.FILING_CABINET, variant: 0, x: 9.0, y: 0, z: 9.0, yaw: 0, scale: 1, flags: 0, seed: 1 });
+  const nb = handNeighborhood(l);
+  const s = surfacesOf(nb, TILE, 12);
+  it('is lit in the full bake (per-sample rays), black from the bitset alone', () => {
+    const full = bakeTile(nb, TILE, s, 'full', Q_HIGH, 'direct').volume.a;
+    const bitset = bakeTile(nb, TILE, s, 'preview', Q_HIGH, 'direct').volume.a;
+    const open = lv(full, 11, 1, 14); // (6.9, 0.8, 8.7): open floor next to the troffer
+    expect(open).toBeGreaterThan(20);
+    expect(lv(full, 14, 1, 14)).toBeGreaterThan(0.2 * open);
+    expect(lv(bitset, 14, 1, 14)).toBeLessThan(0.02 * open);
   });
 });

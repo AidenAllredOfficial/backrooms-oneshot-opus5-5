@@ -30,7 +30,7 @@ import { CELL, LIGHT } from '../core/constants.ts';
 import { EXACT_FULL, emitterSample, formFactor, ff, rot, SAMPLE_U, SAMPLE_V, sampleRotation, sp } from './areaLight.ts';
 import { beamAdd, beamReset } from './beam.ts';
 import {
-  CLS_FRAC, CLS_FULL, CLS_INTERP, CLS_NONE, CLS_PARTIAL, FILTER_NONE, FILTER_UNION9, classifyPatch, isTowerCell, patchCorners, PATCH_PTS, patchNeed, bitsetClass, boxesBetween, lightLowY, selEst, selectDynamic, selectLights, tail, tailSum,
+  CLS_FRAC, CLS_FULL, CLS_INTERP, CLS_NONE, CLS_PARTIAL, FILTER_NONE, FILTER_UNION9, classifyPatch, isTowerCell, patchCorners, PATCH_PTS, patchNeed, bitsetClass, boxesBetween, lightHighY, lightLowY, selEst, selectDynamic, selectLights, tail, tailSum,
 } from './classify.ts';
 import type { SurfaceSet } from '../core/mesh.ts';
 import { clampOut, clampSample, latNbr, latticeNeighbours, TX_VALID, type TexelSet, worldQ, wq } from './context.ts';
@@ -60,25 +60,49 @@ const val = new Float64Array(10);
 
 /**
  * Per-patch memo of texel shadow fractions (full bake): memo[slot * memoStride + i] = shadowFraction of static light
- * sel[i] at the patch texel with list position `slot`, -1 = not computed. Sub-block corners are shared by up to 4
- * sub-blocks and are often evaluated again per texel; shadowFraction is a pure function of (texel, light), so the
- * memo never changes a value (determinism, cache transparency and seam exactness are unaffected).
+ * sel[i] (i < m; dynamic light dsel[i - m] after them, DYN_SHADOW_SAMPLES) at the patch texel with list position
+ * `slot`, -1 = not computed; wmemo[slot * m + i] = the weak-light centre visibility. Sub-block corners are evaluated
+ * again per texel; both are pure functions of (texel, light) within the patch (the adaptive flag of a static light
+ * is fixed per patch, `adaptL`), so the memo never changes a value (determinism, cache transparency and seam
+ * exactness are unaffected).
  */
 let memo = new Float32Array(1024);
+let wmemo = new Float32Array(1024);
+/** A static light whose unshadowed estimate is below this share of the patch's lights gets adaptive shadow samples
+ * (shadowFraction `adapt`): the strong lights that draw the visible shadows keep every sample. */
+export const ADAPT_SHARE = 0.15;
+/** Per selected static light of the current patch: 1 = adaptive shadow samples (never at seam texels). */
+const adaptL = new Uint8Array(LIGHT.K_MAX);
+/** The texel evaluated by evalPoint is a seam texel (no adaptive samples: the neighbouring tile's patch differs). */
+let curSeam = false;
 let memoStride = 0;
 /** List position (in the current patch) of the texel being evaluated by evalPoint, -1 = no memo. */
 let memoSlot = -1;
-function memoReset(np: number, m: number): void {
-  memoStride = m;
-  const need = np * m;
+function memoReset(np: number, m: number, md: number): void {
+  memoStride = m + md;
+  const need = np * memoStride;
   if (memo.length < need) memo = new Float32Array(2 * need);
   memo.fill(-1, 0, need);
+  if (wmemo.length < np * m) wmemo = new Float32Array(2 * np * m);
+  wmemo.fill(-1, 0, np * m);
 }
-/** Memoized shadow fraction of static light sel[i] at patch texel t (list position `slot`). */
-function shadowMemo(job: BakeJob, T: TexelSet, i: number, t: number, slot: number, group: number): number {
+/** Memoized shadow fraction of static light sel[i] (i < m) or dynamic light dsel[i - m] at patch texel t (list
+ * position `slot`). */
+function shadowMemo(job: BakeJob, T: TexelSet, i: number, m: number, t: number, slot: number, group: number): number {
   const k = slot * memoStride + i;
   let f = memo[k];
-  if (f < 0) { f = shadowFraction(job, sel[i], T.x[t], T.y[t], T.z[t], group, false); memo[k] = f; }
+  if (f < 0) {
+    f = i < m ? shadowFraction(job, sel[i], T.x[t], T.y[t], T.z[t], group, false, 0, adaptL[i] !== 0 && T.seam[t] === 0)
+      : shadowFraction(job, dsel[i - m], T.x[t], T.y[t], T.z[t], group, false, DYN_SHADOW_SAMPLES);
+    memo[k] = f;
+  }
+  return f;
+}
+/** Memoized weak-light centre visibility (centreVisible) of static light sel[i] at patch texel t. */
+function centreMemo(job: BakeJob, T: TexelSet, i: number, m: number, t: number, slot: number, group: number): number {
+  const k = slot * m + i;
+  let f = wmemo[k];
+  if (f < 0) { f = centreVisible(job, sel[i], t, T, group); wmemo[k] = f; }
   return f;
 }
 
@@ -107,15 +131,25 @@ function centreFraction(job: BakeJob, l: number, group: number): number {
  * costs little. A pure function of the texel's world position (seam-exact). */
 export const DYN_SHADOW_SAMPLES = 16;
 
-/** Shadow-sampled visibility fraction of light l from a texel (`samples` stratified emitter points, default
- * q.shadowSamples). */
-function shadowFraction(job: BakeJob, l: number, x: number, y: number, z: number, group: number, tower: boolean, samples = 0): number {
+/**
+ * Shadow-sampled visibility fraction of light l from a texel (`samples` stratified emitter points, default
+ * q.shadowSamples). `adapt`: when the first stratified quarter of them (the first 2 of 4 or 6, the first 4 of the
+ * dynamic lights' 16: opposite quadrants of the emitter) agree, the texel is taken as fully lit / fully shadowed and
+ * the rest are not cast. 83% of the WAREHOUSE shadow fractions were exactly 0 or 1 (rack decks and uprights cast
+ * hard shadows through most sub-blocks); the misses are thin penumbra fringes, softened by the 3x3 shadow denoise.
+ * Used for the dynamic lights and the static lights below ADAPT_SHARE of their patch (the error against a 16-sample
+ * bake: mean 0.60% -> 0.65% OFFICE, 0.38% -> 0.42% WAREHOUSE; adaptive for every light: 0.81% / 0.53%). A pure
+ * function of (texel, light, adapt).
+ */
+function shadowFraction(job: BakeJob, l: number, x: number, y: number, z: number, group: number, tower: boolean, samples = 0, adapt = true): number {
   const S = samples > 0 ? samples : job.q.shadowSamples;
   rayStats.kind = RAY_SHADOW;
   worldQ(job, x, y, z, tower);
   sampleRotation(wq.x, wq.y, wq.z, job.L.uid[l]);
   let vis = 0;
+  const first = !adapt ? S : S >= 16 ? 4 : S >= 4 ? 2 : S;
   for (let i = 0; i < S; i++) {
+    if (i === first && (vis === 0 || vis === first)) { rayStats.kind = RAY_CLASSIFY; return vis === 0 ? 0 : 1; }
     emitterSample(job.L, l, i, x, y, z);
     if (!occluded(job.g, x, y, z, sp.x, sp.y, sp.z, group, true)) vis++;
   }
@@ -204,51 +238,105 @@ const SUN_CONE = SUN.cone;
 let sunPartial = false;
 
 /**
+ * Per-light visibility reuse of the adaptive 2x2 refinement (full bake). Every lattice texel records the visibility
+ * factor it used per light (`latVis[slot * latStride + i]`: static lights i < m, then the dynamic ones; -1 = not
+ * evaluated: zero window or form factor). An off-lattice texel that has to be evaluated (its lattice neighbours
+ * disagree in total irradiance: some light's shadow edge passes) takes a PARTIAL light's visibility from its
+ * lattice neighbours when they all recorded the same value for THAT light, and casts shadow rays only for the lights
+ * whose visibility changes around it. Rack uprights and decks put a shadow edge of one of up to 16 lights through
+ * most warehouse floor sub-blocks, and every off-lattice texel there re-sampled all 16 (73% of the per-texel shadow
+ * rays). The same trade as the existing interpolation (features narrower than the lattice step between agreeing
+ * lattice texels are not resolved), applied per light; texels next to chart ends (seams) never reuse.
+ */
+let latVis = new Float32Array(1024);
+export let REUSE_SPREAD = 0.5;
+export const setReuseSpread = (v: number): void => { REUSE_SPREAD = v; };
+let latStride = 0;
+/** Slot (patch list position) evalPoint records into, -1 = none (off-lattice texels). */
+let latSlot = -1;
+/** Lattice-neighbour slots an off-lattice texel may reuse from (count reuseN, 0 = none). */
+const reuseSlot = new Int32Array(4);
+let reuseN = 0;
+function latReset(np: number, m: number): void {
+  latStride = m;
+  const need = np * m;
+  if (latVis.length < need) latVis = new Float32Array(2 * need);
+  latVis.fill(-1, 0, need);
+}
+/** The mean visibility the reuse neighbours recorded for light column j when they agree within INTERP_SPREAD
+ * (the sub-block interpolation criterion), else -1 (or when one has none). */
+function agreedVis(j: number): number {
+  let lo = 2, hi = -1, sum = 0;
+  for (let k = 0; k < reuseN; k++) {
+    const v = latVis[reuseSlot[k] * latStride + j];
+    if (v < 0) return -1;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+    sum += v;
+  }
+  return hi - lo <= REUSE_SPREAD ? sum / reuseN : -1;
+}
+
+/**
  * Evaluate one texel position into `val`. Static lights sel[0..m) with classes cls (visibility pvis for the
  * preview), dynamic lights dsel[0..md). `mode`: 0 full (PARTIAL -> shadow rays), 1 preview (pvis/dvis given).
+ * `parts` (full): bit 1 evaluates the static lights, bit 2 the dynamic ones (`store` keeps only those).
  */
 function evalPoint(job: BakeJob, x: number, y: number, z: number, nx: number, ny: number, nz: number, group: number, tower: boolean,
-  m: number, md: number, mode: number, exact: number): void {
+  m: number, md: number, mode: number, exact: number, parts = 3): void {
   const L = job.L;
   let er = 0, eg = 0, eb = 0, vx = 0, vy = 0, vz = 0, f0 = 0, f1 = 0, f2 = 0, f3 = 0;
-  for (let i = 0; i < m; i++) {
+  const rec = latSlot >= 0 ? latSlot * latStride : -1;
+  for (let i = 0; i < m && (parts & 1) !== 0; i++) {
     const c = cls[i];
-    if (c === CLS_NONE && mode === 0) continue;
+    if (c === CLS_NONE && mode === 0) { if (rec >= 0) latVis[rec + i] = 0; continue; }
     const l = sel[i];
     const o = l * 3;
     const w = windowW(windowDist2((L.pos[o] - x) * CELL, L.pos[o + 1] - y, (L.pos[o + 2] - z) * CELL, L.hAllow[l]), L.invR2[l]);
     if (w <= 0) continue;
     let vis = mode === 0 ? (c === CLS_FRAC ? pvis[i] : 1) : pvis[i];
-    if (vis <= 0) continue;
+    if (vis <= 0) { if (rec >= 0) latVis[rec + i] = 0; continue; }
     const f = formFactor(L, l, x, y, z, nx, ny, nz, exact);
     if (f <= 0) continue;
     if (mode === 0 && c === CLS_PARTIAL) {
       const wx = ff.wx, wy = ff.wy, wz = ff.wz;
-      if (memoSlot >= 0) {
+      const r = reuseN > 0 ? agreedVis(i) : -1;
+      if (r >= 0) vis = r;
+      else if (memoSlot >= 0) {
         const k = memoSlot * memoStride + i;
         vis = memo[k];
-        if (vis < 0) { vis = shadowFraction(job, l, x, y, z, group, tower); memo[k] = vis; }
-      } else vis = shadowFraction(job, l, x, y, z, group, tower);
+        if (vis < 0) { vis = shadowFraction(job, l, x, y, z, group, tower, 0, adaptL[i] !== 0 && !curSeam); memo[k] = vis; }
+      } else vis = shadowFraction(job, l, x, y, z, group, tower, 0, false);
+      if (rec >= 0) latVis[rec + i] = vis;
       if (vis <= 0) continue;
       ff.wx = wx; ff.wy = wy; ff.wz = wz;
-    }
+    } else if (rec >= 0) latVis[rec + i] = vis;
     const k = f * w * vis;
     er += k * L.rad[o]; eg += k * L.rad[o + 1]; eb += k * L.rad[o + 2];
     const kl = k * L.radLum[l];
     vx += kl * ff.wx; vy += kl * ff.wy; vz += kl * ff.wz;
   }
-  for (let i = 0; i < md; i++) {
+  for (let i = 0; i < md && (parts & 2) !== 0; i++) {
     const c = dcls[i];
-    if (c === CLS_NONE && mode === 0) continue;
+    if (c === CLS_NONE && mode === 0) { if (rec >= 0) latVis[rec + m + i] = 0; continue; }
     const l = dsel[i];
     const o = l * 3;
     const w = windowW(windowDist2((L.pos[o] - x) * CELL, L.pos[o + 1] - y, (L.pos[o + 2] - z) * CELL, L.hAllow[l]), L.invR2[l]);
     if (w <= 0) continue;
     let vis = mode === 0 ? (c === CLS_FRAC ? dvis[i] : 1) : dvis[i];
-    if (vis <= 0) continue;
+    if (vis <= 0) { if (rec >= 0) latVis[rec + m + i] = 0; continue; }
     const f = formFactor(L, l, x, y, z, nx, ny, nz, exact);
     if (f <= 0) continue;
-    if (mode === 0 && c === CLS_PARTIAL) vis = shadowFraction(job, l, x, y, z, group, tower, DYN_SHADOW_SAMPLES);
+    if (mode === 0 && c === CLS_PARTIAL) {
+      const r = reuseN > 0 ? agreedVis(m + i) : -1;
+      if (r >= 0) vis = r;
+      else if (memoSlot >= 0) {
+        const k = memoSlot * memoStride + m + i;
+        vis = memo[k];
+        if (vis < 0) { vis = shadowFraction(job, l, x, y, z, group, tower, DYN_SHADOW_SAMPLES); memo[k] = vis; }
+      } else vis = shadowFraction(job, l, x, y, z, group, tower, DYN_SHADOW_SAMPLES);
+    }
+    if (rec >= 0) latVis[rec + m + i] = vis;
     const Y = f * w * vis * L.radLum[l];
     const ch = L.channel[l];
     if (ch === 0) f0 += Y; else if (ch === 1) f1 += Y; else if (ch === 2) f2 += Y; else f3 += Y;
@@ -418,7 +506,7 @@ function subdivide(job: BakeJob, T: TexelSet, p: number, gridOff: number, group:
         const co = (o + i) * 4;
         for (let k = 0; k < 4; k++) {
           const t = corners4[k];
-          const f = weak ? centreVisible(job, sel[i], t, T, group) : shadowMemo(job, T, i, t, slot[t], group);
+          const f = weak ? centreMemo(job, T, i, m, t, slot[t], group) : shadowMemo(job, T, i, m, t, slot[t], group);
           sbCorner[co + k] = f;
           sum += f;
           if (f < lo) lo = f;
@@ -445,7 +533,7 @@ function subdivide(job: BakeJob, T: TexelSet, p: number, gridOff: number, group:
       const co = oi * 4;
       for (let k = 0; k < 4; k++) {
         const t = corners4[k];
-        const f = shadowFraction(job, dsel[i], T.x[t], T.y[t], T.z[t], group, false, DYN_SHADOW_SAMPLES);
+        const f = shadowMemo(job, T, m + i, m, t, slot[t], group);
         sbCorner[co + k] = f;
         if (f < lo) lo = f;
         if (f > hi) hi = f;
@@ -490,13 +578,13 @@ export function directFull(job: BakeJob, T: TexelSet): DirectResult {
       for (let k = T.pStart[p], ke = T.pStart[p + 1]; k < ke; k++) { const t = T.pList[k]; beamAdd(T.x[t], T.y[t], T.z[t]); }
     }
     for (let i = 0; i < m; i++) {
-      cls[i] = classifyPatch(job, sel[i], c, group, !tower, need, T.pYmin[p], true);
+      cls[i] = classifyPatch(job, sel[i], c, group, !tower, need, T.pYmin[p], true, T.pYmax[p]);
       job.diag.pairs[cls[i]]++;
       if (cls[i] === CLS_PARTIAL) partial = true;
       if (cls[i] !== CLS_NONE) any = true;
     }
     for (let i = 0; i < md; i++) {
-      dcls[i] = classifyPatch(job, dsel[i], c, group, !tower, need, T.pYmin[p], true);
+      dcls[i] = classifyPatch(job, dsel[i], c, group, !tower, need, T.pYmin[p], true, T.pYmax[p]);
       if (dcls[i] === CLS_PARTIAL) partial = true;
       if (dcls[i] !== CLS_NONE) any = true;
     }
@@ -509,7 +597,10 @@ export function directFull(job: BakeJob, T: TexelSet): DirectResult {
     const gridOff = T.grid[ch] !== 0 ? 1 : 0; // world-aligned lattice on grid charts
     // (periodic tower patches are not subdivided: 4-texel sub-blocks do not divide the 3 m period)
     for (let k = a; k < b; k++) slot[T.pList[k]] = k - a;
-    memoReset(b - a, m);
+    memoReset(b - a, m, md);
+    let estSum = 0;
+    for (let i = 0; i < m; i++) if (cls[i] !== CLS_NONE) estSum += selEstP[i];
+    for (let i = 0; i < m; i++) adaptL[i] = selEstP[i] < ADAPT_SHARE * estSum ? 1 : 0;
     const nsb = partial && !tower ? subdivide(job, T, p, gridOff, group, m, md, slot) : 0;
     const stride = m + md;
     for (let i = 0; i < m; i++) patchCls[i] = cls[i];
@@ -563,25 +654,35 @@ export function directFull(job: BakeJob, T: TexelSet): DirectResult {
       }
       if (pt) { job.diag.shadowTexels++; noisy[t] = 1; }
       memoSlot = slot[t];
-      evalPoint(job, T.x[t], T.y[t], T.z[t], nx, ny, nz, group, tower, m, md, 0, EXACT_FULL);
+      curSeam = T.seam[t] !== 0;
+      evalPoint(job, T.x[t], T.y[t], T.z[t], nx, ny, nz, group, tower, m, md, 0, EXACT_FULL, parts);
       memoSlot = -1;
       if (sunPartial && T.seam[t] === 0) noisy[t] = 1;
       store(R, t, parts);
     };
     // ---- adaptive 2x2 refinement: lattice texels are evaluated; the others are interpolated from their lattice
-    // neighbours when those agree within 2% (inside penumbrae they differ, so shadow edges get every texel)
+    // neighbours when those agree within 2% (inside penumbrae they differ, so shadow edges get every texel), and
+    // otherwise reuse their neighbours' per-light visibility where it agrees (latVis)
+    latReset(b - a, stride);
     for (let k = a; k < b; k++) {
       const t = T.pList[k];
       if (((T.u[t] - gridOff) & 1) === 0 && ((T.v[t] - gridOff) & 1) === 0) {
+        latSlot = k - a;
         evalTexel(t, 3);
         done[t] = 2; // lattice
       }
     }
+    latSlot = -1;
     for (let k = a; k < b; k++) {
       const t = T.pList[k];
       if (done[t] === 2) continue;
       const parts = interpolate(T, R, t, p, gridOff);
-      if (parts !== 0) evalTexel(t, parts);
+      if (parts !== 0) {
+        reuseN = T.seam[t] === 0 ? interpN : 0;
+        for (let j = 0; j < reuseN; j++) reuseSlot[j] = slot[latNbr[j]];
+        evalTexel(t, parts);
+        reuseN = 0;
+      }
       done[t] = 1;
     }
     for (let k = a; k < b; k++) done[T.pList[k]] = 1;
@@ -653,8 +754,11 @@ function denoiseShadows(T: TexelSet, R: DirectResult, noisy: Uint8Array): void {
  * (E, V) and the dynamic channels are decided separately, so static irradiance never depends on dynamic lights.
  * Returns the parts still to evaluate: bit 1 static, bit 2 dynamic (0 = fully interpolated).
  */
+/** Lattice-neighbour count (in latNbr) of the last `interpolate` call. */
+let interpN = 0;
 function interpolate(T: TexelSet, R: DirectResult, t: number, p: number, gridOff: number): number {
   const cnt = latticeNeighbours(T, t, p, gridOff);
+  interpN = cnt;
   if (cnt === 0) return R.flick ? 3 : 1;
   const nbr = latNbr;
   let lo = Infinity, hi = -Infinity, flo = Infinity, fhi = -Infinity;
@@ -702,7 +806,7 @@ export function hasDynamic(job: BakeJob): boolean {
 /** Preview visibility of light l at a block sample (x, y, z) of cell c: one ray for tower cells and next to
  * occluder boxes (returns -1 otherwise: use the bitset classes, `bitsetVis`). */
 function previewRay(job: BakeJob, l: number, c: number, y: number, x: number, z: number, group: number, tower: boolean): number {
-  if (tower || boxesBetween(job, c, l, Math.min(y, lightLowY(job, l)))) {
+  if (tower || boxesBetween(job, c, l, Math.min(y, lightLowY(job, l)), Math.max(y, lightHighY(job, l)))) {
     // periodic tower cells have no bitset; next to occluder boxes (furniture, racks) the cell-centre bitset
     // cannot see sub-cell shadows: one ray from the block sample to the light centre
     const L = job.L, o = l * 3;
