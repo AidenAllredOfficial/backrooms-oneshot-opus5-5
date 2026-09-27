@@ -192,7 +192,7 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     volumetrics: 'off',
     dustMotes: 0,
     flashlightBounce: 0,
-    bakeNearRays: 0,
+    bakeNearRays: 16,
   },
   ultra: {
     name: 'ultra', streamRadius: 3, lmTpc: 12, bakeShadowSamples: 6, probeRays: 128, bakeWorkers: 6, textureSize: 1024,
@@ -228,7 +228,7 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
     volumetrics: 'off',
     dustMotes: 0,
     flashlightBounce: 0,
-    bakeNearRays: 0,
+    bakeNearRays: 32,
   },
 };
 

@@ -251,9 +251,10 @@ export function trace5(g: VisGrid, ax: number, az: number, ys: Float64Array, bx:
 // ---------------------------------------------------------------- first hit (probe rays)
 
 export const HIT_NONE = 0, HIT_FLOOR = 1, HIT_CEIL = 2, HIT_WALL = 3, HIT_BOX_TOP = 4, HIT_BOX_SIDE = 5, HIT_BOX_BOTTOM = 6;
-/** Wall / box-side normal direction codes: 0 = +x, 1 = -x, 2 = +z, 3 = -z. */
-export interface HitRecord { kind: number; t: number; x: number; y: number; z: number; cell: number; dir: number; mat: number; wet: boolean }
-export const hit: HitRecord = { kind: 0, t: 0, x: 0, y: 0, z: 0, cell: 0, dir: 0, mat: 0, wet: false };
+/** Wall / box-side normal direction codes: 0 = +x, 1 = -x, 2 = +z, 3 = -z. `box`: the hit occluder box (HIT_BOX_*),
+ * else -1. */
+export interface HitRecord { kind: number; t: number; x: number; y: number; z: number; cell: number; dir: number; mat: number; wet: boolean; box: number }
+export const hit: HitRecord = { kind: 0, t: 0, x: 0, y: 0, z: 0, cell: 0, dir: 0, mat: 0, wet: false, box: -1 };
 
 /** Plenum albedo layer for missing ceilings. */
 const MAT_PLENUM = 21;
@@ -315,12 +316,12 @@ export function traceHit(g: VisGrid, ax: number, ay: number, az: number, dx: num
   let tx = sx > 0 ? (ci + 1 - ax) * ix : sx < 0 ? (ci - ax) * ix : Infinity;
   let tz = sz > 0 ? (cj + 1 - az) * iz : sz < 0 ? (cj - az) * iz : Infinity;
   let t0 = 0;
-  hit.kind = HIT_NONE; hit.wet = false;
+  hit.kind = HIT_NONE; hit.wet = false; hit.box = -1;
   for (;;) {
     if (ci < 0 || cj < 0 || ci >= n || cj >= n) return;
     const c = cj * n + ci;
     const t1 = tx < tz ? (tx < 1 ? tx : 1) : (tz < 1 ? tz : 1);
-    let best = 2, kind = HIT_NONE, dir = 0, mat = 0;
+    let best = 2, kind = HIT_NONE, dir = 0, mat = 0, hb = -1;
     if (dy < 0) {
       const top = g.blockTop[c] > g.dFloor[c] ? g.blockTop[c] : g.dFloor[c];
       const tf = (top - ay) / dy;
@@ -340,13 +341,13 @@ export function traceHit(g: VisGrid, ax: number, ay: number, az: number, dx: num
       if (g.boxGroup[b] !== group) continue;
       const te = boxEntry(g, b, ax, ay, az, dx, dy, dz, t0 - 1e-12, t1);
       if (te >= 0 && te < best) {
-        best = te; mat = g.boxMat[b];
+        best = te; mat = g.boxMat[b]; hb = b;
         kind = boxFace === 1 ? HIT_BOX_TOP : boxFace === 2 ? HIT_BOX_BOTTOM : HIT_BOX_SIDE;
         dir = boxDir;
       }
     }
     if (kind !== HIT_NONE) {
-      hit.kind = kind; hit.t = best; hit.dir = dir; hit.mat = mat; hit.cell = c;
+      hit.kind = kind; hit.t = best; hit.dir = dir; hit.mat = mat; hit.cell = c; hit.box = kind >= HIT_BOX_TOP ? hb : -1;
       hit.x = ax + best * dx; hit.y = ay + best * dy; hit.z = az + best * dz;
       hit.wet = kind === HIT_FLOOR && (g.flags[c] & CellFlag.WET) !== 0;
       return;

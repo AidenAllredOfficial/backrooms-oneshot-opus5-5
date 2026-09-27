@@ -6,7 +6,8 @@
 // DDA to the first hit (capped at LIGHT.PROBE_RAY_MAX). A hit returns the hit patch's radiance rho * E / pi
 // (emitter surfaces contribute only their reflected light: their emission is already in the direct term).
 // Misses use the tile-independent ambient rho_probe * E_cell / pi, with E_cell the coarse floor-patch irradiance
-// of the probe's own cell and rho_probe the probe's hit-weighted albedo. The result is projected to SH-L1 RGB
+// of the probe's own cell and rho_probe the probe's hit-weighted albedo (RGB: the multi-bounce gain is applied
+// per channel, so a yellow room's higher bounces get more saturated). The result is projected to SH-L1 RGB
 // (light volume) and to an ambient cube of 6 cosine-weighted axis irradiances (lightmap texels, see ProbeSet.cube).
 // Every probe is a pure function of world geometry and lights, so ring probes agree between neighbouring tiles.
 // With `withDyn` (the tile has dynamic lights) the same rays also gather the dynamic lights' bounced LUMINANCE
@@ -33,7 +34,7 @@ export interface ProbeSet {
    * (an "ambient cube"): exact hemispherical integrals of the probe's ray samples for axis-aligned receivers,
    * where the SH-L1 projection rings (a floor under a bright spot would get negative upward irradiance). */
   cube: Float32Array;
-  rho: Float32Array; // hit-weighted albedo (luma)
+  rho: Float32Array; // 3 floats per probe: hit-weighted albedo (linear RGB)
   valid: Uint8Array;
   /** Dynamic lights (null when the tile has none): 24 floats per probe, channel ch at ch * 6 + the ambient-cube
    * axis (+x -x +y -y +z -z): cosine-weighted bounced luminance irradiance of that flicker channel. */
@@ -99,7 +100,7 @@ export function computeProbes(job: BakeJob, withDyn = false): ProbeSet {
   const N = PROBE_N, off = PROBE_OFF;
   const count = N * N * 3;
   const P: ProbeSet = {
-    n: N, off, sh: new Float32Array(count * 12), cube: new Float32Array(count * 18), rho: new Float32Array(count), valid: new Uint8Array(count),
+    n: N, off, sh: new Float32Array(count * 12), cube: new Float32Array(count * 18), rho: new Float32Array(count * 3), valid: new Uint8Array(count),
     dyn: withDyn ? new Float32Array(count * 24) : null,
   };
   const nRays = job.q.probeRays;
@@ -121,7 +122,7 @@ export function computeProbes(job: BakeJob, withDyn = false): ProbeSet {
         hashRotation(g.gi0 + hi, g.gj0 + hj, layer + (tower ? 16 : 0), rotM);
         acc.fill(0); cub.fill(0);
         if (withDyn) dcub.fill(0);
-        let miss0 = 0, miss1 = 0, miss2 = 0, miss3 = 0, rhoSum = 0, hits = 0;
+        let miss0 = 0, miss1 = 0, miss2 = 0, miss3 = 0, rhoR = 0, rhoG = 0, rhoB = 0, hits = 0;
         for (let r = 0; r < nRays; r++) {
           const bx = dirs[r * 3], by = dirs[r * 3 + 1], bz = dirs[r * 3 + 2];
           const dx = rotM[0] * bx + rotM[1] * by + rotM[2] * bz;
@@ -135,7 +136,7 @@ export function computeProbes(job: BakeJob, withDyn = false): ProbeSet {
             hit.kind !== HIT_BOX_TOP && hit.kind !== HIT_BOX_BOTTOM) continue;
           hitRadiance(job, hit.t * len, rad);
           const rhoL = luma(rho3[0], rho3[1], rho3[2]);
-          rhoSum += rhoL;
+          rhoR += rho3[0]; rhoG += rho3[1]; rhoB += rho3[2];
           hits++;
           if (withDyn) addDynCube(dx, dy, dz, pref.e, pref.o, rhoL * INV_PI);
           for (let ch = 0; ch < 3; ch++) {
@@ -144,27 +145,28 @@ export function computeProbes(job: BakeJob, withDyn = false): ProbeSet {
           }
           addCube(dx, dy, dz, rad[0], rad[1], rad[2]);
         }
-        let rhoP: number;
-        if (hits > 0) rhoP = rhoSum / hits;
-        else { albedoOf(g.floorMat[c], false, rho3); rhoP = luma(rho3[0], rho3[1], rho3[2]); }
+        if (hits > 0) { rhoR /= hits; rhoG /= hits; rhoB /= hits; }
+        else { albedoOf(g.floorMat[c], false, rho3); rhoR = rho3[0]; rhoG = rho3[1]; rhoB = rho3[2]; }
         if (!tower && miss0 !== 0) {
           // tile-independent ambient for misses: rho_probe * E_cell / pi (coarse floor patch of the own cell)
           const fy = g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c];
           patchE(job, PK_FLOOR, c, hi + 0.5, fy, hj + 0.5, 0, false);
           const e = pref.e, o = pref.o;
-          for (let ch = 0; ch < 3; ch++) {
-            const a = rhoP * e[o + ch] * INV_PI;
-            acc[ch * 4] += a * miss0; acc[ch * 4 + 1] += a * miss1; acc[ch * 4 + 2] += a * miss2; acc[ch * 4 + 3] += a * miss3;
-          }
-          const ar = rhoP * e[o] * INV_PI, ag = rhoP * e[o + 1] * INV_PI, ab = rhoP * e[o + 2] * INV_PI;
+          const ar = rhoR * e[o] * INV_PI, ag = rhoG * e[o + 1] * INV_PI, ab = rhoB * e[o + 2] * INV_PI;
+          acc[0] += ar * miss0; acc[1] += ar * miss1; acc[2] += ar * miss2; acc[3] += ar * miss3;
+          acc[4] += ag * miss0; acc[5] += ag * miss1; acc[6] += ag * miss2; acc[7] += ag * miss3;
+          acc[8] += ab * miss0; acc[9] += ab * miss1; acc[10] += ab * miss2; acc[11] += ab * miss3;
           for (let r = 0; r < nRays; r++) if (missR[r] !== 0) addCube(dirX[r], dirY[r], dirZ[r], ar, ag, ab);
-          if (withDyn) for (let r = 0; r < nRays; r++) if (missR[r] !== 0) addDynCube(dirX[r], dirY[r], dirZ[r], e, o, rhoP * INV_PI);
+          if (withDyn) {
+            const rhoP = luma(rhoR, rhoG, rhoB);
+            for (let r = 0; r < nRays; r++) if (missR[r] !== 0) addDynCube(dirX[r], dirY[r], dirZ[r], e, o, rhoP * INV_PI);
+          }
         }
         const so = pIdx * 12;
         for (let k = 0; k < 12; k++) P.sh[so + k] = acc[k] * norm;
         for (let k = 0; k < 18; k++) P.cube[pIdx * 18 + k] = cub[k] * norm;
         if (P.dyn) for (let k = 0; k < 24; k++) P.dyn[pIdx * 24 + k] = dcub[k] * norm;
-        P.rho[pIdx] = rhoP;
+        P.rho[pIdx * 3] = rhoR; P.rho[pIdx * 3 + 1] = rhoG; P.rho[pIdx * 3 + 2] = rhoB;
         P.valid[pIdx] = 1;
       }
     }

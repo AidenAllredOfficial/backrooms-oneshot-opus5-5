@@ -6,9 +6,11 @@
 //   - per cell: flags, bake group, real floor/ceiling (m), DDA floor/ceiling (towers are unbounded in y for their
 //     own group), blocker top, materials, room/region labels, fields;
 //   - per edge line: kind, hA, hB, ySill (max adjacent floor), face materials;
-//   - occluder boxes bucketed per cell: OCCLUDE solids (boxes, ramps), OCCLUDE props (whole footprint) and the
-//     PROP_OCCLUDERS part boxes of the other props (yaw snapped to 90 degrees);
-//   - COLLIDE prop footprints (contact AO) and ceiling leaks (surface mask).
+//   - occluder boxes bucketed per cell: OCCLUDE solids (boxes, ramps), the PROP_OCCLUDERS part boxes of props that
+//     have a part list (which takes precedence over `occlude`; chair backs only near a quarter-turn yaw) and the
+//     whole footprint of the other OCCLUDE props (yaw snapped to 90 degrees);
+//   - COLLIDE prop footprints (contact AO; `contactBox` marks those whose prop added occluder boxes, which the
+//     near-field gather traces instead) and ceiling leaks (surface mask).
 
 import { CELL, CHUNK_CELLS } from '../core/constants.ts';
 import { cellIdx, exIdx, ezIdx, type TileKey } from '../core/grid.ts';
@@ -16,7 +18,7 @@ import { EDGE_OCCLUDES } from '../core/edges.ts';
 import { hash4 } from '../core/rng.ts';
 import { CellFlag, EdgeKind, PropFlag, SolidFlag, StructureKind } from '../core/ids.ts';
 import type { ChunkLayout } from '../core/layout.ts';
-import { PROP_DEFS, PROP_OCCLUDERS, type Box6 } from '../core/props.ts';
+import { PROP_DEFS, PROP_OCCLUDERS_ALIGNED, propOccluders, quarterAligned, type Box6 } from '../core/props.ts';
 import type { LayoutNeighborhood } from '../core/world.ts';
 import { expandPeriodicProps, expandPeriodicSolids } from '../mesh/periodic.ts';
 import { HALO, HALO_OFF, INV_CELL, growF64, growI32, quant } from './util.ts';
@@ -84,6 +86,9 @@ export interface VisGrid {
   contact: Float64Array;
   contactY: Float64Array;
   contactGroup: Int32Array;
+  /** per contact footprint: 1 when its prop added at least one occluder box (the near-field gather traces those
+   * boxes, so it skips the footprint's analytic contact AO) */
+  contactBox: Uint8Array;
   contactStart: Int32Array; // per cell (footprint + 0.3 m margin)
   contactList: Int32Array;
   // ---- leaks (x y z strength) and their world-stable ids (hash of chunk + position: tile-independent patterns)
@@ -254,6 +259,7 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
   // ---- occluders, contact footprints, leaks
   const bb: BoxBuild = { n: 0, box: new Float64Array(6 * 64), rampY: new Float64Array(3 * 64), group: new Int32Array(64), mat: new Int32Array(64), ramp: new Int32Array(64) };
   let contact = new Float64Array(4 * 32), contactY = new Float64Array(32), contactGroup = new Int32Array(32);
+  let contactBox = new Int32Array(32);
   let nContact = 0;
   let leak = new Float64Array(4 * 8);
   let leakId = new Int32Array(8);
@@ -292,18 +298,22 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
       const g = acx >= 0 && acz >= 0 && acx < n && acz < n ? group[acz * n + acx] : 0;
       const occ = def.occlude || (p.flags & SolidFlag.OCCLUDE) !== 0;
       const full: Box6 = [-def.size[0] / 2, 0, -def.size[2] / 2, def.size[0] / 2, def.size[1], def.size[2] / 2];
+      let added = 0;
       const addPart = (b: Box6): void => {
         rotBox(b, k, sc, rb);
         const x0 = px + quant(rb[0] * INV_CELL), x1 = px + quant(rb[3] * INV_CELL);
         const z0 = pz + quant(rb[2] * INV_CELL), z1 = pz + quant(rb[5] * INV_CELL);
-        if (x1 < lo || x0 > hi || z1 < lo || z0 > hi || x1 <= x0 || z1 <= z0) return;
+        if (x1 <= x0 || z1 <= z0) return;
+        added = 1; // (also when outside the halo: contactBox must not depend on the halo frame)
+        if (x1 < lo || x0 > hi || z1 < lo || z0 > hi) return;
         pushBox(bb, x0, p.y + rb[1], z0, x1, p.y + rb[4], z1, g, MAT_PROP, -1, 0, 0, 0);
       };
-      if (occ) addPart(full);
-      else {
-        const parts = PROP_OCCLUDERS[p.kind];
-        if (parts) for (const b of parts) addPart(b);
-      }
+      const parts = propOccluders(p.kind, p.variant);
+      if (parts) {
+        for (const b of parts) addPart(b);
+        const aligned = PROP_OCCLUDERS_ALIGNED[p.kind];
+        if (aligned && quarterAligned(p.yaw)) for (const b of aligned) addPart(b);
+      } else if (occ) addPart(full);
       if (def.collide || (p.flags & SolidFlag.COLLIDE) !== 0) {
         rotBox(full, k, sc, rb);
         const x0 = px + quant(rb[0] * INV_CELL), x1 = px + quant(rb[3] * INV_CELL);
@@ -312,8 +322,9 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
         contact = growF64(contact, (nContact + 1) * 4);
         contactY = growF64(contactY, nContact + 1);
         contactGroup = growI32(contactGroup, nContact + 1);
+        contactBox = growI32(contactBox, nContact + 1);
         contact[nContact * 4] = x0; contact[nContact * 4 + 1] = z0; contact[nContact * 4 + 2] = x1; contact[nContact * 4 + 3] = z1;
-        contactY[nContact] = p.y; contactGroup[nContact] = g;
+        contactY[nContact] = p.y; contactGroup[nContact] = g; contactBox[nContact] = added;
         nContact++;
       }
     }
@@ -389,7 +400,7 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
     nBox, box: bb.box.slice(0, nBox * 6), boxGroup: bb.group.slice(0, nBox), boxMat, boxRamp, rampY: bb.rampY.slice(0, nBox * 3),
     boxStart, boxList, cBoxLo, cBoxHi, ddaCell, ddaGroup, boxStamp: new Int32Array(nBox), stamp: 0,
     nContact, contact: contact.slice(0, nContact * 4), contactY: contactY.slice(0, nContact), contactGroup: contactGroup.slice(0, nContact),
-    contactStart, contactList,
+    contactBox: Uint8Array.from(contactBox.subarray(0, nContact)), contactStart, contactList,
     nLeak, leak: leak.slice(0, nLeak * 4), leakId: leakId.slice(0, nLeak),
   };
 }
