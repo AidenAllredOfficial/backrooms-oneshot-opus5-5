@@ -119,8 +119,9 @@ float brPomLod = 0.0; // their isotropic LOD
 	vec3 brQ0 = dFdx( vViewPosition );
 	vec3 brQ1 = dFdy( vViewPosition );
 	float brTop = uBrLayerC[ brL ].y;
-	// per-face layer: quad-uniform; the planar mirror pass (water) skips it
-	if ( brTop > 0.0 && ( brF & BR_F_DECAL ) == 0 && uBrReflPass < 0.5 ) {
+	// per-face layer and flags: quad-uniform. Skipped in the planar mirror pass and on submerged faces (pool bottoms
+	// and walls: the water surface refracts and ripples them, which hides the parallax)
+	if ( brTop > 0.0 && ( brF & ( BR_F_DECAL | BR_F_UNDERWATER ) ) == 0 && uBrReflPass < 0.5 ) {
 		vec3 brNv = normalize( ( viewMatrix * vec4( brNWg, 0.0 ) ).xyz );
 		mat3 brPF = brTangentFrame( - vViewPosition, brNv, vBrUv );
 		vec3 brV = normalize( vViewPosition );
