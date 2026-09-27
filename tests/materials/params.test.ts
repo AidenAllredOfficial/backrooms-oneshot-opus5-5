@@ -7,7 +7,8 @@ import { EMISSION, NOISE_WRAP, STOREY_PITCH, TILE_SIZE } from '../../src/core/co
 import { MAT_COUNT, Mat } from '../../src/core/ids.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../src/core/materials.ts';
 import { DYN_SLOT_OFFSETS } from '../../src/core/mesh.ts';
-import { buildLayerTable, f, glslConstants, GRIME_ID, hexLattice, slotLut, TUNE } from '../../src/materials/chunks/params.ts';
+import { buildLayerTable, f, glazeUnmix, glslConstants, GRIME_ID, hexLattice, slotLut, SURFACE_PHYS, TUNE } from '../../src/materials/chunks/params.ts';
+import { LAYER_RECIPES } from '../../src/textures/registry.ts';
 import { ShaderLib } from 'three';
 import { buildSurfaceFragment } from '../../src/materials/SurfaceMaterial.ts';
 import { waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
@@ -52,6 +53,71 @@ describe('WP9 parameters', () => {
     for (const m of [Mat.PANEL_LENS, Mat.SIGNAGE, Mat.DECAL_ATLAS]) expect(t.b[m * 4 + 3]).toBe(0);
   });
 
+  it('SURFACE_PHYS tables C/D/E: shapes, porosity, POM tops, Toksvig weights, detail ids, sheen and glaze lobes', () => {
+    const t = buildLayerTable();
+    for (const a of [t.c, t.d, t.e]) expect(a.length).toBe(MAT_COUNT * 4);
+    const textiles = new Set<number>([Mat.CARPET_L0, Mat.CARPET_OFFICE, Mat.FABRIC_PARTITION]);
+    const alphaTested = new Set<number>([Mat.METAL_GRATE, Mat.SIGNAGE, Mat.DECAL_ATLAS, Mat.FLOOR_PAINT]);
+    const bimodal = new Set<number>([Mat.POOL_TILE, Mat.POOL_MOSAIC, Mat.VINYL_VCT, Mat.TERRAZZO]);
+    for (const d of LAYER_DEFS) {
+      const p = SURFACE_PHYS[d.id];
+      const i = d.id * 4;
+      // C = (heightScale, pomTop, porosity, tok), D = (det, detS, sheen, sheenR), E = (glaze, roughComp, 0, 0)
+      expect(t.c[i]).toBe(Math.fround(LAYER_RECIPES[d.id].heightScale));
+      expect([t.c[i + 1], t.c[i + 2], t.c[i + 3]]).toEqual([p.pomTop, p.por, p.tok].map(Math.fround));
+      expect([t.d[i], t.d[i + 1], t.d[i + 2], t.d[i + 3]]).toEqual([p.det, p.detS, p.sheen, p.sheenR].map(Math.fround));
+      expect([t.e[i], t.e[i + 1], t.e[i + 2], t.e[i + 3]]).toEqual([p.glaze, p.roughComp, 0, 0].map(Math.fround));
+      expect(p.por, d.name).toBeGreaterThanOrEqual(0);
+      expect(p.por, d.name).toBeLessThanOrEqual(1);
+      if (textiles.has(d.id)) expect(p.por, d.name).toBe(1);
+      // POM: never on hex-tiled (offset-blended) or alpha-tested layers; a normalised height
+      if (p.pomTop > 0) {
+        expect((d.hexTile ?? 0) > 0 || alphaTested.has(d.id), d.name).toBe(false);
+        expect(p.pomTop, d.name).toBeLessThanOrEqual(1);
+      }
+      expect(p.tok, d.name).toBeGreaterThan(0);
+      expect(p.tok, d.name).toBeLessThanOrEqual(1);
+      expect(Number.isInteger(p.det) && p.det >= -1 && p.det < 11, d.name).toBe(true);
+      if (alphaTested.has(d.id) || d.id === Mat.PANEL_LENS) expect(p.det, d.name).toBe(-1);
+      expect(p.detS, d.name).toBe(p.det < 0 ? 0 : p.detS);
+      expect(p.detS).toBeGreaterThanOrEqual(0);
+      // sheen: fibre layers only
+      if (p.sheen > 0) expect(p.por, d.name).toBe(1);
+      expect(p.sheenR).toBeGreaterThan(0);
+      expect(p.sheenR).toBeLessThanOrEqual(1);
+      // two-lobe unmixing: exactly the bimodal glaze layers, 0 < glaze < rough component
+      expect(p.glaze > 0, d.name).toBe(bimodal.has(d.id));
+      if (p.glaze > 0) expect(p.glaze, d.name).toBeLessThan(p.roughComp);
+      else expect(p.roughComp, d.name).toBe(0);
+    }
+    for (const m of [Mat.POOL_TILE, Mat.POOL_MOSAIC, Mat.VINYL_VCT, Mat.PLASTIC, Mat.METAL_PAINTED]) expect(SURFACE_PHYS[m].por).toBeLessThanOrEqual(0.1);
+  });
+
+  it('glaze unmixing twin: coverage 0 at the glaze lobe, 1 at the rough component; the lobe stays the glaze', () => {
+    const gz = SURFACE_PHYS[Mat.POOL_TILE].glaze, rx = SURFACE_PHYS[Mat.POOL_TILE].roughComp;
+    expect(glazeUnmix(gz, gz, rx)).toEqual({ cov: 0, lobe: gz });
+    expect(glazeUnmix(rx, gz, rx).cov).toBeCloseTo(1, 12);
+    expect(glazeUnmix(rx, gz, rx).lobe).toBeCloseTo(gz, 12);
+    // a mip mixing 4 % grout into the glaze: 4 % coverage, glaze-sharp lobe
+    const mix = 0.96 * gz + 0.04 * rx;
+    expect(glazeUnmix(mix, gz, rx).cov).toBeCloseTo(0.04, 9);
+    // glossier texels keep their own roughness; variance widens the lobe by its tilt share only
+    expect(glazeUnmix(0.06, gz, rx).lobe).toBeCloseTo(0.06, 12);
+    expect(glazeUnmix(gz, gz, rx, 0.1).lobe).toBeCloseTo(Math.sqrt(gz * gz + TUNE.GLAZE_TOKSVIG * 0.1), 12);
+  });
+
+  it('wetness and puddle constants are ordered; prop dust and spec AA constants are sane', () => {
+    expect(TUNE.PUDDLE_LO).toBeLessThan(0);
+    expect(TUNE.PUDDLE_HI).toBeGreaterThan(0);
+    expect(TUNE.PUDDLE_W0).toBeLessThan(TUNE.PUDDLE_W1);
+    expect(TUNE.PUDDLE_ROUGH).toBeLessThan(TUNE.WET_FILM_ROUGH);
+    expect(TUNE.WET_DARK).toBeGreaterThan(0);
+    expect(TUNE.WET_DARK).toBeLessThan(1);
+    expect(TUNE.DUST_MAX).toBeLessThanOrEqual(1);
+    expect(TUNE.SAA_KAPPA).toBeLessThan(1);
+    expect(TUNE.CARPET_PILE_SHADE).toBeLessThan(0.07); // the sheen lobe supplies the view dependence now
+  });
+
   it('every grime profile has a distinct id; "none" is 0', () => {
     expect(GRIME_ID.none).toBe(0);
     expect(new Set(Object.values(GRIME_ID)).size).toBe(Object.keys(GRIME_ID).length);
@@ -74,7 +140,7 @@ describe('WP9 parameters', () => {
     }
     // B3 world lattices: carpet pile lean (and its 2x amplitude cell), broadloom widths, wallpaper rolls, concrete
     // control joints, 0.6 m ceiling tiles / tie holes, flooded-room caustic cells (x CAUSTIC_FLOOD_SCALE) + warp
-    for (const c of [TUNE.CARPET_PILE_CELL, TUNE.CARPET_PILE_CELL * 2, TUNE.CARPET_BROADLOOM, TUNE.WALL_ROLL, TUNE.CONCRETE_JOINT,
+    for (const c of [TUNE.CARPET_PILE_CELL, TUNE.CARPET_PILE_CELL * 2, TUNE.CARPET_BROADLOOM, TUNE.WALL_ROLL, TUNE.CONCRETE_JOINT, TUNE.DUST_CELL,
       0.6 * TUNE.CAUSTIC_FLOOD_SCALE, 0.3 * TUNE.CAUSTIC_FLOOD_SCALE, 0.6 * TUNE.CAUSTIC_FLOOD_SCALE * 4, 0.3 * TUNE.CAUSTIC_FLOOD_SCALE * 4]) {
       expect(divides(c, NOISE_WRAP), `${c} | NOISE_WRAP`).toBe(true);
     }

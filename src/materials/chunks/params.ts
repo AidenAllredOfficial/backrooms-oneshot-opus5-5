@@ -1,4 +1,5 @@
-// src/materials/chunks/params.ts — WP9 tuning constants and the per-layer parameter table (uLayerA/uLayerB).
+// src/materials/chunks/params.ts — WP9 tuning constants and the per-layer parameter tables (uLayerA..E; C/D/E from
+// SURFACE_PHYS, package B).
 // Pure data (no three). Every number that shapes the look of the surface shaders lives here or in the other
 // chunks/*.ts files, so tuning never touches the material factory.
 
@@ -8,6 +9,7 @@ import type { MatId } from '../../core/ids.ts';
 import { DYN_SLOT_OFFSETS } from '../../core/mesh.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../core/materials.ts';
 import type { GrimeProfile } from '../../core/materials.ts';
+import { LAYER_RECIPES } from '../../textures/registry.ts';
 
 /** GLSL float literal (always has a decimal point). */
 export const f = (v: number): string => {
@@ -34,14 +36,69 @@ const MACRO_AMOUNT: Partial<Record<MatId, number>> = {
   [Mat.RUBBER]: 0.3, [Mat.PLENUM]: 0.5, [Mat.POOL_TILE]: 0.6, [Mat.POOL_MOSAIC]: 0.6,
 };
 
-export interface LayerTable { a: Float32Array; b: Float32Array }
+/**
+ * Physical surface parameters per layer (package B; uBrLayerC/D/E):
+ * - por: porosity 0..1 (Lagarde 2013 wetness: how much a wet layer darkens / saturates, and how late its water
+ *   film forms; textiles 1, glazes and sealed plastics ~0);
+ * - pomTop: normalised top height of the relief for parallax occlusion mapping (0 = off; never on hex-tiled or
+ *   alpha-tested layers);
+ * - tok: weight of the Toksvig (mip-filtered normal) variance in the roughness (1 = all of it is lobe broadening;
+ *   < 1 where most of the filtered variance is structural: grout bevels, tilted tiles, joints, ribs);
+ * - det / detS: detail-map layer (D0..D10, -1 = none) and strength;
+ * - sheen / sheenR: textile sheen amount and roughness (USE_SHEEN);
+ * - glaze / roughComp: two-lobe unmixing of bimodal layers (glaze lobe roughness and rough-component roughness:
+ *   the mip-filtered roughness is their coverage mixture); 0 = single lobe.
+ */
+export interface SurfacePhys {
+  por: number; pomTop: number; tok: number; det: number; detS: number; sheen: number; sheenR: number; glaze: number; roughComp: number;
+}
+const phys = (por: number, o: Partial<Omit<SurfacePhys, 'por'>> = {}): SurfacePhys =>
+  ({ por, pomTop: 0, tok: 1, det: -1, detS: 0, sheen: 0, sheenR: 1, glaze: 0, roughComp: 0, ...o });
+export const SURFACE_PHYS: Readonly<Record<MatId, SurfacePhys>> = {
+  [Mat.WALLPAPER_L0]: phys(0.35, { det: 2, detS: 1 }),
+  [Mat.CARPET_L0]: phys(1, { det: 0, detS: 1, sheen: 0.55, sheenR: 0.5 }),
+  [Mat.CEILING_TILE]: phys(0.9, { tok: 0.8, det: 5, detS: 0.8 }),
+  [Mat.PANEL_LENS]: phys(0),
+  [Mat.TRIM_PAINT]: phys(0.1, { det: 3, detS: 0.5 }),
+  [Mat.WALLPAPER_MANILA]: phys(0.35, { det: 2, detS: 0.8 }),
+  [Mat.CARPET_OFFICE]: phys(1, { det: 1, detS: 1, sheen: 0.4, sheenR: 0.6 }),
+  [Mat.DRYWALL]: phys(0.5, { det: 3, detS: 1 }),
+  [Mat.VINYL_VCT]: phys(0.05, { tok: 0.5, det: 6, detS: 0.5, glaze: 0.34, roughComp: 0.75 }),
+  [Mat.CONCRETE_FLOOR]: phys(0.6, { det: 4, detS: 1 }),
+  [Mat.CONCRETE_WALL]: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8 }),
+  [Mat.CONCRETE_CEIL]: phys(0.6, { det: 4, detS: 0.8 }),
+  [Mat.CMU_PAINTED]: phys(0.3, { pomTop: 0.8, tok: 0.6, det: 3, detS: 0.8 }),
+  [Mat.POOL_TILE]: phys(0.08, { pomTop: 0.9, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
+  [Mat.POOL_MOSAIC]: phys(0.05, { pomTop: 0.7, tok: 0.3, det: 6, detS: 0.7, glaze: 0.1, roughComp: 0.7 }),
+  [Mat.METAL_PAINTED]: phys(0.05, { det: 3, detS: 0.6 }),
+  [Mat.METAL_RUST]: phys(0.4, { det: 4, detS: 0.6 }),
+  [Mat.METAL_GRATE]: phys(0),
+  [Mat.WOOD]: phys(0.25, { det: 9, detS: 1 }),
+  [Mat.PLASTIC]: phys(0.02, { det: 10, detS: 1 }),
+  [Mat.FABRIC_PARTITION]: phys(1, { det: 7, detS: 1, sheen: 0.6, sheenR: 0.7 }),
+  [Mat.PLENUM]: phys(0.8, { det: 4, detS: 1 }),
+  [Mat.RUBBER]: phys(0.02, { det: 10, detS: 0.5 }),
+  [Mat.SIGNAGE]: phys(0),
+  [Mat.DECAL_ATLAS]: phys(0),
+  [Mat.FLOOR_PAINT]: phys(0.15),
+  [Mat.TERRAZZO]: phys(0.1, { det: 4, detS: 0.4, glaze: 0.13, roughComp: 0.5 }),
+  [Mat.METAL_DECK]: phys(0.02, { pomTop: 1, tok: 0.7, det: 8, detS: 0.6 }),
+};
+
+export interface LayerTable { a: Float32Array; b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array }
 /**
  * uLayerA[i] = (rotation cells per uv unit in u, in v (0 = off), hex cell metres (0 = off), grime profile id)
  * uLayerB[i] = (repeat m, repeatY m, normal strength, macro amount)
+ * uLayerC[i] = (texture heightScale m per height unit, pomTop, porosity, Toksvig weight)
+ * uLayerD[i] = (detail layer (-1 = none), detail strength, sheen amount, sheen roughness)
+ * uLayerE[i] = (glaze lobe roughness (0 = single lobe), rough-component roughness, 0, 0)
  */
 export function buildLayerTable(): LayerTable {
   const a = new Float32Array(MAT_COUNT * 4);
   const b = new Float32Array(MAT_COUNT * 4);
+  const c = new Float32Array(MAT_COUNT * 4);
+  const d4 = new Float32Array(MAT_COUNT * 4);
+  const e = new Float32Array(MAT_COUNT * 4);
   for (let i = 0; i < MAT_COUNT; i++) {
     const d = LAYER_DEFS[i];
     const ry = layerRepeatY(d);
@@ -53,8 +110,24 @@ export function buildLayerTable(): LayerTable {
     b[i * 4 + 1] = ry;
     b[i * 4 + 2] = NORMAL_STRENGTH[d.id] ?? 1;
     b[i * 4 + 3] = MACRO_AMOUNT[d.id] ?? 1;
+    const p = SURFACE_PHYS[d.id];
+    c.set([LAYER_RECIPES[i].heightScale, p.pomTop, p.por, p.tok], i * 4);
+    d4.set([p.det, p.detS, p.sheen, p.sheenR], i * 4);
+    e.set([p.glaze, p.roughComp, 0, 0], i * 4);
   }
-  return { a, b };
+  return { a, b, c, d: d4, e };
+}
+
+/**
+ * Two-lobe unmixing of a bimodal layer (twin of FRAG_ROUGHNESS_GLSL): a mip-filtered roughness `r` is the coverage
+ * mixture (1 - cov) gz + cov rx of the glaze lobe gz and the rough component rx, so cov is the rough component's
+ * coverage (the specular weight is 1 - cov) and the lobe keeps the glaze roughness (texels glossier than gz keep their
+ * own). `variance` = the layer-weighted Toksvig variance.
+ */
+export function glazeUnmix(r: number, gz: number, rx: number, variance = 0): { cov: number; lobe: number } {
+  const cov = Math.min(1, Math.max(0, (r - gz) / Math.max(rx - gz, 1e-3)));
+  const g = Math.min(r, gz);
+  return { cov, lobe: Math.sqrt(g * g + TUNE.GLAZE_TOKSVIG * variance) };
 }
 
 /** Slot lookup (dx+1) + 3*(dz+1) -> DYN_SLOT_OFFSETS index, generated from the contract table. */
@@ -104,10 +177,7 @@ export const TUNE = {
   GRIME_SCALE_Y_A: 3.0, // m (divides STOREY_PITCH)
   GRIME_SCALE_Y_B: 1.5,
   // --- carpet
-  CARPET_WET_DARKEN: 0.65,
-  CARPET_WET_ROUGH: 0.95, // damp pile: darker and saturated, still matte (a sheen reads as a grey cut-out)
-  CARPET_SOAK_ROUGH: 0.5, // standing water in the pile (mask B > 0.9): a soft sheen
-  CARPET_PILE_SHADE: 0.07, // view-dependent pile lean shading (albedo x (1 ± this))
+  CARPET_PILE_SHADE: 0.035, // view-dependent pile lean shading (albedo x (1 ± this)); the sheen lobe does the rest
   CARPET_PILE_CELL: 1.2, // m, world lattice of the pile lean direction (1024 per NOISE_WRAP)
   CARPET_BROADLOOM: 3.84, // m, broadloom width between seams (320 per NOISE_WRAP)
   CARPET_WEAR_LIGHTEN: 0.08,
@@ -120,15 +190,40 @@ export const TUNE = {
   WALL_DIRT_COLOR: [0.66, 0.6, 0.48] as const, // mask G (dirt, dust, hand smudges) on wall coverings
   CEIL_STAIN_P: 0.04, // fraction of 0.6 m ceiling tiles with old procedural ring stains
   CONCRETE_JOINT: 4.8, // m, saw-cut control joint grid on concrete floors (256 per NOISE_WRAP)
-  // --- tile / concrete / metal
-  TILE_WET_ROUGH: 0.5,
-  CONCRETE_WET_ROUGH: 0.3,
-  CONCRETE_WET_DARKEN: 0.72,
+  // --- metal
   // R2 integration: browner, less saturated oxide (was [0.2, 0.085, 0.03]: scattered on pale painted lockers and
   // doors the orange-red blotches read as blood spatter under the camcorder grade)
   RUST_COLOR: [0.15, 0.085, 0.045] as const,
-  // --- wet albedo (generic porous darkening)
-  WET_DARKEN: 0.8,
+  // --- wetness (package B; Lagarde 2013): W = the mask's wet field; P = SURFACE_PHYS porosity
+  WET_DARK: 0.45, // absorbed water darkens porous albedo by up to this (carpet x0.55, concrete x0.73, tile x0.96)
+  WET_SAT: 0.35, // ...and raises its saturation by up to this
+  WET_FILM_ROUGH: 0.07, // water film roughness on a sealed surface
+  WET_FILM_ROUGH_POROUS: 0.25, // ...plus this x porosity (the film is thin and broken over open pores / pile)
+  WET_FILM_F0: 0.7, // share of the film that is optically water (F0 0.02 / F90 1; puddles: all of it)
+  WET_CLUMP: 0.3, // damp (unsaturated) pile / fibre relief clumps: normal strength x (1 + this)
+  SOAK_FLAT: 0.5, // a saturated film flattens porous relief by up to this
+  PUDDLE_W0: 0.5, // standing water only above this wetness...
+  PUDDLE_W1: 0.95, // ...and the water level reaches PUDDLE_HI here
+  PUDDLE_LO: -0.0012, // m, water level relative to the layer's mean relief plane at W0 (cracks, grout, joints fill)
+  PUDDLE_HI: 0.0015, // m, at W1 (everything but the highest relief covered)
+  PUDDLE_EDGE: 0.0002, // m, shoreline smoothing (grows with the texel footprint up to 8 texels)
+  PUDDLE_ROUGH: 0.03,
+  PUDDLE_TINT: [0.94, 0.9, 0.82] as const, // murky standing water over the substrate
+  // --- two-lobe (glaze) layers: share of the filtered-normal variance that broadens the glaze lobe (the tilt part)
+  GLAZE_TOKSVIG: 0.25,
+  // --- clearcoat (props with the coat bit; USE_CLEARCOAT)
+  COAT_ROUGH: 0.04,
+  // --- textile sheen: pile lean widens / narrows the sheen lobe by this x the lean seen from the camera
+  SHEEN_LEAN_ROUGH: 0.12,
+  // --- geometric specular AA (Tokuyoshi & Kaplanyan 2019): alpha^2 += min(2 SIGMA2 (|dn/dx|^2 + |dn/dy|^2), KAPPA)
+  SAA_SIGMA2: 0.25,
+  SAA_KAPPA: 0.18,
+  // --- prop dust (aux.z bits 2-7 = dust level from the anchor cell's decay, props/tileProps.ts)
+  DUST_COLOR: [0.36, 0.34, 0.3] as const, // linear (sRGB ~161/157/149)
+  DUST_MAX: 0.7,
+  DUST_SIDE: 0.15, // faint film on vertical faces
+  DUST_ROUGH: 0.92,
+  DUST_CELL: 0.3, // m, clump lattice (4096 per NOISE_WRAP)
   // --- world features (hashed per world cell)
   FEATURE_CELL: 2.4, // m (512 per NOISE_WRAP)
   FEATURE_CELL_Y: 1.5, // m (2 per storey pitch)
@@ -245,9 +340,6 @@ export function glslConstants(): string {
 #define BR_FEATURE_P ${wrapCells(TUNE.FEATURE_CELL)}
 #define BR_FEATURE_CELL_Y ${f(TUNE.FEATURE_CELL_Y)}
 #define BR_FEATURE_PY ${yCells(TUNE.FEATURE_CELL_Y)}
-#define BR_CARPET_WET_DARKEN ${f(TUNE.CARPET_WET_DARKEN)}
-#define BR_CARPET_WET_ROUGH ${f(TUNE.CARPET_WET_ROUGH)}
-#define BR_CARPET_SOAK_ROUGH ${f(TUNE.CARPET_SOAK_ROUGH)}
 #define BR_CARPET_PILE_SHADE ${f(TUNE.CARPET_PILE_SHADE)}
 #define BR_CARPET_PILE_CELL ${f(TUNE.CARPET_PILE_CELL)}
 #define BR_CARPET_PILE_P ${wrapCells(TUNE.CARPET_PILE_CELL)}
@@ -264,11 +356,32 @@ export function glslConstants(): string {
 #define BR_WALL_STAIN ${v3(TUNE.WALL_STAIN_COLOR)}
 #define BR_WALL_TIDE ${v3(TUNE.WALL_TIDE_COLOR)}
 #define BR_WALL_BACKING ${v3(TUNE.WALL_BACKING)}
-#define BR_TILE_WET_ROUGH ${f(TUNE.TILE_WET_ROUGH)}
-#define BR_CONCRETE_WET_ROUGH ${f(TUNE.CONCRETE_WET_ROUGH)}
-#define BR_CONCRETE_WET_DARKEN ${f(TUNE.CONCRETE_WET_DARKEN)}
 #define BR_RUST ${v3(TUNE.RUST_COLOR)}
-#define BR_WET_DARKEN ${f(TUNE.WET_DARKEN)}
+#define BR_WET_DARK ${f(TUNE.WET_DARK)}
+#define BR_WET_SAT ${f(TUNE.WET_SAT)}
+#define BR_WET_FILM_ROUGH ${f(TUNE.WET_FILM_ROUGH)}
+#define BR_WET_FILM_ROUGH_POROUS ${f(TUNE.WET_FILM_ROUGH_POROUS)}
+#define BR_WET_FILM_F0 ${f(TUNE.WET_FILM_F0)}
+#define BR_WET_CLUMP ${f(TUNE.WET_CLUMP)}
+#define BR_SOAK_FLAT ${f(TUNE.SOAK_FLAT)}
+#define BR_PUDDLE_W0 ${f(TUNE.PUDDLE_W0)}
+#define BR_PUDDLE_W1 ${f(TUNE.PUDDLE_W1)}
+#define BR_PUDDLE_LO ${f(TUNE.PUDDLE_LO)}
+#define BR_PUDDLE_HI ${f(TUNE.PUDDLE_HI)}
+#define BR_PUDDLE_EDGE ${f(TUNE.PUDDLE_EDGE)}
+#define BR_PUDDLE_ROUGH ${f(TUNE.PUDDLE_ROUGH)}
+#define BR_PUDDLE_TINT ${v3(TUNE.PUDDLE_TINT)}
+#define BR_GLAZE_TOKSVIG ${f(TUNE.GLAZE_TOKSVIG)}
+#define BR_COAT_ROUGH ${f(TUNE.COAT_ROUGH)}
+#define BR_SHEEN_LEAN_ROUGH ${f(TUNE.SHEEN_LEAN_ROUGH)}
+#define BR_SAA_SIGMA2 ${f(TUNE.SAA_SIGMA2)}
+#define BR_SAA_KAPPA ${f(TUNE.SAA_KAPPA)}
+#define BR_DUST_COLOR ${v3(TUNE.DUST_COLOR)}
+#define BR_DUST_MAX ${f(TUNE.DUST_MAX)}
+#define BR_DUST_SIDE ${f(TUNE.DUST_SIDE)}
+#define BR_DUST_ROUGH ${f(TUNE.DUST_ROUGH)}
+#define BR_DUST_CELL ${f(TUNE.DUST_CELL)}
+#define BR_DUST_P ${wrapCells(TUNE.DUST_CELL)}
 #define BR_DIRECT_MIN_ROUGH ${f(TUNE.DIRECT_MIN_ROUGH)}
 #define BR_NG_MIN ${f(TUNE.NG_MIN)}
 #define BR_EM_LOD ${f(TUNE.EM_LOD_PER_ROUGH)}

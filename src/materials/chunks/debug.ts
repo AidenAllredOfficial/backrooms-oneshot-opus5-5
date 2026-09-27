@@ -58,8 +58,8 @@ vec3 brDbg = vec3( 0.0 );
 		brDbg = vec3( lp.x / BR_TILE, brLvV( lp.y ), lp.z / BR_TILE );
 #endif
 	}
-	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( 0.0 ); // package B
-	else if ( dv == ${DebugView.HEIGHT} ) brDbg = vec3( 0.0 ); // package B
+	else if ( dv == ${DebugView.WETNESS} ) brDbg = vec3( brWet, brFilm, brPuddle ); // package B: r wet, g film, b standing water
+	else if ( dv == ${DebugView.HEIGHT} ) brDbg = vec3( brNrm.w ); // package B: texture height (normal.a, 0.5 = rest)
 	else if ( dv == ${DebugView.VOLUMETRIC} ) brDbg = vec3( 0.0 ); // package F
 	else if ( dv == ${DebugView.BOUNCE} ) brDbg = vec3( 0.0 ); // package F
 	else if ( dv == ${DebugView.WATER} ) brDbg = vec3( 0.0 ); // package E

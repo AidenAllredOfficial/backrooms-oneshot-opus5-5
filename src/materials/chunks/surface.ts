@@ -1,7 +1,9 @@
 // src/materials/chunks/surface.ts — fragment-stage surface chunks: fade, texture sampling with anti-tiling,
-// macro variation, mask-driven grime, hashed world features, Toksvig roughness, metalness, normal mapping and
-// emission. Albedo/normal/ormh are sampled ONCE (in the map_fragment replacement) and stashed in main-scope
-// variables, because in r186 roughnessmap_fragment runs before normal_fragment_maps.
+// macro variation, mask-driven grime, hashed world features, porosity-based wetness and puddles, prop dust, Toksvig
+// and two-lobe (glaze) roughness, metalness, normal mapping and emission. Albedo/normal/ormh are sampled ONCE (in the
+// map_fragment replacement) and stashed in main-scope variables, because in r186 roughnessmap_fragment runs before
+// normal_fragment_maps. Main-scope outputs read later (chunks/materialPost.ts, debug views, packages D/E): brWet,
+// brFilm, brPuddle, brDust, brCov, brWear, brPileLean, brTbn.
 
 import { DecalKind } from '../../core/ids.ts';
 
@@ -222,6 +224,10 @@ int brGrime = int( brLA.w + 0.5 );
 if ( ( brF & BR_F_NO_GRIME ) != 0 ) brGrime = 0;
 // submerged: the water body's depth below its plane (aux.w = plane byte on UNDERWATER faces), < 0 above it
 float brSubDepth = ( brF & BR_F_UNDERWATER ) != 0 ? brAuxB.w * 0.05 - 3.2 - vBrLocal.y : - 1.0;
+float brWet = 0.0; // wetness 0..1 (mask B, tide-perturbed, ramped; 1 under water): absorption (the damp look)
+float brSoak = 0.0; // the same field unramped: water film and standing water (the ramp would flood whole patches)
+float brWear = 0.0; // carpet traffic wear (sheen)
+float brPileLean = 0.0; // carpet pile lean seen from the camera, -1..1 (sheen roughness)
 if ( brGrime != 0 ) {
 	vec2 gA = brHoriz ? brS2 / BR_GRIME_A : vec2( brS2.x / BR_GRIME_A, brS2.y / BR_GRIME_YA );
 	vec2 gB = brHoriz ? brS2 / BR_GRIME_B : vec2( brS2.x / BR_GRIME_B, brS2.y / BR_GRIME_YB );
@@ -232,9 +238,12 @@ if ( brGrime != 0 ) {
 	float wetRaw = brMask.b + ( g2.r - 0.5 ) * 0.3;
 	float wet = smoothstep( 0.22, 0.62, wetRaw );
 	if ( brSubDepth > 0.0 ) wet = 1.0; // under water everything porous is soaked
+	brWet = wet;
+	brSoak = brSubDepth > 0.0 ? 1.0 : clamp( wetRaw, 0.0, 1.0 );
 	if ( brGrime == 1 ) {
 		// carpet: damage (A) = trodden wear paths / thresholds / lanes; grime (G) = dirt near walls; wet patches (B)
 		float wear = smoothstep( 0.25, 0.75, brMask.a + ( g1.b - 0.5 ) * 0.3 );
+		brWear = wear;
 		vec3 worn = mix( brA, vec3( brLuma( brA ) ), 0.25 ) * ( 1.0 + BR_CARPET_WEAR_LIGHTEN );
 		brA = mix( brA, worn, wear * 0.8 );
 		brNrmScale *= 1.0 - BR_CARPET_WEAR_NORMAL * wear;
@@ -250,7 +259,8 @@ if ( brGrime != 0 ) {
 				float pa = brVNoise( brS2 / BR_CARPET_PILE_CELL, ivec2( BR_CARPET_PILE_P ), 331u ) * 12.566;
 				float pamp = smoothstep( 0.2, 0.8, brVNoise( brS2 / ( 2.0 * BR_CARPET_PILE_CELL ), ivec2( BR_CARPET_PILE_P / 2 ), 337u ) );
 				float sh = dot( brVW.xz / brVL, vec2( cos( pa ), sin( pa ) ) );
-				brA *= 1.0 + BR_CARPET_PILE_SHADE * ( 0.3 + 0.7 * pamp ) * sh * ( 1.0 - 0.5 * wear ) * ( 1.0 - wet );
+				brPileLean = sh * ( 0.3 + 0.7 * pamp ) * ( 1.0 - 0.5 * wear );
+				brA *= 1.0 + BR_CARPET_PILE_SHADE * brPileLean * ( 1.0 - wet );
 			}
 			if ( brL == BR_M_CARPET_L0 ) {
 				// broadloom: seams every 3.84 m along x (3 mm darker line) and a dye lot per width (±3 %)
@@ -280,13 +290,11 @@ if ( brGrime != 0 ) {
 			}
 #endif
 		}
-		// damp: a dried tide ring at the patch edge, saturated deeper mustard-brown inside, mottled
+		// damp: a dried tide ring (dirty-water brown) at the patch edge; the damp interior darkens, saturates and
+		// clumps through the porosity model below, mottled by the tide field
 		float ring = smoothstep( 0.1, 0.2, wetRaw ) * ( 1.0 - smoothstep( 0.2, 0.32, wetRaw ) );
 		brA *= mix( vec3( 1.0 ), vec3( 0.8, 0.7, 0.55 ), 0.5 * ring );
-		vec3 damp = pow( max( brA, vec3( 0.0 ) ), vec3( 1.45 ) ) * 1.25 * mix( 0.85, 1.0, g1.r ) * vec3( 1.04, 0.97, 0.86 );
-		brA = mix( brA, damp, wet );
-		brRoughTo = mix( BR_CARPET_WET_ROUGH, BR_CARPET_SOAK_ROUGH, max( smoothstep( 0.9, 0.98, brMask.b ), step( 0.0, brSubDepth ) ) );
-		brRoughToW = wet;
+		brA *= mix( vec3( 1.0 ), mix( 0.88, 1.0, g1.r ) * vec3( 1.02, 0.98, 0.9 ), wet );
 	} else if ( brGrime == 2 ) {
 		// wallpaper: tide-band stains (R: leaks, rising damp, ceiling seepage; sharp edge from grime.r), dirt / dust /
 		// hand smudges (G), peeling at roll seams (A)
@@ -379,16 +387,13 @@ if ( brGrime != 0 ) {
 				brA = mix( brA, vec3( 0.32, 0.16, 0.07 ), rs * 0.6 );
 			}
 		}
-		brA *= mix( 1.0, BR_CONCRETE_WET_DARKEN, wet );
-		brRoughMul = mix( 1.0, BR_CONCRETE_WET_ROUGH, wet ) * mix( 1.0, 0.7, oil );
+		brRoughMul *= mix( 1.0, 0.7, oil );
 	} else if ( brGrime == 5 ) {
-		// tile: grout grime (G), wet film (B -> roughness x 0.5). Grout = markedly rougher than the layer's mean AND low:
-		// height alone is ambiguous (WP8 tilts glazed tiles by +-1.5 deg, so tile corners sink to grout height)
+		// tile: grout grime (G). Grout = markedly rougher than the layer's mean AND low: height alone is ambiguous (WP8
+		// tilts glazed tiles by +-1.5 deg, so tile corners sink to grout height)
 		float brMuRough = textureLod( uBrOrmh, vec3( 0.5, 0.5, brLayerF ), 16.0 ).g;
 		float grout = smoothstep( 0.12, 0.28, brOrmh.g - brMuRough ) * ( 1.0 - smoothstep( 0.35, 0.6, brNrm.w ) );
 		brA *= mix( vec3( 1.0 ), vec3( 0.5, 0.52, 0.42 ), clamp( grout * ( brMask.g * 1.6 + 0.25 * g2.g ), 0.0, 1.0 ) );
-		brA *= mix( 1.0, 0.94, wet );
-		brRoughMul = mix( 1.0, BR_TILE_WET_ROUGH, wet );
 		if ( ! brHoriz && brSubDepth > 0.0 ) {
 			// pool walls: a limescale band just under the waterline, faint algae below it
 			float lime = 1.0 - smoothstep( 0.035, 0.05, brSubDepth + ( g2.r - 0.5 ) * 0.02 );
@@ -405,17 +410,98 @@ if ( brGrime != 0 ) {
 		brRoughMul = mix( 1.0, 1.6, rust );
 	}
 }
+#ifdef BR_WATER_WETBAND
+{
+	float brBand = brWaterWetBand( vBrLocal, brNWg, brHoriz ); // splash / wicking band above a water line (package E)
+	brWet = max( brWet, brBand );
+	brSoak = max( brSoak, brBand );
+}
+#endif
+
+// ---- wetness (Lagarde 2013): porous media darken and saturate as they absorb water (brWet); a specular water film
+// forms early on sealed surfaces but only at saturation on porous ones, and standing water fills the relief below a
+// level that rises with the water present (brSoak), so shorelines are ragged and follow grout, joints, cracks and
+// tilted-tile corners.
+// Submerged faces keep the absorption only (the water material renders the interface).
+vec4 brLC = uBrLayerC[ brL ]; // (heightScale m, pomTop, porosity, Toksvig weight)
+float brPor = brLC.z;
+float brAir = step( brSubDepth, 0.0 );
+float brAbs = smoothstep( 0.0, 0.6, brWet ) * brPor; // absorbed water
+brA *= 1.0 - BR_WET_DARK * brAbs;
+brA = max( mix( vec3( brLuma( brA ) ), brA, 1.0 + BR_WET_SAT * brAbs ), vec3( 0.0 ) );
+float brFilm = smoothstep( 0.3 + 0.55 * brPor, 0.6 + 0.35 * brPor, brSoak ) * brAir;
+float brPuddle = 0.0;
+#ifdef BR_PUDDLES
+if ( brNWg.y > 0.9 && brPor < 0.95 ) {
+	// relief (m) above the layer's mean plane: the 1x1 mip holds the mean height (constant address: always cached).
+	// Decals are thin films on the base floor: they take the base's mean state (no relief of their own).
+	float brRelM = 0.0;
+#ifndef BR_DECAL
+	float brMuH = textureLod( uBrNormal, vec3( 0.5, 0.5, brLayerF ), 16.0 ).a;
+	brRelM = ( brNrm.w - brMuH ) * brLC.x;
+#endif
+	float brLvl = mix( BR_PUDDLE_LO, BR_PUDDLE_HI, smoothstep( BR_PUDDLE_W0, BR_PUDDLE_W1, brSoak ) );
+	// shoreline width grows with the texel footprint: the mip-filtered height flattens toward the mean far away
+	float brPx = max( length( brDx ), length( brDy ) ) * float( textureSize( uBrNormal, 0 ).x );
+	float brEdge = BR_PUDDLE_EDGE + 0.05 * brLC.x * clamp( brPx, 0.0, 8.0 );
+	brPuddle = smoothstep( 0.0, brEdge, brLvl - brRelM ) * smoothstep( BR_PUDDLE_W0, BR_PUDDLE_W0 + 0.05, brSoak ) * brAir;
+	brA *= mix( vec3( 1.0 ), BR_PUDDLE_TINT, brPuddle * min( 2.0 * brPor, 1.0 ) ); // murky on dirty porous floors, clear on glaze
+}
+#endif
+// damp pile / fibres clump (stronger relief); a saturated film and standing water flatten it; still water adds no
+// filtered-normal (Toksvig) variance
+brNrmScale *= ( 1.0 + BR_WET_CLUMP * brAbs * ( 1.0 - brFilm ) ) * ( 1.0 - BR_SOAK_FLAT * brFilm * brPor ) * ( 1.0 - brPuddle );
+brNLen = mix( brNLen, 1.0, brPuddle );
+brRoughTo = mix( BR_WET_FILM_ROUGH + BR_WET_FILM_ROUGH_POROUS * brPor, BR_PUDDLE_ROUGH, brPuddle );
+brRoughToW = max( brFilm, brPuddle );
 diffuseColor.rgb = brA * vBrTint.rgb;
 diffuseColor.a = brAlpha;
+// ---- props: dust on the anchor cell's decay (aux.z bits 2-7), clumped on up-facing faces, a faint film on the rest.
+// Emissive, dead-fixture (NO_GRIME) and animated parts stay clean.
+float brDust = 0.0;
+#ifdef BR_PROPS
+if ( BR_DETAIL == 1 && ( brF & BR_F_PROP_AUX ) != 0 && ( brF & ( BR_F_NO_GRIME | BR_F_DYN_EMIT | BR_F_SHIMMER ) ) == 0 && vBrEmit <= 0.0 ) {
+	float brDl = float( ( int( brAuxB.z ) >> 2 ) & 63 ) / 63.0;
+	float brUp = smoothstep( 0.3, 0.9, brNWg.y );
+	vec2 brDw = vBrLocal.xz + uNoiseOrigin.xz;
+	float brDn = brVNoise( brDw / BR_DUST_CELL, ivec2( BR_DUST_P ), 919u );
+	// a settled layer with soft drifts: the grime texture's smooth stain field (its speckle channel reads as leopard
+	// spots on glossy paint / glass)
+	vec4 brDg = texture( uBrGrime, brDw / BR_GRIME_B + 0.61 );
+	float brDc = 0.5 * brDn + 0.55 * brDg.r + 0.12 * ( brDg.g - 0.5 );
+	brDust = clamp( brDl * ( brUp * mix( 0.45, 1.0, smoothstep( 0.2, 0.75, brDc ) ) + BR_DUST_SIDE * ( 0.5 + 0.5 * brDn ) ), 0.0, 1.0 ) * BR_DUST_MAX;
+	diffuseColor.rgb = mix( diffuseColor.rgb, BR_DUST_COLOR, brDust );
+	brRoughTo = BR_DUST_ROUGH;
+	brRoughToW = max( brRoughToW, brDust );
+	brNrmScale *= 1.0 - 0.6 * brDust;
+	brMetal *= 1.0 - brDust;
+}
+#endif
 `;
 
-/** Replaces `#include <roughnessmap_fragment>`: ormh.g with Toksvig (filtered-normal variance) × wetness. */
+/** Replaces `#include <roughnessmap_fragment>`: ormh.g (or the props aux.x override) with layer-weighted Toksvig
+ * (filtered-normal variance), the two-lobe unmixing of bimodal layers, the grime multiplier and the wet / dust target. */
 export const FRAG_ROUGHNESS_GLSL = /* glsl */ `
-float brVar = clamp( ( 1.0 - brNLen ) / max( brNLen, 1e-3 ) - BR_TOKSVIG_DEADZONE, 0.0, BR_TOKSVIG_MAX_VAR );
+// Toksvig: the mip-filtered normal's shortening widens the lobe, weighted per layer (uBrLayerC.w < 1 where most of
+// that variance is structural: grout bevels, tilted tiles, joints, deck ribs)
+float brVar = clamp( ( 1.0 - brNLen ) / max( brNLen, 1e-3 ) - BR_TOKSVIG_DEADZONE, 0.0, BR_TOKSVIG_MAX_VAR ) * brLC.w;
 float brR = brOrmh.g;
-// props: a non-zero aux.x is a per-part roughness override (WP6: car paint, CRT glass, polished metal)
-if ( ( brF & BR_F_PROP_AUX ) != 0 && brAuxB.x > 0.5 ) brR = brAuxB.x / 255.0;
-float roughnessFactor = clamp( mix( sqrt( brR * brR + brVar ) * brRoughMul, brRoughTo, brRoughToW ), 0.02, 1.0 );
+// props: a non-zero aux.x is a per-part roughness override (WP6: car paint, CRT glass, polished metal); on emissive
+// parts aux.x is the emitter-profile parameter instead
+if ( ( brF & BR_F_PROP_AUX ) != 0 && brAuxB.x > 0.5 && vBrEmit <= 0.0 ) brR = brAuxB.x / 255.0;
+float brRt = sqrt( brR * brR + brVar );
+// two-lobe unmixing of bimodal layers (glaze + grout, wax + joints, polished terrazzo + pits): the mip-filtered
+// roughness is the coverage mixture (1 - c) gz + c rx, so c is the rough component's coverage (materialPost weights
+// the specular by 1 - c) and the lobe keeps the glaze's own roughness (plus the tilt share of the normal variance)
+// at every distance instead of averaging into satin. Texels glossier than gz keep their own value.
+float brCov = 0.0;
+vec4 brLE = uBrLayerE[ brL ];
+if ( brLE.x > 0.0 ) {
+	brCov = clamp( ( brOrmh.g - brLE.x ) / max( brLE.y - brLE.x, 1e-3 ), 0.0, 1.0 );
+	float brGz = min( brOrmh.g, brLE.x );
+	brRt = sqrt( brGz * brGz + BR_GLAZE_TOKSVIG * brVar );
+}
+float roughnessFactor = clamp( mix( brRt * brRoughMul, brRoughTo, brRoughToW ), 0.02, 1.0 );
 `;
 
 /** Replaces `#include <metalnessmap_fragment>`. */
@@ -426,8 +512,9 @@ float metalnessFactor = clamp( brMetal, 0.0, 1.0 );
 /** Replaces `#include <normal_fragment_maps>`. brNg = the unperturbed normal (the baked lighting divides by it). */
 export const FRAG_NORMAL_GLSL = /* glsl */ `
 vec3 brNg = normal;
+// cotangent frame of the material uv at main scope (also used by the emitter model, package C)
+mat3 brTbn = brTangentFrame( - vViewPosition, normal, vBrUv );
 {
-	mat3 brTbn = brTangentFrame( - vViewPosition, normal, vBrUv );
 	vec3 brMapN = vec3( brNrm.xy * brNrmScale, max( brNrm.z, 1e-3 ) );
 	normal = normalize( brTbn * brMapN );
 }
