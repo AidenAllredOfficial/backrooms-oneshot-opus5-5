@@ -10,6 +10,7 @@ import { DebugView } from '../../src/core/ids.ts';
 import { createGlobals } from '../../src/materials/MaterialSystem.ts';
 import { LAYER_LATE, MRT_PASS } from '../../src/materials/shared.ts';
 import { ScenePass } from '../../src/post/ScenePass.ts';
+import { ColorPyramid, MIP_DOWN_FRAG, mipSizes, PYR_LEVELS } from '../../src/post/frame/ColorPyramid.ts';
 import type { FrameContext } from '../../src/post/ScenePass.ts';
 
 interface Ev { e: string; target?: string; mask?: number; volOn?: number; mrtPass?: number; shadow?: boolean; locked?: boolean; clearColor?: boolean }
@@ -211,6 +212,89 @@ describe('ScenePass frame graph', () => {
   it('keeps the composer depth textures (needsDepthTexture)', () => {
     const t = setup(QUALITY.low);
     expect(t.pass.needsDepthTexture).toBe(true);
-    expect(t.pass.materials.map((m) => m.name)).toEqual(['br-pyramid-full', 'br-pyramid-box', 'br-mrt-composite']);
+    expect(t.pass.materials.map((m) => m.name)).toEqual(['br-pyramid-full', 'br-pyramid-box', 'br-pyramid-down', 'br-mrt-composite']);
+  });
+});
+
+describe('ColorPyramid mip chain', () => {
+  it('allocates PYR_LEVELS floor-halved levels, and again after a resize', () => {
+    const p = new ColorPyramid();
+    p.setSize(1920, 1080, 1);
+    const mips = p.texture.mipmaps as unknown as { width: number; height: number }[];
+    expect(mips.map((m) => [m.width, m.height])).toEqual(mipSizes(1920, 1080, PYR_LEVELS));
+    expect(mips.length).toBe(PYR_LEVELS);
+    expect([mips[7].width, mips[7].height]).toEqual([15, 8]);
+    expect(p.texture.generateMipmaps).toBe(false);
+    p.setSize(8, 4, 1);
+    expect((p.texture.mipmaps as unknown[]).length).toBe(4);
+    expect(mipSizes(2401, 1351)).toHaveLength(12);
+    expect(mipSizes(3, 1)).toEqual([[3, 1], [1, 1]]);
+  });
+
+  it('renders level k from level k - 1 into a scratch of its size and blits it into level k (never self-sampling)', () => {
+    const log: string[] = [];
+    const tex = {};
+    const gl = {
+      TEXTURE_2D: 0xde1, TEXTURE_MAX_LEVEL: 0x813d, READ_FRAMEBUFFER: 0x8ca8, DRAW_FRAMEBUFFER: 0x8ca9, COLOR_BUFFER_BIT: 0x4000,
+      NEAREST: 0x2600,
+      texParameteri(_t: number, p: number, v: number) { log.push(`${p === 0x813d ? 'max' : p}=${v}`); },
+      blitFramebuffer(_x0: number, _y0: number, w: number, h: number) { log.push(`blit:${read}->${draw}:${w}x${h}`); },
+    };
+    let read = '', draw = '';
+    const p = new ColorPyramid();
+    p.setSize(64, 32, 1);
+    const fbOf = new Map<object, unknown>();
+    const renderer = {
+      getContext: () => gl,
+      properties: {
+        get: (o: object) => {
+          if (o === p.texture) return { __webglTexture: tex };
+          if (o === p.target) return { __webglFramebuffer: [0, 1, 2, 3, 4, 5, 6].map((k) => `L${k}`) };
+          if (!fbOf.has(o)) fbOf.set(o, { __webglFramebuffer: (o as THREE.WebGLRenderTarget).texture.name });
+          return fbOf.get(o);
+        },
+      },
+      state: {
+        bindTexture(_t: number, t: object) { if (t !== tex) log.push('bind:other'); },
+        bindFramebuffer(target: number, fb: string | null) { if (target === gl.READ_FRAMEBUFFER) read = fb ?? ''; else draw = fb ?? ''; },
+      },
+      setRenderTarget(t: THREE.WebGLRenderTarget | null, _face = 0, level = 0) {
+        log.push(t ? `rt:${t.texture.name}@${level}:${t.viewport.z}x${t.viewport.w}` : 'rt:null');
+      },
+      render(sc: THREE.Scene) {
+        const m = (sc.children[0] as THREE.Mesh).material as THREE.ShaderMaterial;
+        log.push(`draw:${m.name}${m.uniforms.uLod ? `:lod${m.uniforms.uLod.value}` : ''}`);
+      },
+    };
+    p.build(renderer as unknown as THREE.WebGLRenderer, new THREE.Texture(), new THREE.Texture(), new THREE.PerspectiveCamera());
+    const level = (k: number, w: number, h: number): string[] => [
+      `rt:br-pyramid-down.${k}@0:${w}x${h}`, `draw:br-pyramid-down:lod${k - 1}`, `blit:br-pyramid-down.${k}->L${k}:${w}x${h}`,
+    ];
+    expect(log).toEqual([
+      'rt:Frame.ColorPyramid@0:64x32', 'draw:br-pyramid-full',
+      // the levels past the chain are not allocated: sampling stops at its last level
+      'max=6',
+      ...level(1, 32, 16), ...level(2, 16, 8), ...level(3, 8, 4), ...level(4, 4, 2), ...level(5, 2, 1), ...level(6, 1, 1),
+      'rt:null',
+    ]);
+    let freed = 0;
+    for (const t of fbOf.keys()) (t as THREE.WebGLRenderTarget).addEventListener('dispose', () => { freed++; });
+    p.release();
+    expect(freed).toBe(6);
+  });
+
+  it('the downsample is the binomial [1 3 3 1] / 8 in fp32 (4 bilinear taps 0.75 texels off centre), clamped', () => {
+    expect(MIP_DOWN_FRAG).toContain('vec2 o = 0.75 * uSrcInv;');
+    expect(MIP_DOWN_FRAG.match(/textureLod\( tSrc, uv \+ vec2\( [-o. xy,]+\), uLod \)/g)).toHaveLength(4);
+    expect(MIP_DOWN_FRAG).toContain('outColor = vec4( min( c.rgb, vec3( uMax ) ), c.a );');
+    // per axis: the level-k texel's centre lies on a source texel boundary (0); bilinear taps at -0.75 and +0.75,
+    // each weighing 1/2, split between the source texel centres at -1.5, -0.5, 0.5, 1.5
+    const w = [0, 0, 0, 0];
+    for (const x of [-0.75, 0.75]) {
+      const i = Math.floor(x + 1.5), f = x + 1.5 - i;
+      w[i] += 0.5 * (1 - f);
+      w[i + 1] += 0.5 * f;
+    }
+    expect(w).toEqual([1 / 8, 3 / 8, 3 / 8, 1 / 8]);
   });
 });
