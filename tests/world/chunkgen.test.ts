@@ -39,6 +39,22 @@ describe('generateChunk', () => {
     expect(layoutHash(l)).toBe(l.hash);
   });
 
+  it('validates every layout it returns under vitest: a failing validateLayout throws', () => {
+    // chunkgen.ts takes test mode from import.meta.env (Vite) or, under vitest's native loading, from its worker env.
+    // Without it no chunk generated anywhere in the suite would be validated.
+    const g = createWorldGen(opts(5));
+    const districtAt = g.districtAt;
+    // validateLayout(l, facade) checks the layout's zone against facade.districtAt: make the two disagree
+    (g as { districtAt: typeof districtAt }).districtAt = (s, cx, cz) => ({ ...districtAt(s, cx, cz), zone: ZONE_COUNT as ZoneId });
+    const saved = process.env.WORLD_VALIDATE;
+    delete process.env.WORLD_VALIDATE;
+    try {
+      expect(() => g.generateChunk({ s: 0, cx: 3, cz: 3 })).toThrow(/zone \/ district differ from districtAt/);
+    } finally {
+      if (saved !== undefined) process.env.WORLD_VALIDATE = saved;
+    }
+  });
+
   it('writes the district palette per cell (wallMat / trimMat) and the hash covers them', () => {
     const g = createWorldGen(opts(5));
     for (let i = 0; i < 12; i++) {
