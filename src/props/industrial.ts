@@ -10,6 +10,9 @@ import { bevelBox, box, cylinder, extrude, hexa, lathe, rect, SKIP, sweep, torus
 
 type RGB = readonly [number, number, number];
 const KRAFT: RGB = [0.4, 0.28, 0.15];
+/** Kraft board: the PLASTIC layer (smooth at every scale) at a paper's matte roughness. The DRYWALL layer's knockdown
+ * spatter is wall texture: on a 0.5 m box it reads as stucco. */
+const kraft = (b: PartBuilder, r: number, g: number, bl: number): void => b.mat(Mat.PLASTIC, r, g, bl, 0, 0.85);
 const RACK_BLUE: RGB = [0.04, 0.1, 0.3];
 const RACK_ORANGE: RGB = [0.55, 0.16, 0.02];
 
@@ -115,7 +118,7 @@ function beam(b: PartBuilder, len: number): void {
   bevelBox(b, 0, -0.06, -0.025, len, 0.06, 0.025, 0.008);
 }
 function cardboardLoad(b: PartBuilder, x: number, y: number, z: number, sx: number, sy: number, sz: number, tone: number): void {
-  b.mat(Mat.DRYWALL, KRAFT[0] * tone, KRAFT[1] * tone, KRAFT[2] * tone);
+  kraft(b, KRAFT[0] * tone, KRAFT[1] * tone, KRAFT[2] * tone);
   box(b, x - sx / 2, y, z - sz / 2, x + sx / 2, y + sy, z + sz / 2, SKIP.NY);
 }
 const RACK_LEVELS = [1.2, 2.4, 3.6];
@@ -378,20 +381,20 @@ export const cardboardBox: PropBuild = (b, v, seed) => {
   if (v === 1) {
     // open box: outer walls, a rim closing the 4 mm wall thickness, inner walls and bottom, 4 flaps folded out
     const W = 0.2, D = 0.15, H = 0.3, t = 0.004;
-    b.mat(Mat.DRYWALL, c[0], c[1], c[2]);
+    kraft(b, c[0], c[1], c[2]);
     box(b, -W, 0, -D, W, H, D, SKIP.NY | SKIP.PY);
     // rim (top edge of the corrugated board)
     rect(b, 0, H, -D + t / 2, W, 0, 0, 0, 0, t / 2, 0, 1, 0);
     rect(b, 0, H, D - t / 2, W, 0, 0, 0, 0, t / 2, 0, 1, 0);
     rect(b, -W + t / 2, H, 0, t / 2, 0, 0, 0, 0, D - t, 0, 1, 0);
     rect(b, W - t / 2, H, 0, t / 2, 0, 0, 0, 0, D - t, 0, 1, 0);
-    b.mat(Mat.DRYWALL, c[0] * 0.6, c[1] * 0.6, c[2] * 0.6);
+    kraft(b, c[0] * 0.6, c[1] * 0.6, c[2] * 0.6);
     rect(b, 0, H / 2, -D + t, W - t, 0, 0, 0, H / 2, 0, 0, 0, 1);
     rect(b, 0, H / 2, D - t, W - t, 0, 0, 0, H / 2, 0, 0, 0, -1);
     rect(b, -W + t, H / 2, 0, 0, 0, D - t, 0, H / 2, 0, 1, 0, 0);
     rect(b, W - t, H / 2, 0, 0, 0, D - t, 0, H / 2, 0, -1, 0, 0);
     rect(b, 0, 0.004, 0, W - t, 0, 0, 0, 0, D - t, 0, 1, 0);
-    b.mat(Mat.DRYWALL, c[0], c[1], c[2]);
+    kraft(b, c[0], c[1], c[2]);
     // flaps: hinged on the rim, folded out and down; a = elevation above horizontal. Two faces 4 mm apart (the
     // board thickness) so the two sides never share a plane.
     const flap = (k: number, hx: number, hz: number, ox: number, oz: number, half: number, len: number): void => {
@@ -413,7 +416,7 @@ export const cardboardBox: PropBuild = (b, v, seed) => {
     flap(4, W, 0, 1, 0, D, 0.05);
     return;
   }
-  b.mat(Mat.DRYWALL, c[0], c[1], c[2]);
+  kraft(b, c[0], c[1], c[2]);
   if (v === 3) {
     // crushed: sheared and squashed
     const s = rndRange(seed, 1, 0.03, 0.06);

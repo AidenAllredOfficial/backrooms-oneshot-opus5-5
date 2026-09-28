@@ -111,8 +111,8 @@ export const bottle: PropBuild = (b, v) => {
   const g = GLASS[v];
   b.mat(Mat.PLASTIC, g[0], g[1], g[2], VFlag.NO_GRIME, 0.06);
   lathe(b, [0, 0, 0.036, 0, 0.036, 0.19, 0.03, 0.225, 0.014, 0.25, 0.014, 0.285, 0.016, 0.3, 0, 0.3], 8, 0);
-  // paper label
-  b.mat(Mat.DRYWALL, v === 2 ? 0.05 : 0.5, v === 2 ? 0.15 : 0.45, v === 2 ? 0.45 : 0.35);
+  // paper label: the PLASTIC layer (smooth) at a paper's matte roughness (DRYWALL's knockdown spatter is wall texture)
+  b.mat(Mat.PLASTIC, v === 2 ? 0.05 : 0.5, v === 2 ? 0.15 : 0.45, v === 2 ? 0.45 : 0.35, 0, 0.85);
   lathe(b, [0.0368, 0.07, 0.0368, 0.15], 8, 0);
 };
 
