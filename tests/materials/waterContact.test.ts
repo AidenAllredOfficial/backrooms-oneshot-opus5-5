@@ -74,8 +74,9 @@ const scenePos = (uv: THREE.Vector2): THREE.Vector3 => {
   return viewPos(c, sceneZ(c));
 };
 
-/** twin of brWRefract (the GLSL above, step for step); edgeAxis = brWEdgeAxis's answer (the analytic pool's rims
- * run along x: 1) */
+/** twin of brWRefract (the GLSL above, step for step) for a scene without things on the water (brWOnWater is never
+ * true: no float skip, no strip; the analytic pool has none); edgeAxis = brWEdgeAxis's answer (the analytic pool's
+ * rims run along x: 1) */
 function refractMarch(P: THREE.Vector3, Tv: THREE.Vector3, Lf: number, upV: THREE.Vector3, steps: number, edgeAxis = 1): { L: number; uv: THREE.Vector2; hit: boolean } {
   const at = (t: number): THREE.Vector3 => P.clone().addScaledVector(Tv, t);
   const Xf = at(Lf), uvf = projUv(Xf);
@@ -251,7 +252,14 @@ describe('refracted-ray march against the pyramid depth (brWRefract twin)', () =
     expect(g).toContain('vec3 Xs = Lp * ( fh / lh );');
     expect(g).toContain('vec3 Xm = Xf - 2.0 * min( dot( Xf - Xs, nH ), 0.0 ) * nH;');
     expect(g).toContain('if ( brWOnScreen( uvW ) && dot( brWScenePos( uvW ) - P, upV ) < 0.0 ) q = uvW * ps;');
-    expect(g).toContain('uvH = dot( brWScenePos( uvM ) - P, upV ) < 0.0 ? uvM : uvA;');
+    expect(g).toContain('uvH = dot( brWScenePos( uvM ) - P, upV ) < 0.0 && ! ( tB1 > 0.0 && brWOnWater( uvM, P, upV, pl, hS ) ) ? uvM : uvA;');
+    // things on the water (floats): passed behind while the ray goes on; a hit the texel shows as that thing is hidden
+    // by it; behind it the two sides of the strip are blended; only the screen-edge mirror is vetted
+    expect(g).toContain('if ( d < - BR_WTHIN && brWOnWater( uv, P, upV, pl, hS ) ) {');
+    expect(g).toContain('if ( tB < 0.0 && behind ) { tA = tA1; tB = tB1; uvA = uvA1; uvX = uvX1; off = false; }');
+    expect(g).toContain('if ( tB1 < 0.0 || ! brWOnWater( uvH, P, upV, pl, hS ) ) { hit = 1.0; return t; }');
+    expect(g).toContain('for ( int k = 0; k < ( brWOnWater( uvX, P, upV, pl, hS ) ? 7 : 0 ); k ++ ) {');
+    expect(g).toContain('if ( off ) alt = vec4( uvR, 0.0, 1.0 );');
     expect(g).toContain('float t = tA + ( tB - tA ) * dA / max( dA - dB, 1e-5 );');
   });
 

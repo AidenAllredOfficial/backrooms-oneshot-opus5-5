@@ -73,6 +73,24 @@ export const WATER_SURFACE = {
   /** the water right at a contact is shaded by the wall above it (fraction lost within CONTACT_W m) */
   CONTACT_SHADOW: 0.3,
   CONTACT_W: 0.03,
+  // ---- refraction stand-ins (brWRefract / brWVolume): the screen-edge mirror copies content from beside the edge;
+  // where it or its neighbourhood is STANDIN_K0..K1 times brighter (luma) than the scene where the ray's image left the
+  // screen (both the pyramid at mip STANDIN_LOD), its luma is clamped to within STANDIN_K of that scene's: no second
+  // copy of a wall lamp and its bezel near the screen's bottom edge beside the lamp's own refracted image
+  STANDIN_K0: 1.5,
+  STANDIN_K1: 2.5,
+  STANDIN_K: 1.15,
+  STANDIN_LOD: 3,
+  /** the reference is raised to the stand-in's own surroundings (the least bright of 4 taps STANDIN_R of the screen
+   * height away, same mip: the wall around a lamp's copy, lit by the lamp), at most STANDIN_CAP x the exit scene: the
+   * exit scene alone is darker there, and the copy turned into a flat dark hole in the wall */
+  STANDIN_R: 0.04,
+  STANDIN_CAP: 2,
+  /** a thing on the water (a lane-rope float) reaches this deep below the surface (m; at most half the water's
+   * depth): past it the scene counts as visible again, its submerged half is not the floor */
+  STRIP_DEPTH: 0.15,
+  /** the refraction march passes behind a thing on the water it lies more than this far behind (m; floats) */
+  THIN: 0.25,
 } as const;
 
 export interface Wave { mx: number; mz: number; kx: number; kz: number; k: number; lambda: number; phase: number }
@@ -344,8 +362,17 @@ vec4 brWaterFlecks( vec2 pw, float t, int kind, float fpx ) {
  * nearest UNDERWATER lamps scattered toward the eye (6-sample integrals, the dual-lobe phase brPhaseW).
  */
 export function waterVolumeGlsl(): string {
+  const W = WATER_SURFACE;
   return /* glsl */ `
 #ifdef BR_WATER_REFRACT
+#define BR_WSTAND_K0 ${f(W.STANDIN_K0)}
+#define BR_WSTAND_K1 ${f(W.STANDIN_K1)}
+#define BR_WSTAND_K ${f(W.STANDIN_K)}
+#define BR_WSTAND_LOD ${f(W.STANDIN_LOD)}
+#define BR_WSTAND_R ${f(W.STANDIN_R)}
+#define BR_WSTAND_CAP ${f(W.STANDIN_CAP)}
+#define BR_WSTRIP_DEPTH ${f(W.STRIP_DEPTH)}
+#define BR_WTHIN ${f(W.THIN)}
 // view-space point -> pyramid uv (the pyramid spans the whole view at any scale)
 vec2 brWProj( vec3 X ) { vec4 c = projectionMatrix * vec4( X, 1.0 ); return c.xy / c.w * 0.5 + 0.5; }
 // linear view depth of the opaque scene at uv: the nearest level-0 texel (never filtered)
@@ -392,13 +419,27 @@ int brWEdgeAxis( vec2 p, vec2 dir, float wy ) {
 	return 0;
 }
 
+// Does the pyramid texel at uv show a thing on the water (a lane-rope float, a ladder's rail, a lounger in a flooded
+// room): its surface point lies from hS below to 1.2 m above the surface of the fragment P (tile-local xz pl) over a
+// cell holding water? The deck at a pool's lip does not (its cell is dry).
+bool brWOnWater( vec2 uv, vec3 P, vec3 upV, vec2 pl, float hS ) {
+	vec3 S = brWScenePos( uv ) - P;
+	float h = dot( S, upV );
+	float wyn;
+	int kn;
+	return h > - hS && h < 1.2 && brWaterCell( ivec2( floor( ( pl + ( vec4( S, 0.0 ) * viewMatrix ).xz ) / BR_CELL ) ), wyn, kn );
+}
+
 // The refracted view ray from P (view space, on the surface) along Tv (unit); Lf = the path to the rect's flat floor
 // (D / cos theta_t; rects are single-depth), upV = world up in view space, pl / wy = the fragment's tile-local xz and
 // surface height. Returns the path length L in the water to what the ray reaches and its pyramid uv (uvH); hit = 0 when
 // the ray left the screen or passed behind something above the water (the deck lip, a lounger: no data behind it; the
-// floor under a near rim is only visible through the refraction): then L is the flat-floor path and uvH the target
-// reflected back across the line it disappeared behind (see below).
-float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out vec2 uvH, out float hit ) {
+// floor under a near rim is only visible through the refraction): then L is the flat-floor path and uvH a stand-in (see
+// below), which brWVolume takes by alt.w: 0 = as is; 1 = the target mirrored at the screen's edge, vetted against the
+// scene at alt.xy (where the ray's image left the screen); 2 = behind a thing on the water, the scene at uvH
+// (past its far side) blended with the scene at alt.xy (past its near side) by alt.z.
+float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out vec2 uvH, out float hit, out vec4 alt ) {
+	alt = vec4( 0.0 );
 	// fast path: the flat floor, unless something in front of it covers that point (the texel there shows a surface
 	// point off the floor plane)
 	vec3 Xf = P + Tv * Lf;
@@ -407,10 +448,16 @@ float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out ve
 	// linear march (1.2 Lf: floors lower than the rect's own under steps and ladders) to the first sample behind the
 	// scene, 3 bisections to the crossing, then: behind something above the water (hidden) or on what the ray reaches
 	// under the water (the secant). Classifying the coarse step instead stair-stepped the underwater walls beside
-	// above-water ones (a step past the wall projects onto its part above the water)
-	float tA = 0.0, dA = 1.0, tB = - 1.0, dB = 0.0;
-	vec2 uvA = brWProj( P ), uvX = uvA;
-	bool off = false;
+	// above-water ones (a step past the wall projects onto its part above the water). A sample more than BR_WTHIN
+	// behind a thing on the water (brWOnWater: a lane-rope float nearer the eye, its submerged half too; the ray is
+	// under the water far beyond it) passes behind it and the march goes on; only a ray that ends behind
+	// such a thing is hidden by its first crossing (the lip of a pool's near side hides the whole rest of the ray): one
+	// that came out beyond it is classified as its neighbours are. Stopping at the float drew a stand-in patch (a copy
+	// of its outline) beyond every float.
+	float hS = min( BR_WSTRIP_DEPTH, 0.5 * Lf * max( - dot( Tv, upV ), 0.05 ) ); // shallower: at the surface (a float)
+	float tA = 0.0, dA = 1.0, tB = - 1.0, dB = 0.0, tA1 = 0.0, tB1 = - 1.0;
+	vec2 uvP = brWProj( P ), uvA = uvP, uvX = uvP, uvA1 = uvP, uvX1 = uvP;
+	bool off = false, behind = false;
 	hit = 0.0;
 	for ( int i = 1; i <= BR_WATER_REFRACT; i ++ ) {
 		float t = 1.2 * Lf * float( i ) / float( BR_WATER_REFRACT );
@@ -418,38 +465,55 @@ float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out ve
 		vec2 uv = brWProj( X );
 		if ( ! brWOnScreen( uv ) ) { off = true; break; }
 		float d = brWSceneZ( uv ) + X.z; // > 0: the ray is still in front of the scene
+		if ( d < - BR_WTHIN && brWOnWater( uv, P, upV, pl, hS ) ) {
+			if ( tB1 < 0.0 ) { tA1 = tA; tB1 = t; uvA1 = uvA; uvX1 = uv; }
+			behind = true;
+			continue;
+		}
 		if ( d <= 0.0 ) { tB = t; dB = d; uvX = uv; break; }
 		tA = t;
 		dA = d;
 		uvA = uv;
+		behind = false;
 	}
-	bool hidden = off || tB < 0.0;
+	if ( tB < 0.0 && behind ) { tA = tA1; tB = tB1; uvA = uvA1; uvX = uvX1; off = false; }
+	bool hidden = off || tB < 0.0 || tB == tB1;
 	if ( ! hidden ) {
 		for ( int k = 0; k < 3; k ++ ) {
 			float tm = 0.5 * ( tA + tB );
 			vec3 X = P + Tv * tm;
 			vec2 uv = brWProj( X );
 			float d = brWSceneZ( uv ) + X.z;
-			if ( d <= 0.0 ) { tB = tm; dB = d; uvX = uv; } else { tA = tm; dA = d; uvA = uv; }
+			if ( d <= 0.0 && ( d >= - BR_WTHIN || ! brWOnWater( uv, P, upV, pl, hS ) ) ) { tB = tm; dB = d; uvX = uv; }
+			else if ( d > 0.0 ) { tA = tm; dA = d; uvA = uv; }
+			else tA = tm; // behind a thing on the water: before the crossing, keep the last clearance
 		}
 		hidden = dot( brWScenePos( uvX ) - P, upV ) > 0.01;
 	}
 	if ( ! hidden ) {
 		float t = tA + ( tB - tA ) * dA / max( dA - dB, 1e-5 );
 		uvH = brWProj( P + Tv * t );
-		hit = 1.0;
-		return t;
+		if ( tB1 < 0.0 || ! brWOnWater( uvH, P, upV, pl, hS ) ) { hit = 1.0; return t; }
+		// what the ray reached lies behind the float it passed (the texel shows the float): hidden by that crossing
+		tA = tA1; tB = tB1; uvA = uvA1; uvX = uvX1; off = false;
 	}
 	// The target is not in the pyramid. Stand-in: the target reflected back across the line it disappeared behind,
 	// i.e. the floor as far in front of that line as the target lies behind it. A reflection keeps the waves' lensing
 	// at its true strength and is continuous where the target reappears (points on the line map to themselves).
-	// Off screen the line is the screen's edge. Behind the lip of a pool's near side (the rim's axis from brWEdgeAxis)
-	// the flat-floor target is mirrored ON THE FLOOR across the lip's shadow line (the lip point at the crossing,
-	// bisected down to a texel, projected from the eye onto the floor plane): floor maps to floor at its true
+	// Off screen the line is the screen's edge. Behind a thing on the water (a lane-rope float, a ladder's rail; found
+	// first, below) the scene on its two sides is blended instead. Behind the lip of a pool's near side (the rim's axis
+	// from brWEdgeAxis) the flat-floor target is mirrored ON THE FLOOR across the lip's shadow line (the lip point at the
+	// crossing, bisected down to a texel, projected from the eye onto the floor plane): floor maps to floor at its true
 	// perspective, so a deep pool's wide hidden band shows the visible floor beyond the shadow, not pool content from
 	// across the screen; where that lands on nothing under the water, the lip's image line in screen space is the
-	// mirror. Anything else (no rim in reach: a float, a lounger, a ladder) mirrors the target about the crossing point.
+	// mirror. Anything else (no rim in reach: a lounger) mirrors the target about the crossing point. The screen-edge
+	// mirror copies content from beside the edge: a wall lamp there (beside its own refracted image) would show twice,
+	// with its bezel, so brWVolume vets that stand-in against the scene where the ray's image left the screen (uvR).
+	// (The last visible texel before a lip, in the lip's shade, is no reference for the floor mirrored beyond it.)
 	vec2 uvM = 1.0 - abs( 1.0 - abs( uvf ) ); // folded back into the screen
+	vec2 dU = uvf - uvP;
+	vec2 sE = mix( uvP, 1.0 - uvP, vec2( greaterThan( dU, vec2( 0.0 ) ) ) ) / max( abs( dU ), vec2( 1e-6 ) );
+	vec2 uvR = uvP + dU * clamp( min( sE.x, sE.y ), 0.0, 1.0 ); // where the ray's image left the screen
 	if ( ! off && tB > 0.0 ) {
 		vec2 ps = vec2( textureSize( uSceneColor, 0 ) );
 		float tH = tB;
@@ -462,6 +526,32 @@ float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out ve
 			if ( brWOnScreen( uv ) && brWSceneZ( uv ) + X.z > 0.0 ) { tA = tm; uvA = uv; } else { tH = tm; uvX = uv; }
 		}
 		vec2 qB = 0.5 * ( uvA + uvX ) * ps, qf = uvf * ps;
+		// a thing on the water (a lane-rope float, a ladder's rail) hides a narrow strip: past its near side
+		// along the ray's image (doubling steps up to 64 texels, 3 bisections) the scene under the water is visible
+		// again, and the scene just outside each side (1.5 texels, or the flat-floor target where it lies outside:
+		// what the neighbours show) is blended by the flat-floor target's position across the strip (a mirror cannot
+		// match both edges of so narrow a strip: it drew each float's outline beyond it; a rim in reach does not decide
+		// it, lane ropes run within 4 cells of one). Visible = deeper than hS below the surface: a float's submerged
+		// half is not the floor. Only behind a thing on the water (brWOnWater), not the deck at a lip.
+		vec2 dn = normalize( ( uvX - uvA ) * ps + vec2( 0.0, 1e-6 ) );
+		float sIn = 0.0, sOut = - 1.0; // texels past qB: the last inside the strip, the first beyond it
+		for ( int k = 0; k < ( brWOnWater( uvX, P, upV, pl, hS ) ? 7 : 0 ); k ++ ) {
+			float s = exp2( float( k ) );
+			vec2 uv = ( qB + dn * s ) / ps;
+			if ( ! brWOnScreen( uv ) ) break;
+			if ( dot( brWScenePos( uv ) - P, upV ) < - hS ) { sOut = s; break; }
+			sIn = s;
+		}
+		if ( sOut > 0.0 ) {
+			for ( int k = 0; k < 3; k ++ ) {
+				float s = 0.5 * ( sIn + sOut );
+				if ( dot( brWScenePos( ( qB + dn * s ) / ps ) - P, upV ) < - hS ) sOut = s; else sIn = s;
+			}
+			float sf = dot( qf - qB, dn );
+			uvH = clamp( ( qB + min( sf, - 1.5 ) * dn ) / ps, vec2( 0.0 ), vec2( 1.0 ) );
+			alt = vec4( clamp( ( qB + max( sf, sOut + 1.5 ) * dn ) / ps, vec2( 0.0 ), vec2( 1.0 ) ), clamp( sf / sOut, 0.0, 1.0 ), 2.0 );
+			return Lf;
+		}
 		vec2 q = 2.0 * qB - qf; // point mirror
 		vec2 eye = ( vec4( - P, 0.0 ) * viewMatrix ).xz; // horizontal, toward the eye
 		int ax = brWEdgeAxis( pl, eye / max( length( eye ), 1e-5 ), wy );
@@ -487,32 +577,67 @@ float brWRefract( vec3 P, vec3 Tv, float Lf, vec3 upV, vec2 pl, float wy, out ve
 		}
 		uvM = clamp( q / ps, vec2( 0.0 ), vec2( 1.0 ) );
 	}
-	// keep the last visible sample where the stand-in lands on something above the water (a pool narrower than the band)
-	uvH = dot( brWScenePos( uvM ) - P, upV ) < 0.0 ? uvM : uvA;
+	// keep the last visible sample where the stand-in lands on something above the water (a pool narrower than the
+	// band) or, for a ray that passed behind a float, on the float
+	uvH = dot( brWScenePos( uvM ) - P, upV ) < 0.0 && ! ( tB1 > 0.0 && brWOnWater( uvM, P, upV, pl, hS ) ) ? uvM : uvA;
+	if ( off ) alt = vec4( uvR, 0.0, 1.0 );
 	return Lf;
 }
 
-// Radiance leaving the water body toward the surface (before the interface): the scene at uvH through the medium of
-// the kind over the refracted path L (cosT = its cosine to the vertical), lit ambiently by irr (lux). st = the
-// extinction (for the in-water light integrals).
-vec3 brWVolume( vec2 uvH, float L, float cosT, int kind, vec3 irr, out vec3 st ) {
+// The scene at pyramid uv, sharp (cs; a = its linear depth) and through the kind's forward-scattering blur over the
+// path L (Cb)
+void brWSceneCol( vec2 uv, float L, int kind, out vec4 cs, out vec3 Cb ) {
+	cs = textureLod( uSceneColor, uv, 0.0 );
+	Cb = cs.rgb;
+	float blur = BR_WM_BLUR[ kind ];
+	if ( blur > 0.0 ) {
+		// the forward-scattered spread (a random walk: blur sqrt(ss L) L metres) seen at the hit's depth, in pyramid
+		// texels -> the mip
+		float r = blur * sqrt( BR_WM_SS[ kind ] * L ) * L;
+		float px = r / max( cs.a, 0.05 ) * 0.5 * projectionMatrix[ 1 ][ 1 ] / uSceneInvSize.y;
+		vec4 cb = textureLod( uSceneColor, uv, clamp( log2( max( px, 1.0 ) ), 0.0, 6.0 ) );
+		// the mips average across silhouettes (the deck beside the water): fall back where their depth disagrees
+		Cb = mix( cs.rgb, cb.rgb, 1.0 - smoothstep( 0.1, 0.35, abs( cb.a - cs.a ) / max( cs.a, 0.05 ) ) );
+	}
+}
+
+// Radiance leaving the water body toward the surface (before the interface): the scene at uvH (a stand-in by alt.w,
+// brWRefract) through the medium of the kind over the refracted path L (cosT = its cosine to the vertical), lit
+// ambiently by irr (lux). Where the screen-edge mirror or its neighbourhood (mip BR_WSTAND_LOD) is BR_WSTAND_K0..K1
+// times brighter than the reference (the scene where the ray's image left the screen, alt.xy, same mip, raised to the
+// stand-in's own surroundings: up to BR_WSTAND_CAP x), its luma is clamped to within BR_WSTAND_K of the reference, hue
+// kept: a copy of a lamp and of its dark bezel fades into the stand-in's texture, which stays elsewhere (a clamp
+// everywhere drew streaks along the rays). Behind a thing on the water (alt.w = 2) the
+// two sides' colours are blended by alt.z. st = the extinction (for the in-water light integrals).
+vec3 brWVolume( vec2 uvH, vec4 alt, float L, float cosT, int kind, vec3 irr, out vec3 st ) {
 	vec3 sa = BR_WM_SA[ kind ];
 	float ss = BR_WM_SS[ kind ];
 	st = sa + ss;
 	vec3 kap = sa + ( 1.0 - BR_WM_G[ kind ] ) * ss; // transport: what forward scattering keeps in the beam
 	vec3 Tu = exp( - st * L ); // unscattered: sharp
 	vec3 Tf = max( exp( - kap * L ) - Tu, vec3( 0.0 ) ); // scattered forward: arrives blurred
-	vec4 cs = textureLod( uSceneColor, uvH, 0.0 );
-	vec3 Cb = cs.rgb;
-	float blur = BR_WM_BLUR[ kind ];
-	if ( blur > 0.0 ) {
-		// the forward-scattered spread (a random walk: blur sqrt(ss L) L metres) seen at the hit's depth, in pyramid
-		// texels -> the mip
-		float r = blur * sqrt( ss * L ) * L;
-		float px = r / max( cs.a, 0.05 ) * 0.5 * projectionMatrix[ 1 ][ 1 ] / uSceneInvSize.y;
-		vec4 cb = textureLod( uSceneColor, uvH, clamp( log2( max( px, 1.0 ) ), 0.0, 6.0 ) );
-		// the mips average across silhouettes (the deck beside the water): fall back where their depth disagrees
-		Cb = mix( cs.rgb, cb.rgb, 1.0 - smoothstep( 0.1, 0.35, abs( cb.a - cs.a ) / max( cs.a, 0.05 ) ) );
+	vec4 cs;
+	vec3 Cb;
+	brWSceneCol( uvH, L, kind, cs, Cb );
+	if ( alt.w > 1.5 ) {
+		vec4 cs2;
+		vec3 Cb2;
+		brWSceneCol( alt.xy, L, kind, cs2, Cb2 );
+		cs.rgb = mix( cs.rgb, cs2.rgb, alt.z );
+		Cb = mix( Cb, Cb2, alt.z );
+	}
+	if ( alt.w > 0.5 && alt.w < 1.5 ) {
+		float lR = brLuma( textureLod( uSceneColor, alt.xy, BR_WSTAND_LOD ).rgb ) + 1e-4;
+		vec2 o = BR_WSTAND_R * vec2( uSceneInvSize.x / uSceneInvSize.y, 1.0 );
+		float lG = min(
+			min( brLuma( textureLod( uSceneColor, uvH + vec2( o.x, 0.0 ), BR_WSTAND_LOD ).rgb ), brLuma( textureLod( uSceneColor, uvH - vec2( o.x, 0.0 ), BR_WSTAND_LOD ).rgb ) ),
+			min( brLuma( textureLod( uSceneColor, uvH + vec2( 0.0, o.y ), BR_WSTAND_LOD ).rgb ), brLuma( textureLod( uSceneColor, uvH - vec2( 0.0, o.y ), BR_WSTAND_LOD ).rgb ) ) );
+		lR = clamp( lG, lR, BR_WSTAND_CAP * lR ); // the stand-in's own surroundings, within [1, CAP] x the exit scene
+		float lS = brLuma( cs.rgb ) + 1e-4, lB = brLuma( Cb ) + 1e-4;
+		float lD = brLuma( textureLod( uSceneColor, uvH, BR_WSTAND_LOD ).rgb ); // the stand-in's neighbourhood
+		float v = smoothstep( BR_WSTAND_K0, BR_WSTAND_K1, max( lD, lS ) / lR );
+		cs.rgb *= mix( 1.0, clamp( lS, lR / BR_WSTAND_K, lR * BR_WSTAND_K ) / lS, v );
+		Cb *= mix( 1.0, clamp( lB, lR / BR_WSTAND_K, lR * BR_WSTAND_K ) / lB, v );
 	}
 	// ambient light scattered into the path: source ss PHI E / pi, attenuated on the way down to the depth s cos(theta_t)
 	// (1.25 kappa per metre of depth: diffuse downwelling) and on the way back up to the surface; closed form
@@ -572,8 +697,8 @@ vec3 brWaterTorch( vec3 P, vec3 Tv, float L, float cosT, vec3 upV, vec3 st, int 
 #endif
 // The nearest UNDERWATER lamps (water/underwaterLights.ts: camera-relative position, facing, colour x cd) scattered
 // toward the eye along [0, L]: Lambertian lamps; the substitution s = tc + h tan(th) makes the inverse-square
-// integrand smooth (as brAirlight), 6 samples per lamp; lamps farther than 2.5 m from the segment are skipped (their
-// glow there is under ~1 % of the lit pool floor).
+// integrand smooth (as brAirlight), 6 samples per lamp; a lamp's glow fades out between 2.5 and 4 m from the segment
+// (there it is a few % of the lit pool floor: a hard cut would draw a ring around the 6000-nit pool lights).
 vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
 	vec3 acc = vec3( 0.0 );
 	mat3 R = mat3( viewMatrix );
@@ -583,7 +708,7 @@ vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
 		vec3 n = R * uUwDir[ i ].xyz;
 		float tc = dot( Q - P, Tv );
 		float h = max( length( Q - P - Tv * tc ), uUwDir[ i ].w );
-		if ( h > 2.5 ) continue;
+		if ( h > 4.0 ) continue;
 		float a0 = atan( - tc / h ), a1 = atan( ( L - tc ) / h );
 		vec3 sum = vec3( 0.0 );
 		for ( int j = 0; j < 6; j ++ ) {
@@ -594,7 +719,7 @@ vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
 			vec3 wn = w / max( r, 1e-4 );
 			sum += max( dot( n, wn ), 0.0 ) * brPhaseW( dot( wn, - Tv ), kind ) * exp( - st * ( r + s ) );
 		}
-		acc += uUwCol[ i ].rgb * sum * ( ( a1 - a0 ) / ( 6.0 * h ) );
+		acc += uUwCol[ i ].rgb * sum * ( ( a1 - a0 ) / ( 6.0 * h ) * ( 1.0 - smoothstep( 2.5, 4.0, h ) ) );
 	}
 	return BR_WM_SS[ kind ] * acc;
 }

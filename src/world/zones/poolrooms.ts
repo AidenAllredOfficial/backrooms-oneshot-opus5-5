@@ -46,6 +46,7 @@ import {
   cellWalkable, chunkHasLandmark, globalBlockedTest, createFixturePlacer, DX, DZ, emitWaterRects, fieldAt, HALF_PI, inChunk,
   isReservedCell, kindOpenAtWater, N, sameDistrictAcross, sideKind, STEP_CM, WADE_CM, WALK_FLAGS,
 } from './deepcommon.ts';
+import { UNDERWATER_NITS } from '../content/util.ts';
 
 const ROOM = 8; // cells per lattice room
 /** Safety cap of the merged-room BFS. Components at p 0.35 are small (simulated over 10^6 rooms: 99.7% of rooms lie in
@@ -737,7 +738,7 @@ function generate(ctx: ZoneGenContext): void {
         placer.add({
           kind: FixtureKind.UNDERWATER, shape: 0, px, py: yCm / 100, pz,
           nx: -DX[d], ny: 0, nz: -DZ[d], tx: DZ[d] !== 0 ? 1 : 0, ty: 0, tz: DX[d] !== 0 ? 1 : 0,
-          w: 0.26, h: 0.26, cct: UNDERWATER_CCT, luminance: 1400, hum: 0.05,
+          w: 0.26, h: 0.26, cct: UNDERWATER_CCT, luminance: UNDERWATER_NITS, hum: 0.05,
         });
       }
     }

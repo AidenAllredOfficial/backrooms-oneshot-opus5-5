@@ -10,6 +10,7 @@ import { CELL } from '../../core/constants.ts';
 import { CeilKind, CellFlag, EdgeKind, EmitterKind, FixtureKind, LandmarkKind, LightState, Mat, PropKind, Storey, Zone } from '../../core/index.ts';
 import type { ZoneId } from '../../core/index.ts';
 import { kelvinToLinearRGB } from '../content/kelvin.ts';
+import { UNDERWATER_NITS } from '../content/util.ts';
 import { begin, box, cells, claim, emitter, fixture, handrail, opening, prop, ramp, recessedCells, THIN_F, WALK_F, waterRect } from './common.ts';
 import type { LandmarkGenerator } from './index.ts';
 
@@ -60,12 +61,12 @@ export const lazyRiver: LandmarkGenerator = {
     const uw = kelvinToLinearRGB(7800, 0.02);
     const ly = (fy + wy) / 2;
     for (let u = 2; u < W - 2; u += 3) {
-      fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, ov0 * CELL + 0.02, ly, [0, 0, 1], [1, 0], uw, 1300, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
-      if (u < 4 || u > 6) fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, ov1 * CELL - 0.02, ly, [0, 0, -1], [1, 0], uw, 1300, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, ov0 * CELL + 0.02, ly, [0, 0, 1], [1, 0], uw, UNDERWATER_NITS, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
+      if (u < 4 || u > 6) fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, ov1 * CELL - 0.02, ly, [0, 0, -1], [1, 0], uw, UNDERWATER_NITS, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
     }
     for (let v = 3; v < L - 3; v += 4) {
-      fixture(lm, FixtureKind.UNDERWATER, ou0 * CELL + 0.02, (v + 0.5) * CELL, ly, [1, 0, 0], [0, 1], uw, 1300, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
-      fixture(lm, FixtureKind.UNDERWATER, ou1 * CELL - 0.02, (v + 0.5) * CELL, ly, [-1, 0, 0], [0, 1], uw, 1300, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, ou0 * CELL + 0.02, (v + 0.5) * CELL, ly, [1, 0, 0], [0, 1], uw, UNDERWATER_NITS, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, ou1 * CELL - 0.02, (v + 0.5) * CELL, ly, [-1, 0, 0], [0, 1], uw, UNDERWATER_NITS, LightState.ON, { w: 0.24, h: 0.24, hum: 0.05 });
     }
     const n = lm.rng.int(4, 6);
     for (let k = 0; k < n; k++) {

@@ -307,9 +307,10 @@ void main() {
 		vec3 Tv = refract( - V, nV, ${(1 / 1.333).toFixed(6)} );
 		float cosT = max( - dot( Tv, upV ), 0.05 );
 		vec2 uvH;
-		L = brWRefract( P, Tv, D / cosT, upV, vBrLocal.xz, waterY, uvH, hit );
+		vec4 alt;
+		L = brWRefract( P, Tv, D / cosT, upV, vBrLocal.xz, waterY, uvH, hit, alt );
 		vec3 st;
-		vec3 trans = brWVolume( uvH, L, cosT, kind, irr, st );
+		vec3 trans = brWVolume( uvH, alt, L, cosT, kind, irr, st );
 	#ifdef BR_WATER_VOLLIGHT
 		#if NUM_SPOT_LIGHTS > 0
 		trans += brWaterTorch( P, Tv, L, cosT, upV, st, kind, spotVis );

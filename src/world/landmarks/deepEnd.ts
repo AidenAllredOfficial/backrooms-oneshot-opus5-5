@@ -13,6 +13,7 @@ import {
   CeilKind, CellFlag, DecalKind, EdgeKind, EmitterKind, FixtureKind, LandmarkKind, LightState, Mat, PropKind, SignKind, SolidFlag, Storey, Zone,
 } from '../../core/index.ts';
 import { kelvinToLinearRGB } from '../content/kelvin.ts';
+import { UNDERWATER_NITS } from '../content/util.ts';
 import { begin, box, cells, claim, emitter, fixture, floorDecal, opening, prop, ramp, recessedCells, wallDecal } from './common.ts';
 import type { Lm } from './common.ts';
 import type { LandmarkGenerator } from './index.ts';
@@ -67,12 +68,12 @@ export const deepEnd: LandmarkGenerator = {
     const ly = (DEEP_END.deepCm / 100 + w / 100) / 2;
     const lu = [pu0 + 1.5, pu1 - 1.5], lv = [pv0 + 1.5, pv1 - 1.5];
     for (const um of lu) {
-      fixture(lm, FixtureKind.UNDERWATER, um * CELL, pv0 * CELL + 0.02, ly, [0, 0, 1], [1, 0], uw, 1400, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
-      fixture(lm, FixtureKind.UNDERWATER, um * CELL, pv1 * CELL - 0.02, ly, [0, 0, -1], [1, 0], uw, 1400, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, um * CELL, pv0 * CELL + 0.02, ly, [0, 0, 1], [1, 0], uw, UNDERWATER_NITS, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, um * CELL, pv1 * CELL - 0.02, ly, [0, 0, -1], [1, 0], uw, UNDERWATER_NITS, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
     }
     for (const vm of lv) {
-      fixture(lm, FixtureKind.UNDERWATER, pu0 * CELL + 0.02, vm * CELL, ly, [1, 0, 0], [0, 1], uw, 1400, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
-      fixture(lm, FixtureKind.UNDERWATER, pu1 * CELL - 0.02, vm * CELL, ly, [-1, 0, 0], [0, 1], uw, 1400, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, pu0 * CELL + 0.02, vm * CELL, ly, [1, 0, 0], [0, 1], uw, UNDERWATER_NITS, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, pu1 * CELL - 0.02, vm * CELL, ly, [-1, 0, 0], [0, 1], uw, UNDERWATER_NITS, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
     }
 
     // ---- diving platform on the back deck: a tiled tower 1.5 m high, stairs up its side, a board over the water
