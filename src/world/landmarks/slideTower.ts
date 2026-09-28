@@ -10,6 +10,7 @@ import { CELL, CHUNK_CELLS, WALL_T } from '../../core/constants.ts';
 import { CeilKind, CellFlag, cellIdx, EdgeKind, EmitterKind, FixtureKind, LandmarkKind, LightState, Mat, PropKind, Storey, Zone } from '../../core/index.ts';
 import type { ZoneId } from '../../core/index.ts';
 import { kelvinToLinearRGB } from '../content/kelvin.ts';
+import { UNDERWATER_NITS } from '../content/util.ts';
 import { begin, box, cells, claim, emitter, fixture, handrail, opening, OVERHEAD, pipeF, prop, ramp, recessedCells, SOLID_F, WALK_F, waterRect } from './common.ts';
 import type { LandmarkGenerator } from './index.ts';
 
@@ -43,8 +44,8 @@ export const slideTower: LandmarkGenerator = {
     waterRect(lm, pu0, pv0, pu1, pv1, T.waterCm / 100, T.poolCm / 100, 0);
     const uw = kelvinToLinearRGB(7600, 0.02);
     for (let u = pu0 + 1; u < pu1; u += 3) {
-      fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, pv0 * CELL + 0.02, -0.75, [0, 0, 1], [1, 0], uw, 1400, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
-      fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, pv1 * CELL - 0.02, -0.75, [0, 0, -1], [1, 0], uw, 1400, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, pv0 * CELL + 0.02, -0.75, [0, 0, 1], [1, 0], uw, UNDERWATER_NITS, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
+      fixture(lm, FixtureKind.UNDERWATER, (u + 0.5) * CELL, pv1 * CELL - 0.02, -0.75, [0, 0, -1], [1, 0], uw, UNDERWATER_NITS, LightState.ON, { w: 0.26, h: 0.26, hum: 0.05 });
     }
     prop(lm, PropKind.POOL_LADDER, (pu1 - 1.5) * CELL, pv0 * CELL + 0.27, -1.0, 0, 1, 0, 0);
     prop(lm, PropKind.POOL_LADDER, pu0 * CELL + 0.27, (pv1 - 1.5) * CELL, -1.0, 1, 0, 0, 0);

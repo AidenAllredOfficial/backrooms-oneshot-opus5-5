@@ -572,8 +572,8 @@ vec3 brWaterTorch( vec3 P, vec3 Tv, float L, float cosT, vec3 upV, vec3 st, int 
 #endif
 // The nearest UNDERWATER lamps (water/underwaterLights.ts: camera-relative position, facing, colour x cd) scattered
 // toward the eye along [0, L]: Lambertian lamps; the substitution s = tc + h tan(th) makes the inverse-square
-// integrand smooth (as brAirlight), 6 samples per lamp; lamps farther than 2.5 m from the segment are skipped (their
-// glow there is under ~1 % of the lit pool floor).
+// integrand smooth (as brAirlight), 6 samples per lamp; a lamp's glow fades out between 2.5 and 4 m from the segment
+// (there it is a few % of the lit pool floor: a hard cut would draw a ring around the 6000-nit pool lights).
 vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
 	vec3 acc = vec3( 0.0 );
 	mat3 R = mat3( viewMatrix );
@@ -583,7 +583,7 @@ vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
 		vec3 n = R * uUwDir[ i ].xyz;
 		float tc = dot( Q - P, Tv );
 		float h = max( length( Q - P - Tv * tc ), uUwDir[ i ].w );
-		if ( h > 2.5 ) continue;
+		if ( h > 4.0 ) continue;
 		float a0 = atan( - tc / h ), a1 = atan( ( L - tc ) / h );
 		vec3 sum = vec3( 0.0 );
 		for ( int j = 0; j < 6; j ++ ) {
@@ -594,7 +594,7 @@ vec3 brWaterLamps( vec3 P, vec3 Tv, float L, vec3 st, int kind ) {
 			vec3 wn = w / max( r, 1e-4 );
 			sum += max( dot( n, wn ), 0.0 ) * brPhaseW( dot( wn, - Tv ), kind ) * exp( - st * ( r + s ) );
 		}
-		acc += uUwCol[ i ].rgb * sum * ( ( a1 - a0 ) / ( 6.0 * h ) );
+		acc += uUwCol[ i ].rgb * sum * ( ( a1 - a0 ) / ( 6.0 * h ) * ( 1.0 - smoothstep( 2.5, 4.0, h ) ) );
 	}
 	return BR_WM_SS[ kind ] * acc;
 }

@@ -134,6 +134,11 @@ export const FIXTURE_DIMS: Readonly<Record<number, FixtureDims>> = {
   [FixtureKind.RED_BULB]: { shape: 1, w: 0.08, h: 0.08, tl: 1, ts: 1, hum: 0.4 },
 };
 
+/** Lens luminance (nits) of the UNDERWATER pool lights: ~400 cd on axis through a ~26 cm lens (a 1300 lm pool light;
+ * real ones put out 1500-5000 lm), so it glows in the water of a lit hall and throws light on the pool's floor and far
+ * wall (1400 nits, ~95 cd, vanished in a lit poolroom; 10000 turned the pool's water milky around every lamp). */
+export const UNDERWATER_NITS = 6000;
+
 /** Base fixture record (state ON, bakeGroup 0) for a kind at a point with a normal and long axis. */
 export function fixtureAt(kind: FixtureKindId, px: number, py: number, pz: number, n: readonly [number, number, number],
   t: readonly [number, number, number], color: [number, number, number], luminance: number, dims?: Partial<FixtureDims>): Omit<Fixture, 'id' | 'seed' | 'dynamic'> {
