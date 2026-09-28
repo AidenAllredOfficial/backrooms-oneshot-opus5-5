@@ -359,23 +359,45 @@ describe('texture realism v2 family hooks (chunks/family/*.ts)', () => {
     }
   });
 
-  it('the hooks sit at their points: grime inside the grime block, matPost between glaze and spec AA, preFog before haze', () => {
+  it('the hooks sit at their points (the point markers are emitted even where no family has code)', () => {
     const at = (s: string): number => { const i = frag.indexOf(s); expect(i, s).toBeGreaterThanOrEqual(0); return i; };
-    expect(at('// ---- family textile: grime')).toBeGreaterThan(at('float wet = smoothstep( 0.22, 0.62, wetRaw );'));
+    const hook = (p: HookPoint): number => at(`// ---- family hooks: ${p}\n`);
+    for (const p of POINTS) expect(frag.split(`// ---- family hooks: ${p}\n`).length - 1, p).toBe(1);
+    expect(hook('pars')).toBeLessThan(at('void main()'));
+    // postSample: after the channel decode and the v2 debug exits, before the detail fetch
+    expect(hook('postSample')).toBeGreaterThan(at('if ( uDebugView == BR_DV_RELIEF ) {'));
+    expect(hook('postSample')).toBeLessThan(at('vec4 brDt = brDetailFetch('));
+    // postDetail: inside the detail block, after the multiplier is known and before it is applied
+    expect(hook('postDetail')).toBeGreaterThan(at('brAm = brDt.b / brDmu.b;'));
+    expect(hook('postDetail')).toBeLessThan(at('brA *= mix( 1.0, brAm, brDetL.y );'));
+    // grime: inside the grime block after the shared lookups, the chain opened by the core
+    expect(hook('grime')).toBeGreaterThan(at('float wet = smoothstep( 0.22, 0.62, wetRaw );'));
+    expect(hook('grime')).toBeGreaterThan(at('if ( false ) {'));
+    expect(hook('grime')).toBeLessThan(at('float brBand = brWaterWetBand('));
     expect(at('// ---- family props: grime')).toBeLessThan(at('float brBand = brWaterWetBand('));
-    expect(at('// ---- family textile: matPost')).toBeGreaterThan(at('// 2. glaze coverage'));
-    expect(at('// ---- family props: matPost')).toBeGreaterThan(at('// ---- family textile: matPost'));
-    expect(at('// 5. specular AA')).toBeGreaterThan(at('// ---- family props: matPost'));
-    expect(at('// ---- family textile: preFog')).toBeGreaterThan(at('if ( uDebugView != 0 ) {'));
-    expect(at('bool brDefer = false;')).toBeGreaterThan(at('// ---- family textile: preFog'));
-    expect(at('// ---- family textile: pars')).toBeLessThan(at('void main()'));
+    expect(hook('postWet')).toBeGreaterThan(at('brRoughToW = max( brFilm, brPuddle );'));
+    expect(hook('postWet')).toBeLessThan(at('diffuseColor.rgb = brA * vBrTint.rgb;'));
+    expect(hook('rough')).toBeGreaterThan(at('brRt = sqrt( sqrt( pow4( brRt ) + brDetVar ) );'));
+    expect(hook('rough')).toBeLessThan(at('float roughnessFactor = clamp('));
+    expect(hook('normal')).toBeGreaterThan(at('mat3 brTbn = brTangentFrame('));
+    expect(hook('normal')).toBeLessThan(at('int brEp = ( brF & BR_F_FLOOR_AUX ) == 0'));
+    // matPost: after the glaze coverage, before the specular AA (brCoat declared before it)
+    expect(hook('matPost')).toBeGreaterThan(at('// 2. glaze coverage'));
+    expect(hook('matPost')).toBeGreaterThan(at('bool brCoat = false;'));
+    expect(hook('matPost')).toBeLessThan(at('// 5. specular AA'));
+    // postLight: after the aomap replacement, before the fog stage; preFog: outside the debug views, before haze
+    expect(hook('postLight')).toBeGreaterThan(at('// ==== WP9 specular occlusion + reflections'));
+    expect(hook('postLight')).toBeLessThan(at('// ==== WP9 debug views'));
+    expect(hook('preFog')).toBeGreaterThan(at('gl_FragColor.rgb = brDbg * BR_DEBUG_NITS;'));
+    expect(hook('preFog')).toBeLessThan(at('bool brDefer = false;'));
     // the channel decode precedes the detail fetch; the detail multiplier is main-scope (postDetail rescales it)
     expect(at('vec2 brLean = ')).toBeLessThan(at('vec4 brDt = brDetailFetch('));
     expect(at('#define brRel ( ( brNrm.w - brMuH ) * uBrLayerC[ brL ].x )')).toBeLessThan(at('void main()'));
-    // the v2 debug views leave early (their values never stay live to the fog stage)
+    expect(at('float brAm = 1.0;')).toBeLessThan(at('brAm = brDt.b / brDmu.b;'));
+    // the v2 debug views leave early: the fog stage's view list never reads their values (they would stay live)
     expect(at('if ( uDebugView == BR_DV_AUX ) BR_DEBUG_EXIT(')).toBeLessThan(at('vec4 brDt = brDetailFetch('));
-    expect(frag.slice(at('vec3 brDbg = vec3( 0.0 );'))).not.toMatch(/\b(brAux|brAux2|brLean|brRel)\b/);
-    expect(frag).toMatch(/float brAm = 1\.0;[^]*brAm = brDt\.b \/ brDmu\.b;\s*brA \*= mix\( 1\.0, brAm, brDetL\.y \);/);
+    const views = frag.slice(at('vec3 brDbg = vec3( 0.0 );'), at('gl_FragColor.rgb = brDbg * BR_DEBUG_NITS;'));
+    expect(views).not.toMatch(/\b(brAux|brAux2|brLean|brRel|brMuH)\b/);
   });
 
   it('hook strings are balanced GLSL', () => {
@@ -388,5 +410,7 @@ describe('texture realism v2 family hooks (chunks/family/*.ts)', () => {
       }
     }
     expect(familyHook('grime')).toContain('// ---- family walls: grime');
+    // every point's code ends a line, so a core directive that follows it (#if, #endif) stays at the start of a line
+    for (const p of POINTS) expect(familyHook(p).endsWith('\n'), p).toBe(true);
   });
 });

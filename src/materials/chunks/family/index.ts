@@ -55,7 +55,11 @@ export const FAMILIES: readonly (readonly [string, FamilyHooks])[] = [
   ['masonry', MASONRY_HOOKS], ['tile', TILE_HOOKS], ['props', PROP_HOOKS],
 ];
 
-/** The GLSL of one hook point: every family's code for it, in FAMILIES order, each under a marker comment. */
+/** The GLSL of one hook point: a point marker (emitted even when no family has code there, so tests can locate the
+ * point), then every family's code for it in FAMILIES order, each under a marker comment and ending a line (a core
+ * directive such as `#if` may follow). */
 export function familyHook(point: HookPoint): string {
-  return FAMILIES.filter(([, h]) => h[point] !== '').map(([name, h]) => `// ---- family ${name}: ${point}\n${h[point]}`).join('');
+  const line = (s: string): string => (s.endsWith('\n') ? s : `${s}\n`);
+  return `// ---- family hooks: ${point}\n` + FAMILIES.filter(([, h]) => h[point] !== '')
+    .map(([name, h]) => `// ---- family ${name}: ${point}\n${line(h[point])}`).join('');
 }

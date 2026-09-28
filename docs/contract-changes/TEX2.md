@@ -31,8 +31,9 @@ v2 conventions").
 - **Shaders:** the per-layer const arrays `BR_L_*`, `BR_AUX_KIND`, `BR_L_AUX2`, the grime ids `BR_G_*`, the channel
   decode at main scope (`brAux`, `brAux2`, `brLean`, `brRotM`, `brRotC`, `brAm`; `brMuH` and `brRel` as read-only
   expressions, fetched per use), the debug early exit `BR_DEBUG_EXIT` (views 24-26) and the family hook points
-  (`src/materials/chunks/family/*.ts`). No new uniforms or samplers; the five layer uniform arrays grow with
-  MAT_COUNT (+10 vec4).
+  (`src/materials/chunks/family/*.ts`; each point starts with the marker `// ---- family hooks: <point>`, present even
+  when no family has code there, and every hook's code ends a line). No new uniforms or samplers; the five layer
+  uniform arrays grow with MAT_COUNT (+10 vec4).
 - **Consumers affected:** every v2 lane (they code against these); `src/world/testScenes.ts` (the `materials` scene keeps
   its 28 layers); `tests/materials/factory.test.ts` (layer table length from MAT_COUNT).
 
