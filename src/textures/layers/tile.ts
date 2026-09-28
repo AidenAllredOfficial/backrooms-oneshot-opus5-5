@@ -41,8 +41,10 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 /** Pool tile, 0.15 m white glaze (roughness 0.06-0.12) with cushion edges, a slight pillow and a per-tile tilt of
- * +-1.5 degrees; glaze crazing on a quarter of the tiles and a hazy (rougher, greyer) glaze rim next to the 3 mm
- * light grey grout (roughness 0.7). Every feature is tile-local (the shader rotates / flips whole tiles). */
+ * +-0.5 degrees per axis (lippage: +-0.7 mm across a tile, as set tiles have; +-1.5 degrees scattered the lamps into a
+ * field of single-tile glints, each near-mirror tile picking its own probe texel); glaze crazing on a quarter of the
+ * tiles and a hazy (rougher, greyer) glaze rim next to the 3 mm light grey grout (roughness 0.7). Every feature is
+ * tile-local (the shader rotates / flips whole tiles). */
 const POOL_TILE = /* glsl */ `
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
@@ -53,7 +55,7 @@ void gen(vec2 uv, inout Surf s) {
   float grout = 1.0 - smoothstep(0.0015 - w, 0.0015 + w, e);
   float cush = sat((e - 0.0015) / 0.004);
   float cushH = 1.0 - (1.0 - cush) * (1.0 - cush);
-  vec2 slope = (r.xy - 0.5) * 2.0 * 0.0262;
+  vec2 slope = (r.xy - 0.5) * 2.0 * 0.009;
   float tiltM = dot(t.local, slope);
   float wav = fbm(uv, PM(22.0), 2, 4) * 0.00012;
   vec3 glaze = TABLE_ALBEDO * (1.0 + 0.06 * (r.z - 0.5)) * (1.0 + 0.008 * fbm(uv, PM(40.0), 2, 5));
@@ -75,7 +77,7 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** 2.5 cm glass mosaic in mixed aqua shades, 2 mm light grout, per-chip tilt. */
+/** 2.5 cm glass mosaic in mixed aqua shades, 2 mm light grout, per-chip tilt (+-0.5 degrees per axis). */
 const POOL_MOSAIC = /* glsl */ `
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
@@ -95,7 +97,7 @@ void gen(vec2 uv, inout Surf s) {
   col *= 1.0 + 0.06 * fbm(uv + floor(r.zw * 32.0) / 8.0, PM(90.0), 2, 4);
   vec3 groutCol = srgb8(176.0, 184.0, 182.0);
   s.albedo = mix(col, groutCol, grout);
-  vec2 slope = (r.yz - 0.5) * 2.0 * 0.0175;
+  vec2 slope = (r.yz - 0.5) * 2.0 * 0.009;
   s.height = mix(0.3 + 0.35 * cush + dot(t.local, slope) / 0.004, 0.1, grout);
   s.rough = mix(0.08 + 0.04 * r.w, 0.7, grout);
 }
