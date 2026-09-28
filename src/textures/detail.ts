@@ -205,8 +205,8 @@ void gen(vec2 uv, inout Surf s) {
 export const DETAIL_RECIPES: readonly DetailRecipe[] = [
   { name: 'CUT_PILE', glsl: CUT_PILE, heightScale: 0.003, slope: 1.2, roughK: 0, cavity: 1 },
   { name: 'LOOP_PILE', glsl: LOOP_PILE, heightScale: 0.002, slope: 1.0, roughK: 0, cavity: 1 },
-  { name: 'VINYL_PAPER', glsl: VINYL_PAPER, heightScale: 0.0003, slope: 0.1, roughK: 0.05, cavity: 0.5 },
-  { name: 'PAINT', glsl: PAINT, heightScale: 0.00012, slope: 0.04, roughK: 0.1, cavity: 0.3 },
+  { name: 'VINYL_PAPER', glsl: VINYL_PAPER, heightScale: 0.0006, slope: 0.2, roughK: 0.05, cavity: 0.5 },
+  { name: 'PAINT', glsl: PAINT, heightScale: 0.00036, slope: 0.12, roughK: 0.1, cavity: 0.3 },
   { name: 'CONCRETE_FINE', glsl: CONCRETE_FINE, heightScale: 0.0008, slope: 0.35, roughK: 0.25, cavity: 1 },
   { name: 'MINERAL_FIBRE', glsl: MINERAL_FIBRE, heightScale: 0.0006, slope: 0.2, roughK: 0, cavity: 1 },
   { name: 'GLAZE', glsl: GLAZE, heightScale: 0.00008, slope: 0.008, roughK: 0, cavity: 0 },
