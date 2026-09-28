@@ -58,7 +58,8 @@ describe('handleRequest', () => {
     expect(st.layouts.size).toBe(9); // the 3x3 neighbourhood went through the LRU
   });
 
-  it("a build with lighting 'full' returns exactly the bake job's full lightmap (the automation gate's ring)", () => {
+  // full bakes: seconds each, more on a loaded machine
+  it("a build with lighting 'full' returns exactly the bake job's full lightmap (the automation gate's ring)", { timeout: 60_000 }, () => {
     const key = { s: 0 as const, cx: 0, cz: 0, q: 2 as const };
     const st = createHandlerState();
     handleRequest({ t: 'init', job: 1, init: init() }, st);

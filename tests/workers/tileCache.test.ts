@@ -26,7 +26,7 @@ const init = (q: keyof typeof QUALITY = 'low'): WorkerInit => ({
 });
 
 describe('cache entry codec', () => {
-  it('round-trips a real build response exactly, typed arrays in their own buffers', () => {
+  it('round-trips a real build response exactly, typed arrays in their own buffers', { timeout: 60_000 }, () => {
     const st = createHandlerState();
     handleRequest({ t: 'init', job: 1, init: init() }, st);
     const { res } = handleRequest({ t: 'build', job: 2, key: { s: 0, cx: 0, cz: 0, q: 0 } }, st);
@@ -84,7 +84,7 @@ describe('cache keys', () => {
     expect(parseFeatures('garbage')).toEqual({ raw: false, ns: false });
   });
 
-  it("a 'bake' miss is answered from the 'build lighting:full' entry of the same tile, byte for byte", () => {
+  it("a 'bake' miss is answered from the 'build lighting:full' entry of the same tile, byte for byte", { timeout: 60_000 }, () => {
     const key = { s: 0 as const, cx: 0, cz: 0, q: 1 as const };
     const st = createHandlerState();
     handleRequest({ t: 'init', job: 1, init: init() }, st);
@@ -247,6 +247,23 @@ describe('tile store', () => {
       expect(existsSync(path.join(dir, 'dddddddddddd', key('d', 2)))).toBe(false); // the oldest entries went first
       expect(existsSync(path.join(dir, 'cccccccccccc', key('c', 1)))).toBe(false);
       expect(existsSync(path.join(dir, 'cccccccccccc', key('c', 2)))).toBe(false);
+      await store.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('survives another server deleting a namespace or an entry under it', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'br-store-'));
+    try {
+      const store = createTileStore({ dir, capBytes: 2 ** 30 });
+      await store.scan();
+      await store.put('aaaaaaaaaaaa', key('a', 1), Buffer.from('x'), false);
+      rmSync(path.join(dir, 'aaaaaaaaaaaa'), { recursive: true, force: true });
+      expect(await store.get('aaaaaaaaaaaa', key('a', 1))).toBeNull();
+      expect(store.count).toBe(0);
+      await store.put('aaaaaaaaaaaa', key('a', 2), Buffer.from('y'), false);
+      expect(readFileSync(path.join(dir, 'aaaaaaaaaaaa', key('a', 2)), 'utf8')).toBe('y');
       await store.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

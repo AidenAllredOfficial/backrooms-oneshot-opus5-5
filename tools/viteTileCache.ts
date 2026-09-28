@@ -135,7 +135,10 @@ export async function bundleHash(root: string, entry: string): Promise<string> {
     const { output } = await b.generate({ format: 'es', minify: true });
     const h = createHash('sha1').update(CACHE_SALT).update('\0');
     for (const o of output) if ('code' in o) h.update(o.fileName).update('\0').update(o.code).update('\0');
-    for (const f of CODEC_FILES) h.update(f).update('\0').update(readFileSync(path.resolve(root, f))).update('\0');
+    for (const f of CODEC_FILES) {
+      const p = path.resolve(root, f);
+      h.update(f).update('\0').update(existsSync(p) ? readFileSync(p) : '-').update('\0');
+    }
     const g = workerGraph(root, entry);
     for (const p of ['rolldown', 'vite', ...g.pkgs]) h.update(`${p}@${pkgVersion(root, p)}\0`);
     return h.digest('hex');
@@ -320,9 +323,9 @@ export function createTileStore(o: TileStoreOptions): TileStore {
     get count() { return index.size; },
     get inflight() { return inflight; },
     async get(ns, key) {
+      const id = idOf(ns, key);
       try {
         const body = await readFile(fileOf(ns, key));
-        const id = idOf(ns, key);
         const t = now();
         const e = index.get(id);
         if (e) e.t = t;
@@ -330,6 +333,7 @@ export function createTileStore(o: TileStoreOptions): TileStore {
         touched.set(id, t);
         return body;
       } catch {
+        dropEntry(id); // evicted by another server sharing the directory
         return null;
       }
     },
@@ -343,11 +347,20 @@ export function createTileStore(o: TileStoreOptions): TileStore {
     },
     async put(ns, key, body, raw) {
       const data = raw ? await gzipAsync(body, { level: 1 }) : body;
-      if (ns && !madeNs.has(ns)) { await mkdir(path.join(dir, ns), { recursive: true }); madeNs.add(ns); }
       const file = fileOf(ns, key);
-      const tmp = `${file}.${process.pid}.${(tmpN++).toString(36)}.tmp`;
-      await writeFile(tmp, data);
-      await rename(tmp, file);
+      const write = async (): Promise<void> => {
+        if (ns && !madeNs.has(ns)) { await mkdir(path.join(dir, ns), { recursive: true }); madeNs.add(ns); }
+        const tmp = `${file}.${process.pid}.${(tmpN++).toString(36)}.tmp`;
+        await writeFile(tmp, data);
+        await rename(tmp, file);
+      };
+      try {
+        await write();
+      } catch {
+        // another server sharing the directory may have evicted the namespace: create it again, once
+        madeNs.delete(ns);
+        await write();
+      }
       setEntry(idOf(ns, key), { size: data.length, t: now(), ns });
       await store.evict();
     },

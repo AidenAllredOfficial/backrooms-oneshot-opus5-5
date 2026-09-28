@@ -223,6 +223,7 @@ export function createGate(core: AppCore): ReadyGate {
         if (togglesPending) { togglesPending = false; applyLaunchToggles(core); }
         if (auto) {
           if (toggled) s.probe.refresh(); // faces captured before the toggles saw the old state
+          performance.mark('br:captureReady', { detail: reason }); // stream done: br:settled - this = the settle
           phase = 'settle';
           settle = createSettle();
           core.debug.readyPhase = 'settle';
