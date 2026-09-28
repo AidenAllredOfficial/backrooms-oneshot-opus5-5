@@ -1,7 +1,8 @@
 // tests/bake/seams.test.ts — WP7 acceptance: two adjacent tiles baked independently (fresh caches), in the same
 // chunk and across a chunk seam, agree on their shared border texels (the 1-texel grid-chart aprons) within 2%.
 // Run on LOBBY and the open zones where probe rays and light sets reach farthest. Wall charts split at a tile line
-// (chart `cont` bits) share their apron texels too: those are matched by world position and compared as well.
+// (chart `cont` bits) share their apron texels too: those are matched by world position and compared as well. The
+// indirect gradient (the dir map's layer 1) agrees on the grid-chart borders within 3 of its 8-bit steps.
 
 import { describe, expect, it } from 'vitest';
 import { fromHalf } from '../../src/core/half.ts';
@@ -64,9 +65,10 @@ function compareWalls(a: Side, b: Side): { n: number; worst: number } {
 const WALL_SEAM_ZONES: ZoneId[] = [Zone.LOBBY, Zone.WAREHOUSE];
 
 /** Compare the shared border columns (east apron of A / first columns of B) of one grid chart kind. */
-function compareX(a: Side, b: Side, kind: number): { n: number; worst: number; mask: number } {
+function compareX(a: Side, b: Side, kind: number): { n: number; worst: number; mask: number; grad: number } {
   const ca: Chart = findChart(a.s, kind), cb: Chart = findChart(b.s, kind);
-  let n = 0, worst = 0, mask = 0;
+  let n = 0, worst = 0, mask = 0, grad = 0;
+  const ga = a.lm.width * a.lm.height * 4, gb = b.lm.width * b.lm.height * 4; // the dir map's layer 1
   // A's u = 16 tpc (last interior) and 16 tpc + 1 (apron) are B's u = 0 (apron) and 1 (first interior)
   for (const [ua, ub] of [[SIDE - 2, 0], [SIDE - 1, 1]]) {
     for (let v = 0; v < SIDE; v++) {
@@ -80,10 +82,11 @@ function compareX(a: Side, b: Side, kind: number): { n: number; worst: number; m
         if (m < 0.5) continue; // imperceptible (< 0.5 lux)
         n++;
         worst = Math.max(worst, d / m);
+        if (k < 2) grad = Math.max(grad, Math.abs(a.lm.dir[ga + ia * 4 + k] - b.lm.dir[gb + ib * 4 + k]));
       }
     }
   }
-  return { n, worst, mask };
+  return { n, worst, mask, grad };
 }
 
 const ZONES: ZoneId[] = [Zone.LOBBY, Zone.LOW_EXPANSE, Zone.PILLAR_HALL, Zone.WAREHOUSE];
@@ -102,6 +105,7 @@ describe('tile seams', { tags: ['sweep'] }, () => {
           if (kind === ChartKind.FLOOR_GRID) expect(r.n, `${label}: compared floor texels`).toBeGreaterThan(50);
           expect(r.worst, `${label} kind ${kind}: worst relative difference`).toBeLessThan(0.02);
           expect(r.mask, `${label} kind ${kind}: surface mask difference`).toBeLessThanOrEqual(1);
+          expect(r.grad, `${label} kind ${kind}: indirect gradient difference (8-bit steps)`).toBeLessThanOrEqual(3);
         }
         const w = compareWalls(a, b);
         if (label === 'in-chunk' && WALL_SEAM_ZONES.includes(zone)) expect(w.n, `${label}: compared wall seam texels`).toBeGreaterThan(50);

@@ -110,14 +110,43 @@ export function lvLookup(p: readonly [number, number, number], n: readonly [numb
   return [x, lvLevel(p[1], n[1], s), z];
 }
 
+/**
+ * The baked dominant-direction lobe is an area estimate, not a point light: w * E averages several lights (and
+ * sources near the receiver plane) into one direction that turns from texel to texel. Its GGX width therefore grows
+ * with the spread of the directions it stands for, as variances add (alpha_eff^2 = alpha^2 + spread):
+ *  - K1 * (1 - w): the angular variance of a von Mises-Fisher source distribution with mean resultant length w is
+ *    about 2 (1 - w) around L, a quarter of it per axis in half-vector space;
+ *  - K2 * (1 - smoothstep(0, NG_FADE, n_g . L)): a dominant direction near the receiver plane stands for a source
+ *    close to the surface, whose direction sweeps across the texels (a bulb 0.3 m under a glossy ceiling drew a
+ *    2 m bright arc where the mirror condition held along a curve, boosted up to 1 / NG_MIN = 5x).
+ * Only the specular widens (the diffuse term does not depend on the roughness).
+ */
+export const LOBE = {
+  K1: 0.25,
+  K2: 0.2,
+  NG_FADE: 0.3,
+} as const;
+
+/** GGX roughness (three's convention, alpha = roughness^2) of the baked lobe for a surface roughness r, baked
+ * directionality w and geometric cosine ngl = n_g . L (TS twin of the FRAG_LIGHTS_GLSL block). */
+export function bakedLobeRoughness(r: number, w: number, ngl: number): number {
+  const a = Math.max(r, TUNE.DIRECT_MIN_ROUGH) ** 2;
+  const a2 = a * a + LOBE.K1 * (1 - Math.min(Math.max(w, 0), 1)) + LOBE.K2 * (1 - smoothstep(0, LOBE.NG_FADE, ngl));
+  return Math.min(1, Math.sqrt(Math.sqrt(a2)));
+}
+
 /** Replaces `#include <lights_fragment_maps>`. */
 export const FRAG_LIGHTS_GLSL = /* glsl */ `
 #undef getSpotLightInfo
 #define BR_SSR_ELIG_ROUGH ${f(SSR.ELIG_ROUGH)}
+#define BR_LOBE_K1 ${f(LOBE.K1)}
+#define BR_LOBE_K2 ${f(LOBE.K2)}
+#define BR_LOBE_NG_FADE ${f(LOBE.NG_FADE)}
 // ==== WP9 baked lighting
 material.diffuseContribution = brDiffRoom; // after the punctual lights (chunks/materialPost.ts brPunctAlb)
 vec4 brLmA;
 vec4 brLmB;
+vec4 brLmG = vec4( 128.0 / 255.0 ); // (a zero gradient: the light volume has none)
 vec4 brFl;
 #ifdef BR_LV
 	// props: tile light volume (32x6x32, 0.6 m), per-fragment wall clamp inside the fragment's own cell. Up-facing
@@ -169,7 +198,8 @@ vec4 brFl;
 	brFl = texture( uVolC, brUvw );
 #else
 	brLmA = texture( uLmIrr, vBrLmUv );
-	brLmB = texture( uLmDir, vBrLmUv );
+	brLmB = texture( uLmDir, brLmDirUv( vBrLmUv, 0.0 ) );
+	brLmG = texture( uLmDir, brLmDirUv( vBrLmUv, 1.0 ) ); // the dir map's layer 1: the indirect gradient
 	brFl = texture( uLmFlick, vBrLmUv );
 #endif
 vec3 brE = max( brLmA.rgb, vec3( 0.0 ) );
@@ -259,12 +289,19 @@ ${FRAG_DIRVIS_GLSL}
 	brDL.color = brW * brE / brNgL * brDirVis;
 	brDL.direction = brLv;
 	brDL.visible = true;
+	// the lobe is an area estimate (TS twin bakedLobeRoughness): alpha_eff^2 = max(alpha, alpha_min)^2 + the spread of
+	// the directions it averages (1 - w) + the sweep of a dominant direction near the receiver plane
+	float brLobeX = BR_LOBE_K1 * ( 1.0 - brW ) + BR_LOBE_K2 * ( 1.0 - smoothstep( 0.0, BR_LOBE_NG_FADE, dot( brNg, brLv ) ) );
 	float brR0 = material.roughness;
-	material.roughness = max( brR0, BR_DIRECT_MIN_ROUGH );
+	float brLa = max( brR0, BR_DIRECT_MIN_ROUGH );
+	brLa *= brLa;
+	material.roughness = min( 1.0, sqrt( sqrt( brLa * brLa + brLobeX ) ) );
 #ifdef USE_CLEARCOAT
 	// the lacquer's baked lobe is the same area estimate (three would evaluate it at the coat's ~0.05)
 	float brCcR0 = material.clearcoatRoughness;
-	material.clearcoatRoughness = max( brCcR0, BR_DIRECT_MIN_ROUGH );
+	float brCa = max( brCcR0, BR_DIRECT_MIN_ROUGH );
+	brCa *= brCa;
+	material.clearcoatRoughness = min( 1.0, sqrt( sqrt( brCa * brCa + brLobeX ) ) );
 	vec3 brCc0 = clearcoatSpecularDirect;
 #endif
 	// split by difference (package D): the baked lobe leaves the inline sum on G-buffer pixels
@@ -293,6 +330,13 @@ ${FRAG_DIRVIS_GLSL}
 }
 irradiance += brEf * mix( vec3( 1.0 ), brSsC, 0.5 ); // flicker channels: diffuse irradiance
 iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC ); // ambient part (diffuse + multiscatter specular in RE_IndirectSpecular)
+#ifndef BR_LV
+// first-order normal response of the ambient part (lightmap path): E_ind(n) = E_ind(n_g) + g . n with the baked
+// indirect gradient (tangent to n_g, so a flat surface keeps its mean), within +-(1 - w) E so the ambient part never
+// turns negative. The ambient cube alone is quadratic in n: normal maps shaded nothing but the dominant-direction
+// lobe, and ceilings (w = 0) not even that
+iblIrradiance += brE * brSsC * clamp( dot( ( viewMatrix * vec4( brLmGrad( brLmG.rg, brNWg ), 0.0 ) ).xyz, normal ), - ( 1.0 - brW ), 1.0 - brW );
+#endif
 // ambient part as a uniform environment (indirect specular). Package D: the probe radiance takes over by its share
 // (the clearcoat lobe's by brPrWc), then the routed lobe's environment becomes the G-buffer fallback's on MRT pixels
 vec3 brEnvRad = ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;

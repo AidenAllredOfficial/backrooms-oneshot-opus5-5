@@ -46,6 +46,7 @@ describe('probe links across a floor step', () => {
   const P: ProbeSet = {
     n: PROBE_N, off: PROBE_OFF, sh: new Float32Array(count * 12), cube: new Float32Array(count * 18),
     rho: new Float32Array(count * 3), valid: new Uint8Array(count), dyn: null, farSh: null, farCube: null, farDyn: null,
+    mom: null, farMom: null,
   };
   for (let pj = 0; pj < PROBE_N; pj++) {
     for (let pi = 0; pi < PROBE_N; pi++) {

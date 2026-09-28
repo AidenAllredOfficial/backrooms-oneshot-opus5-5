@@ -36,7 +36,7 @@ describe('bake pipeline', () => {
     expect(lm.tileKey).toBe('0:0:0:3');
     expect(lm.variant).toBe('preview');
     expect(lm.irr.length).toBe(s.atlasW * s.atlasH * 4);
-    expect(lm.dir.length).toBe(s.atlasW * s.atlasH * 4);
+    expect(lm.dir.length).toBe(s.atlasW * s.atlasH * 4 * 2); // 2 stacked layers: direction + w, indirect gradient
     expect(lm.mask.length).toBe(s.atlasW * s.atlasH * 4);
     expect(lm.emission.length).toBe(EMISSION.RES * EMISSION.RES * 4);
     expect(lm.volume.a.length).toBe(LV.NX * LV.NY * LV.NZ * 4);
@@ -96,7 +96,7 @@ describe('bake pipeline', () => {
     expect(si).toBeLessThan(sa);
     // the indirect-only bake has no directional part
     let maxW = 0;
-    for (let i = 3; i < ind.dir.length; i += 4) maxW = Math.max(maxW, ind.dir[i]);
+    for (let i = 3; i < ind.dir.length / 2; i += 4) maxW = Math.max(maxW, ind.dir[i]); // (layer 0)
     expect(maxW).toBe(0);
   });
 });

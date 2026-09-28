@@ -97,6 +97,16 @@ uniform float uFade;
 uniform float uTileWater;
 `;
 
+/** TS twin of brLmGrad: the world indirect gradient g of a texel from its two stored bytes (bake/encode.ts
+ * encodeGrad on gradAxes) and its geometric world normal nW, completed to nW's tangent plane. */
+export function lmGradWorld(b0: number, b1: number, nx: number, ny: number, nz: number): [number, number, number] {
+  const g0 = (b0 - 128) / 127, g1 = (b1 - 128) / 127;
+  const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+  if (ax >= ay && ax >= az) return [-(g0 * ny + g1 * nz) / nx, g0, g1];
+  if (ay >= az) return [g0, -(g0 * nx + g1 * nz) / ny, g1];
+  return [g0, g1, -(g0 * nx + g1 * ny) / nz];
+}
+
 /** Pure helper functions (hashes, periodic noise, Voronoi caustics, dither, flicker-channel slots, LV mapping). */
 export const HELPERS_GLSL = /* glsl */ `
 #define BR_CELL ${f(CELL)}
@@ -289,6 +299,26 @@ vec3 brDecodeDir( vec3 enc, inout float w ) {
 	float l = length( d );
 	if ( l < 1e-3 ) { w = 0.0; return vec3( 0.0, 1.0, 0.0 ); }
 	return d / l;
+}
+
+// ---- the dir map stacks its layers (0: dominant direction + w, 1: indirect gradient; bake/encode.ts) in one W x 2H
+// image. A lookup of layer k clamps its rows to [0.5, H - 0.5]: exactly the clamp-to-edge of a separate W x H texture,
+// so the bilinear footprint never reaches the other layer (a 1 x 1 stand-in reads its one texel)
+vec2 brLmDirUv( vec2 uv, float k ) {
+	float h2 = float( textureSize( uLmDir, 0 ).y );
+	float h = 0.5 * h2;
+	float y = min( max( uv.y * h, 0.5 ), max( h - 0.5, 0.5 ) );
+	return vec2( uv.x, ( y + k * h ) / h2 );
+}
+// ---- the indirect gradient g = (d E_ind / d theta) / E (world; TS twin lmGradWorld): layer 1 rg holds 128 + 127 g on
+// the face's two in-plane world axes (x, y, z order skipping the dominant axis of the geometric world normal nW); the
+// dominant-axis component is restored so that g is tangent to nW (exact on sloped faces too)
+vec3 brLmGrad( vec2 enc, vec3 nW ) {
+	vec2 g = ( enc * 255.0 - 128.0 ) / 127.0;
+	vec3 a = abs( nW );
+	vec3 m = a.x >= a.y && a.x >= a.z ? vec3( 1.0, 0.0, 0.0 ) : a.y >= a.z ? vec3( 0.0, 1.0, 0.0 ) : vec3( 0.0, 0.0, 1.0 );
+	vec3 G = m.x > 0.5 ? vec3( 0.0, g ) : m.y > 0.5 ? vec3( g.x, 0.0, g.y ) : vec3( g, 0.0 );
+	return G - m * ( dot( G, nW ) / dot( m, nW ) );
 }
 
 // ---- cotangent frame from view-space position derivatives (precise) and the continuous material uv

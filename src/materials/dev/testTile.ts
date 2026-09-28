@@ -6,6 +6,7 @@
 // Lighting is room-local (no occlusion tests); indirect is a per-room radiosity estimate with analytic AO.
 
 import * as THREE from 'three';
+import { LM_DIR_LAYERS } from '../../bake/encode.ts';
 import { EMISSION, LV } from '../../core/constants.ts';
 import { EP, lensParam, lensVariant, profileBits } from '../../core/emitterProfile.ts';
 import { toHalf } from '../../core/half.ts';
@@ -483,7 +484,8 @@ export function buildDevTile(opts: { vctOnly?: boolean } = {}): DevTile {
   // ---- bake lightmaps
   const AH = atlas.height;
   const N = ATLAS_W * AH;
-  const irr = new Uint16Array(N * 4), dir = new Uint8Array(N * 4), mask = new Uint8Array(N * 4);
+  // dir: 2 stacked layers (bake/encode.ts LM_DIR_LAYERS); layer 1 (the indirect gradient) stays zero (128)
+  const irr = new Uint16Array(N * 4), dir = new Uint8Array(N * 4 * LM_DIR_LAYERS).fill(128, N * 4), mask = new Uint8Array(N * 4);
   const flick = new Uint16Array(N * 4), flickAlt = new Uint16Array(N * 4);
   // per-room ambient: radiosity estimate from the mean direct floor irradiance
   for (const r of ROOMS) {
@@ -579,7 +581,7 @@ export function buildDevTile(opts: { vctOnly?: boolean } = {}): DevTile {
 
   return {
     shell: shell.geometry(ATLAS_W, AH), props: props.geometry(), decals: decals.geometry(ATLAS_W, AH), water: water.geometry(ATLAS_W, AH),
-    lmIrr: halfTex(ATLAS_W, AH, irr, false), lmDir: u8Tex(ATLAS_W, AH, dir), lmMask: u8Tex(ATLAS_W, AH, mask),
+    lmIrr: halfTex(ATLAS_W, AH, irr, false), lmDir: u8Tex(ATLAS_W, AH * LM_DIR_LAYERS, dir), lmMask: u8Tex(ATLAS_W, AH, mask),
     lmFlick: halfTex(ATLAS_W, AH, flick, false), lmFlickAlt: halfTex(ATLAS_W, AH, flickAlt, false),
     emission: halfTex(R, R, em, true),
     volA: tex3D(NX, NY, NZ, va, true), volB: tex3D(NX, NY, NZ, vb, false), volC: tex3D(NX, NY, NZ, vc, true),

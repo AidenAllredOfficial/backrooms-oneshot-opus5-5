@@ -193,6 +193,22 @@ function rectPolygon(rx: number, ry: number, rz: number, tx: number, ty: number,
 /** Exact-polygon distance factor of the full bake. */
 export const EXACT_FULL = LIGHT.POLY_EXACT_FACTOR;
 
+/** Signed solid angle of the plane rectangle [0, x] x [0, y] seen from height h > 0 above its corner (0, 0). */
+const cornerOmega = (x: number, y: number, h: number): number => Math.atan((x * y) / (h * Math.sqrt(x * x + y * y + h * h)));
+
+/**
+ * Mean geometric factor of an isotropic point source over a plane rectangle: F = Omega / A, where Omega is the solid
+ * angle the rectangle subtends at the source (E_mean = I * F: the integral of I cos(theta) / d^2 over the rectangle is
+ * I * Omega). The source sits at height h > 0 above the plane; [u0, u1] x [v0, v1] is the rectangle in plane
+ * coordinates relative to the source's foot point (metres, u0 < u1, v0 < v1). Far away it tends to the point factor
+ * cos / d^2 at the rectangle's centre; close to the plane it stays bounded (at most 2 pi / A), where the centre's
+ * cos / d^2 grows without limit.
+ */
+export function pointOverRect(h: number, u0: number, u1: number, v0: number, v1: number): number {
+  const om = cornerOmega(u1, v1, h) - cornerOmega(u0, v1, h) - cornerOmega(u1, v0, h) + cornerOmega(u0, v0, h);
+  return om / ((u1 - u0) * (v1 - v0));
+}
+
 // ---------------------------------------------------------------- stratified emitter samples
 
 // The first SAMPLE_N points of the (0,2)-sequence in base 2 (Sobol dimensions 1 and 2): every prefix of 2^k points

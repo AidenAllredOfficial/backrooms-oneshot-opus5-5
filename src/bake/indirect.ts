@@ -13,6 +13,10 @@
 // channel, E_c /= (1 - min(0.6, 0.55 * rho_c)) with rho the probe-weighted RGB albedo of the probes' own hits: each
 // extra bounce is tinted by the surroundings again, so enclosed coloured rooms keep (and deepen) their colour in
 // the shadows. The dynamic (luminance) channels use the luma of rho.
+// The first-order normal response (TL2): the probes' hemisphere tangential moments (probes.ts ProbeSet.mom) are
+// interpolated like the cube, and indirectAt turns them into the texel's indirect gradient `indirectOut.g` (world,
+// luma, with the luma multi-bounce): d E_ind / d theta for the normal tilted toward each tangent. bake/index.ts stores
+// it per texel so the shader's normal maps shade the indirect light (ceilings, whose w is 0, had no relief at all).
 
 import { CELL } from '../core/constants.ts';
 import { EDGE_OCCLUDES, edgeOccludesAt } from '../core/edges.ts';
@@ -27,6 +31,8 @@ import type { VisGrid } from './visgrid.ts';
 export const interp = {
   sh: new Float64Array(12), cube: new Float64Array(18), dcube: new Float64Array(24), rho3: new Float64Array(3), w: 0,
   farSh: new Float64Array(12), farCube: new Float64Array(18), farDcube: new Float64Array(24),
+  /** hemisphere tangential moments (ProbeSet.mom layout; with the cube, when the ProbeSet has them) */
+  mom: new Float64Array(12), farMom: new Float64Array(12),
 };
 
 /** Multi-bounce gain of one channel's (or the luma) probe albedo. */
@@ -126,6 +132,8 @@ function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, 
     const f = cw[k] * s;
     if (wantSh) { const o = cp[k] * 12; for (let j = 0; j < 12; j++) interp.sh[j] += f * P.sh[o + j]; }
     if (wantCube) { const oc = cp[k] * 18; for (let j = 0; j < 18; j++) interp.cube[j] += f * P.cube[oc + j]; }
+    if (wantCube && P.mom) { const om = cp[k] * 12, m = P.mom; for (let j = 0; j < 12; j++) interp.mom[j] += f * m[om + j]; }
+    if (wantFar && wantCube && P.farMom) { const om = cp[k] * 12, m = P.farMom; for (let j = 0; j < 12; j++) interp.farMom[j] += f * m[om + j]; }
     if (wantFar && P.farSh && P.farCube) {
       const o = cp[k] * 12, oc = cp[k] * 18, fs = P.farSh, fc = P.farCube;
       if (wantSh) for (let j = 0; j < 12; j++) interp.farSh[j] += f * fs[o + j];
@@ -147,9 +155,9 @@ const clampT = (t: number): number => (t < 0.02 ? 0.02 : t > CELL - 0.02 ? CELL 
  * the far field): the result (dynamic cubes included) blends towards the probes' far field (prop boxes next to the
  * probe transparent) by farW. Returns false if none. */
 export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, c: number, sh = true, cube = true, farW = 0): boolean {
-  interp.sh.fill(0); interp.cube.fill(0); interp.dcube.fill(0); interp.rho3.fill(0); interp.w = 0;
+  interp.sh.fill(0); interp.cube.fill(0); interp.dcube.fill(0); interp.rho3.fill(0); interp.mom.fill(0); interp.w = 0;
   wantSh = sh; wantCube = cube; wantFar = farW > 0 && P.farSh !== null;
-  if (wantFar) { interp.farSh.fill(0); interp.farCube.fill(0); interp.farDcube.fill(0); }
+  if (wantFar) { interp.farSh.fill(0); interp.farCube.fill(0); interp.farDcube.fill(0); interp.farMom.fill(0); }
   const g = job.g;
   const h = job.cellH;
   const h0 = h[c * 3], h1 = h[c * 3 + 1], h2 = h[c * 3 + 2];
@@ -181,11 +189,13 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
     for (let j = 0; j < 12; j++) interp.sh[j] *= s;
     for (let j = 0; j < 18; j++) interp.cube[j] *= s;
     for (let j = 0; j < 24; j++) interp.dcube[j] *= s;
+    for (let j = 0; j < 12; j++) interp.mom[j] *= s;
     interp.rho3[0] *= s; interp.rho3[1] *= s; interp.rho3[2] *= s;
     if (wantFar) {
       for (let j = 0; j < 12; j++) interp.farSh[j] *= s;
       for (let j = 0; j < 18; j++) interp.farCube[j] *= s;
       for (let j = 0; j < 24; j++) interp.farDcube[j] *= s;
+      for (let j = 0; j < 12; j++) interp.farMom[j] *= s;
     }
     interp.w = 1;
   }
@@ -194,6 +204,7 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
     for (let j = 0; j < 12; j++) interp.sh[j] += fw * (interp.farSh[j] - interp.sh[j]);
     for (let j = 0; j < 18; j++) interp.cube[j] += fw * (interp.farCube[j] - interp.cube[j]);
     if (P.farDyn) for (let j = 0; j < 24; j++) interp.dcube[j] += fw * (interp.farDcube[j] - interp.dcube[j]);
+    if (P.farMom) for (let j = 0; j < 12; j++) interp.mom[j] += fw * (interp.farMom[j] - interp.mom[j]);
   }
   return true;
 }
@@ -203,15 +214,39 @@ export function interpolateProbes(job: BakeJob, P: ProbeSet, x: number, y: numbe
 export const dynIndirect = new Float64Array(4);
 
 /** Per-channel multi-bounce gains (RGB, then the luma gain of the dynamic channels) of the last `indirectAt` call
- * (0 when no probe was found). */
-export const indirectOut = { mb: new Float64Array(3), mbL: 0 };
+ * (0 when no probe was found), and its indirect gradient g (world, luma lux per radian, with the luma gain; the caller
+ * applies AO): see indirectGradient. */
+export const indirectOut = { mb: new Float64Array(3), mbL: 0, g: new Float64Array(3) };
+
+const lumaAt = (cb: Float64Array, o: number): number => luma(cb[o], cb[o + 1], cb[o + 2]);
+
+/**
+ * First-order normal response of the indirect irradiance at a receiver with unit normal n, from interpolated hemisphere
+ * moments `mom` (ProbeSet.mom layout) and ambient cube `cube`; writes out[0..2] (world, same units as the cube's luma).
+ * The receiver's hemisphere first moment m(n) = integral over omega . n > 0 of Y(omega) omega is blended from the axis
+ * hemispheres like the cube (weights n_a^2): each one's normal component is its cube lobe (the cosine-weighted
+ * irradiance), its tangential components the stored moments. g = m - (m . n) n: for a normal tilted by a small angle
+ * theta toward a unit tangent t, E(n') = E(n) + theta (g . t), exact for the axis-aligned shell.
+ */
+export function indirectGradient(mom: Float64Array, cube: Float64Array, nx: number, ny: number, nz: number, out: Float64Array): void {
+  const wx = nx * nx, wy = ny * ny, wz = nz * nz;
+  const hx = nx > 0 ? 0 : 1, hy = ny > 0 ? 2 : 3, hz = nz > 0 ? 4 : 5; // hemisphere of each axis (cube lobe index)
+  const sx = nx > 0 ? 1 : -1, sy = ny > 0 ? 1 : -1, sz = nz > 0 ? 1 : -1;
+  // hemisphere h: normal component s * C(h); tangents (x, y, z order skipping its axis) at mom[h * 2], mom[h * 2 + 1]
+  const mx = wx * sx * lumaAt(cube, hx * 3) + wy * mom[hy * 2] + wz * mom[hz * 2];
+  const my = wx * mom[hx * 2] + wy * sy * lumaAt(cube, hy * 3) + wz * mom[hz * 2 + 1];
+  const mz = wx * mom[hx * 2 + 1] + wy * mom[hy * 2 + 1] + wz * sz * lumaAt(cube, hz * 3);
+  const d = mx * nx + my * ny + mz * nz;
+  out[0] = mx - d * nx; out[1] = my - d * ny; out[2] = mz - d * nz;
+}
 
 /** Indirect irradiance (RGB, lux, with multi-bounce) at a texel; writes out[0..2] (and `dynIndirect`,
  * `indirectOut`). `keepSh`: also interpolate the probe SH (left in `interp.sh`, for the near-field gather); `farW`:
  * the texel's nearWeight (blend towards the probes' far field, see interpolateProbes). */
 export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: number, nx: number, ny: number, nz: number, c: number, out: Float64Array, keepSh = false, farW = 0): void {
   dynIndirect.fill(0);
-  const mbo = indirectOut.mb;
+  const mbo = indirectOut.mb, go = indirectOut.g;
+  go.fill(0);
   if (!interpolateProbes(job, P, x, y, z, c, keepSh, true, farW)) { out[0] = 0; out[1] = 0; out[2] = 0; mbo.fill(0); indirectOut.mbL = 0; return; }
   const rho = interp.rho3;
   const m0 = multiBounce(rho[0]), m1 = multiBounce(rho[1]), m2 = multiBounce(rho[2]);
@@ -225,6 +260,10 @@ export function indirectAt(job: BakeJob, P: ProbeSet, x: number, y: number, z: n
   out[0] = (wx * cb[ox] + wy * cb[oy] + wz * cb[oz]) * m0;
   out[1] = (wx * cb[ox + 1] + wy * cb[oy + 1] + wz * cb[oz + 1]) * m1;
   out[2] = (wx * cb[ox + 2] + wy * cb[oy + 2] + wz * cb[oz + 2]) * m2;
+  if (P.mom) {
+    indirectGradient(interp.mom, cb, nx, ny, nz, go);
+    go[0] *= mb; go[1] *= mb; go[2] *= mb;
+  }
   if (P.dyn) {
     const d = interp.dcube;
     const ax = nx > 0 ? 0 : 1, ay = ny > 0 ? 2 : 3, az = nz > 0 ? 4 : 5;

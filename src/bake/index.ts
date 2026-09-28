@@ -11,7 +11,8 @@
 //      field -- the probes' far field without the props next to them, blended in by the texel's nearWeight --
 //      plus the boxes' bounce, replacing the analytic box and contact AO there);
 //   5. flicker channels (dynamic lights only; direct luminance + per-light bounce), surface mask, emission map,
-//      light volume + wall mask;
+//      light volume + wall mask; the indirect gradient (full bakes: indirect.ts indirectOut.g x AO, the probes'
+//      hemisphere moments), which encode.ts stores tangentially in the dir map's second layer;
 //   6. chart-local dilation and encoding. `term !== 'all'` zeroes the other term (debug bakes).
 // Every stochastic pattern is seeded by quantized WORLD positions; all ray arithmetic is exact in halo units, so
 // the output is byte-identical with or without a cache and seam texels agree between tiles.
@@ -162,6 +163,9 @@ export function bakeTile(
   const preview = variant === 'preview';
   const W = surfaces.atlasW, H = surfaces.atlasH;
   const AOW = new Float32Array(n), WD = new Float32Array(n), IND = new Float32Array(n * 3);
+  // indirect gradient (world, luma lux per radian of normal tilt, x AO): interpolated, near-field-scaled and dilated
+  // exactly like IND
+  const GR = new Float32Array(n * 3);
   const BF = F ? new Float32Array(n * 4) : null;
   const how = new Uint8Array(n); // 1 computed, 2 interpolate (full), 3 copied from blockRep (preview)
   const rep = new Int32Array(n); // preview: block representative; full: lattice-neighbour count (how 2)
@@ -242,6 +246,7 @@ export function bakeTile(
         ind3[0] *= k; ind3[1] *= k; ind3[2] *= k;
       }
       IND[t * 3] = ind3[0] * ao; IND[t * 3 + 1] = ind3[1] * ao; IND[t * 3 + 2] = ind3[2] * ao;
+      if (P) { const gi = indirectOut.g; GR[t * 3] = gi[0] * ao; GR[t * 3 + 1] = gi[1] * ao; GR[t * 3 + 2] = gi[2] * ao; }
       if (BF && dyn) {
         bounce4.fill(0);
         // full: the probes' bounced dynamic luminance (set by indirectAt); preview: the per-light constant
@@ -292,6 +297,7 @@ export function bakeTile(
       IND[t * 3] = IND[t * 3] * v + ND[o + 2] * ND[o + 5];
       IND[t * 3 + 1] = IND[t * 3 + 1] * v + ND[o + 3] * ND[o + 6];
       IND[t * 3 + 2] = IND[t * 3 + 2] * v + ND[o + 4] * ND[o + 7];
+      GR[t * 3] *= v; GR[t * 3 + 1] *= v; GR[t * 3 + 2] *= v; // (the far field's gradient, seen past the boxes)
       AO[t] *= ND[o + 1];
       if (BF) for (let k = 0; k < 4; k++) BF[t * 4 + k] *= v; // (the flicker channels' probe bounce, same visibility)
     }
@@ -301,14 +307,16 @@ export function bakeTile(
     if (h === 2 && nbr) {
       const cnt = rep[t];
       const inv = 1 / cnt;
-      let a0 = 0, a1 = 0, a2 = 0, i0 = 0, i1 = 0, i2 = 0;
+      let a0 = 0, a1 = 0, a2 = 0, i0 = 0, i1 = 0, i2 = 0, g0 = 0, g1 = 0, g2 = 0;
       for (let k = 0; k < cnt; k++) {
         const s = nbr[t * 4 + k];
         a0 += AO[s]; a1 += AOW[s]; a2 += WD[s];
         i0 += IND[s * 3]; i1 += IND[s * 3 + 1]; i2 += IND[s * 3 + 2];
+        g0 += GR[s * 3]; g1 += GR[s * 3 + 1]; g2 += GR[s * 3 + 2];
       }
       AO[t] = a0 * inv; AOW[t] = a1 * inv; WD[t] = a2 * inv;
       IND[t * 3] = i0 * inv; IND[t * 3 + 1] = i1 * inv; IND[t * 3 + 2] = i2 * inv;
+      GR[t * 3] = g0 * inv; GR[t * 3 + 1] = g1 * inv; GR[t * 3 + 2] = g2 * inv;
       if (BF) for (let j = 0; j < 4; j++) {
         let b = 0;
         for (let k = 0; k < cnt; k++) b += BF[nbr[t * 4 + k] * 4 + j];
@@ -318,6 +326,7 @@ export function bakeTile(
       const r = rep[t];
       AO[t] = AO[r]; AOW[t] = AOW[r]; WD[t] = WD[r];
       IND[t * 3] = IND[r * 3]; IND[t * 3 + 1] = IND[r * 3 + 1]; IND[t * 3 + 2] = IND[r * 3 + 2];
+      GR[t * 3] = GR[r * 3]; GR[t * 3 + 1] = GR[r * 3 + 1]; GR[t * 3 + 2] = GR[r * 3 + 2];
       if (BF) for (let j = 0; j < 4; j++) BF[t * 4 + j] = BF[r * 4 + j];
     }
   }
@@ -337,11 +346,14 @@ export function bakeTile(
   const t3 = performance.now();
 
   // ---- dilation, encoding, emission map, light volume
+  // (only probe bakes have a gradient: preview and direct-only bakes skip its dilation, their layer 1 stays 128)
+  const gr = P ? GR : null;
   const arrs: Float32Array[] = [E, V, AO, M];
   const comps = [3, 3, 1, 4];
+  if (gr) { arrs.push(gr); comps.push(3); }
   if (F) { arrs.push(F); comps.push(4); }
   dilate(T, { arrs, comps }, surfaces.charts.length, job.g);
-  const enc = encodeLightmap(T, E, V, AO, F, M);
+  const enc = encodeLightmap(T, E, V, AO, F, M, gr);
   const tEnc = performance.now();
   const emission = bakeEmission(job);
   const tEm = performance.now();
