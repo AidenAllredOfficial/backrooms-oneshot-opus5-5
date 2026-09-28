@@ -4273,6 +4273,17 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   iblIrradiance += (1.0 - w) * E;                     //   (metals, glossy tile, CRT glass, cars get highlights)
   brIrrLocal = E + Ef;                                // stashed for haze
   ```
+  - **The baked lobe is an area estimate** (`chunks/lighting.ts` `LOBE`, TS twin `bakedLobeRoughness`). The sketch's
+    `max(r0, 0.25)` is widened for the `RE_Direct` call (base and clearcoat lobe; the diffuse term does not depend on
+    the roughness): `α_eff² = max(α, 0.0625)² + K1·(1 − w) + K2·(1 − smoothstep(0, NG_FADE, dot(brNg, Lv)))`, with
+    α = roughness², K1 0.25, K2 0.2 and NG_FADE 0.3; variances add. `w·E` averages several lights, and a von
+    Mises-Fisher spread with mean resultant length w has an angular variance of about 2(1 − w) around L. A dominant
+    direction near the receiver plane stands for a source close to the surface, and it sweeps across the texels. A bulb
+    hanging 0.3 m under SHOWER_BLOCK's glossy tile ceiling, blended with the tube lamp's direction, met the mirror
+    condition along a curve. That drew a bent 2 m highlight, up to 5× bright through `1/max(n_g·L, 0.2)` (luma 225
+    against 116–134 at medium; now 122). Glazed wall tiles lit by a row of troffers no longer sparkle tile by tile in
+    that lobe. Glossy floors keep their lamp highlights: 85–106 % of the old peaks in LOBBY, OFFICE and POOLROOMS at
+    medium. Reflection passes run the same code, so the probe's capture loses the arc too.
   - `material.multiScatteringCompensation` is only initialised by three's `lights_fragment_begin` when punctual lights exist; our chunk **sets it itself** from `material.dfg` exactly as r186 does: `material.multiScatteringCompensation = 1.0 + material.specularColorBlended * (1.0 / (material.dfg.x + material.dfg.y) - 1.0);` (`material.dfg` is always set by `lights_fragment_begin`), so harness scenes without the flashlight match the game.
   - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
     `chunks/pom.ts FRAG_DIRVIS_GLSL`): micro-shadowing (Chan 2018, not lite) `clamp(|N·L| + 2·ao² − 1, 0, 1)` with the

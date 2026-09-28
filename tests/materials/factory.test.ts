@@ -16,6 +16,8 @@ import { createGlobals, createMaterialSystem } from '../../src/materials/Materia
 import { applySurfaceDefines, buildSurfaceFragment, buildSurfaceVertex, CACHE_KEY_PREFIX, SURFACE_VARIANTS } from '../../src/materials/SurfaceMaterial.ts';
 import type { SurfaceVariant } from '../../src/materials/SurfaceMaterial.ts';
 import { RIPPLE_LERP, waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
+import { bakedLobeRoughness, FRAG_LIGHTS_GLSL, LOBE } from '../../src/materials/chunks/lighting.ts';
+import { f, TUNE } from '../../src/materials/chunks/params.ts';
 import { definesKey, MRT_PASS, qualityDefinesOf, REFL_PASS } from '../../src/materials/shared.ts';
 import type { QualityDefines } from '../../src/materials/shared.ts';
 
@@ -494,5 +496,43 @@ describe('A.0 contract: quality presets', () => {
       else expect(Object.keys(b)).toEqual(['tpc', 'shadowSamples', 'probeRays']);
     }
     expect(bakeQualityOf({ ...QUALITY.high, bakeNearRays: 16 }).nearRays).toBe(16);
+  });
+});
+
+describe('the baked dominant-direction lobe is an area estimate (chunks/lighting.ts)', () => {
+  const MIN = TUNE.DIRECT_MIN_ROUGH;
+
+  it('a single frontal source (w = 1, n_g . L above NG_FADE) keeps max(r, DIRECT_MIN_ROUGH)', () => {
+    for (const r of [0, 0.1, MIN, 0.5, 0.9]) {
+      expect(bakedLobeRoughness(r, 1, LOBE.NG_FADE)).toBeCloseTo(Math.max(r, MIN), 12);
+      expect(bakedLobeRoughness(r, 1, 1)).toBeCloseTo(Math.max(r, MIN), 12);
+    }
+  });
+
+  it('widens with the spread of the averaged directions and toward grazing directions, alpha^2 adding like variances', () => {
+    const a = (r: number): number => r * r; // three: alpha = roughness^2
+    const a0 = a(MIN);
+    expect(a(bakedLobeRoughness(0.05, 0.6, 1)) ** 2).toBeCloseTo(a0 * a0 + LOBE.K1 * 0.4, 12);
+    expect(a(bakedLobeRoughness(0.05, 1, 0)) ** 2).toBeCloseTo(a0 * a0 + LOBE.K2, 12);
+    expect(a(bakedLobeRoughness(0.05, 1, -0.2)) ** 2).toBeCloseTo(a0 * a0 + LOBE.K2, 12);
+    let prev = 0;
+    for (const ngl of [1, 0.3, 0.2, 0.1, 0.05, 0]) {
+      const r = bakedLobeRoughness(0.1, 0.9, ngl);
+      expect(r).toBeGreaterThanOrEqual(prev);
+      prev = r;
+    }
+    expect(bakedLobeRoughness(1, 0, 0)).toBe(1); // clamped
+  });
+
+  it('the shader widens the base and the clearcoat lobe of the baked RE_Direct call only, and restores both', () => {
+    const src = FRAG_LIGHTS_GLSL;
+    expect(src).toContain(`#define BR_LOBE_K1 ${f(LOBE.K1)}`);
+    const block = src.slice(src.indexOf('if ( brW > 0.0 ) {'), src.indexOf('irradiance += brEf'));
+    expect(block).toContain('float brLobeX = BR_LOBE_K1 * ( 1.0 - brW ) + BR_LOBE_K2 * ( 1.0 - smoothstep( 0.0, BR_LOBE_NG_FADE, dot( brNg, brLv ) ) );');
+    expect(block).toContain('material.roughness = min( 1.0, sqrt( sqrt( brLa * brLa + brLobeX ) ) );');
+    expect(block).toContain('material.clearcoatRoughness = min( 1.0, sqrt( sqrt( brCa * brCa + brLobeX ) ) );');
+    expect(block.indexOf('RE_Direct(')).toBeGreaterThan(block.indexOf('material.clearcoatRoughness = min('));
+    expect(block).toContain('material.roughness = brR0;');
+    expect(block).toContain('material.clearcoatRoughness = brCcR0;');
   });
 });
