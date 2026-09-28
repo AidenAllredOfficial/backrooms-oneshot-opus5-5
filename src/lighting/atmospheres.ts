@@ -107,8 +107,8 @@ const DEEP_TINT: [number, number, number] = [1.0, 0.97, 0.9];
 
 function buildAtmospheres(): Record<number, AtmosphereParams> {
   const t: Record<number, AtmosphereParams> = {};
-  // R2-post: the cheap camera over-exposes the famous yellow rooms by about a stop (bias +1 EV: p50 ~130/255 like
-  // the Level 0 photo). Non-DARK Level 0 zones floor at EV 4 (was 6.5-7): an unlit pocket in a NORMAL district is a
+  // R2-post: the cheap camera over-exposes the famous yellow rooms by about a stop (bias +1 EV, since C.7b's steeper
+  // curve LOBBY +1.35 / MAZE +1.2: p50 ~130/255 like the Level 0 photo). Non-DARK Level 0 zones floor at EV 4 (was 6.5-7): an unlit pocket in a NORMAL district is a
   // camcorder at max gain (noisy grey-brown murk), not #000. DARK mood/zone keep their 5.5 floor via MOOD_MODS.
   t[Zone.LOBBY] = row({ haze: 0.004, tint: L0_TINT, albedo: 0.5, ev: [4, 11], bias: 1.35, bloom: 0.5, ao: 3.0, grain: 0.8, grade: GRADE_L0 });
   t[Zone.MANILA] = row({ haze: 0.005, tint: [1.0, 0.95, 0.82], albedo: 0.5, ev: [4, 11], bias: 1.0, bloom: 0.5, ao: 3.0, grain: 0.8, grade: GRADE_MANILA });
