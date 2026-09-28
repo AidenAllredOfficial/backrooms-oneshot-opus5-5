@@ -185,7 +185,7 @@ A frame at high or ultra, in order (`__backrooms.gpuProfile` segment names):
    `hiz`, `lightAtlas`, `volumetrics`), then shading into the three-attachment G-buffer (colour, fallback specular,
    normal and roughness). Most of the frame.
 5. `pyramid`: the colour and depth pyramid (SSR cones, water refraction).
-6. `ssr`: the Hi-Z trace (one ray per 2 × 2 display pixels) and, at ultra, its bilateral filter.
+6. `ssr`: the Hi-Z trace (one ray per 2 × 2 display pixels) and its resolve (6 taps on high, 8 on ultra).
 7. `mrtComposite`: the fallback specular or the traced reflection added to the colour; the depth copied to the
    composer's buffer.
 8. `late`: water, sparks and dust motes over the opaque colour.
