@@ -45,6 +45,7 @@ const IDLE_PAGE_MS = Number(process.env.BACKROOMS_RSD_IDLE_PAGE_MS ?? 90000);
 const IDLE_BROWSER_MS = Number(process.env.BACKROOMS_RSD_IDLE_BROWSER_MS ?? 180000);
 const IDLE_EXIT_MS = Number(process.env.BACKROOMS_RSD_IDLE_EXIT_MS ?? 600000);
 const BROWSER_MAX_SHOTS = 200;
+const RECYCLE_PSS_MB = Number(process.env.BACKROOMS_RECYCLE_PSS_MB ?? 3200);
 const GPU_RSS_RECYCLE_MB = 1200;
 const LOCK = path.join(RUN_DIR, 'daemon.lock');
 const T_START = Date.now();
@@ -379,15 +380,20 @@ function pump() {
   if (stopping) return;
   if (!lanes[0]) newLaneSlot(0);
   if (!lanes[0].busy && queue.length) void runLane(lanes[0]);
-  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !coldCache() && queue.some((j) => laneEligible(1, j))) {
+  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !coldCache() && !heavyLane0() && queue.some((j) => laneEligible(1, j))) {
     const l1 = lanes[1] ?? newLaneSlot(1);
     // a refused second page is retried at most every 2 s
     if (!l1.busy && (lanes[0].busy || queue.length > 1) && Date.now() - (l1.refusedAt ?? 0) > 2000) void runLane(l1);
   }
 }
 
+/** Lane 0 holds a heavy page (ultra, >= 1440p): a second page would take the tree past the 3.2 GB PSS cap. */
+function heavyLane0() { return (lanes[0]?.lease?.weightMb ?? 0) > WEIGHTS.page; }
+
 async function ensurePageLease(l, job) {
   const w = pageWeight({ quality: qualityOf(job.shot), ...parseSize(job.shot.size ?? job.req.size) });
+  // a lighter job that will boot its own page: give back the heavy weight (lane 1 waits on it)
+  if (l.lease && l.lease.weightMb > w && l.lane.warmKey !== job.warmKey) await l.lease.resize(w);
   if (l.lease && l.lease.weightMb >= w) return true;
   const label = `capture daemon page lane ${l.id} (pid ${process.pid})`;
   if (l.id === 0) {
@@ -407,7 +413,7 @@ async function runLane(l) {
   try {
     for (;;) {
       if (stopping) break;
-      if (l.id > 0 && (gov.state !== 'ok' || coldCache())) break;
+      if (l.id > 0 && (gov.state !== 'ok' || coldCache() || heavyLane0())) break;
       const job = takeJob(l);
       if (!job) break;
       if (job.req.cancelled) { finishJob(job, null); continue; }
@@ -416,8 +422,16 @@ async function runLane(l) {
       ran++;
       if (job.exclusive) exclusiveRunning++;
       try { await runJob(l, job); } finally { if (job.exclusive) exclusiveRunning--; l.job = null; }
-      // between jobs: recycle on PSS / shot counts
-      if (gov.takeRecycle()) { await closeLanePage(l); if (gov.last.pssMb > 3200 && lanes.every((x) => !x.job)) await closeBrowser('tree PSS over the cap'); }
+      // between jobs: a fresh PSS sample (the 5 s sampler misses short peaks); over the cap, this lane's warm page goes,
+      // and the browser too if that is not enough and nothing else runs
+      // (PSS <= RSS: only a tree RSS over the cap needs the ~100 ms PSS read)
+      const over = async () => gov.last.rssMb > RECYCLE_PSS_MB && (await gov.samplePssAsync()) > RECYCLE_PSS_MB;
+      if (gov.takeRecycle() || (await over())) {
+        log(`lane ${l.id}: tree PSS ${gov.last.pssMb} MB over ${RECYCLE_PSS_MB} MB: closing its page`);
+        await closeLanePage(l);
+        gov.step();
+        if ((await over()) && lanes.every((x) => !x.job)) await closeBrowser('tree PSS over the cap');
+      }
       const gpu = gov.last.byClass?.gpu?.rss ?? 0;
       if (browser && (browserShots >= BROWSER_MAX_SHOTS || gpu > GPU_RSS_RECYCLE_MB) && lanes.every((x) => !x.job)) await closeBrowser(`recycle after ${browserShots} shots, GPU RSS ${gpu} MB`);
       if (gov.state === 'shed') await closeLanePage(l);

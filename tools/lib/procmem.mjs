@@ -8,6 +8,7 @@
 //   tree PSS > recyclePssMb (3200): recycle the page / browser between jobs.
 // It only ever acts on processes the tool started (through the callbacks); it never kills anything else.
 import { readFileSync, readdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 const PAGE_KB = 4; // statm is in pages
 
@@ -68,6 +69,14 @@ export function pssMb(pid) {
   } catch { return 0; }
 }
 
+/** PSS of a process, read on the libuv pool (smaps_rollup of a 2 GB renderer takes ~10 ms of kernel time). */
+export async function pssMbAsync(pid) {
+  try {
+    const m = /\nPss:\s+(\d+) kB/.exec(await readFile(`/proc/${pid}/smaps_rollup`, 'utf8'));
+    return m ? Number(m[1]) / 1024 : 0;
+  } catch { return 0; }
+}
+
 /** 'gpu' | 'renderer' | 'utility' | 'zygote' | 'browser' | 'vite' | 'node' | 'other' */
 export function classify(pid) {
   let c = '';
@@ -124,9 +133,10 @@ export function createGovernor(o = {}) {
   let last = { t: 0, rssMb: 0, pssMb: 0, availMb: Infinity };
   let lastPssAt = 0;
 
-  function step(now = Date.now()) {
+  /** RSS + MemAvailable + state machine (cheap, synchronous). PSS only in manual mode (tests) or when forced. */
+  function step(now = Date.now(), forcePss = false) {
     const avail = memAvailable();
-    const withPss = now - lastPssAt >= (o.pssMs ?? 5000);
+    const withPss = forcePss || (o.manual && now - lastPssAt >= (o.pssMs ?? 5000));
     const m = treeMem(root, { pss: withPss });
     if (withPss) lastPssAt = now;
     last = { t: now, rssMb: m.rssMb, pssMb: withPss ? m.pssMb : last.pssMb, availMb: Math.round(avail), procs: m.procs, byClass: m.byClass };
@@ -144,14 +154,40 @@ export function createGovernor(o = {}) {
       else if (state === 'shed') o.onShed?.(avail);
       else o.onRecover?.(avail);
     }
-    if (withPss && m.pssMb > recyclePssMb && !recycleWanted) { recycleWanted = true; o.onRecycle?.(m.pssMb); }
+    if (withPss) notePss(m.pssMb);
     return last;
   }
 
-  const timer = o.manual ? null : setInterval(() => { try { step(); } catch { /* /proc race */ } }, o.rssMs ?? 500);
+  function notePss(pss) {
+    last.pssMb = Math.round(pss);
+    peak.pssMb = Math.max(peak.pssMb, last.pssMb);
+    if (pss > recyclePssMb && !recycleWanted) { recycleWanted = true; o.onRecycle?.(pss); }
+  }
+
+  /** Tree PSS read in parallel off the event loop (a synchronous read of a 3 GB tree blocks it ~100 ms). */
+  let pssP = null;
+  function samplePssAsync() {
+    pssP ??= (async () => {
+      const pids = descendants(root);
+      const v = await Promise.all(pids.map(pssMbAsync));
+      lastPssAt = Date.now();
+      notePss(v.reduce((a, x) => a + x, 0));
+      return last.pssMb;
+    })().finally(() => { pssP = null; });
+    return pssP;
+  }
+
+  const timer = o.manual ? null : setInterval(() => {
+    try { step(); } catch { /* /proc race */ }
+    if (Date.now() - lastPssAt >= (o.pssMs ?? 5000)) samplePssAsync().catch(() => {});
+  }, o.rssMs ?? 500);
   timer?.unref?.();
   return {
     step,
+    /** Samples now, with PSS, synchronously (blocks ~100 ms for a 3 GB tree); returns the tree PSS in MB. */
+    samplePss() { step(Date.now(), true); return last.pssMb; },
+    /** The same without blocking the event loop. */
+    samplePssAsync,
     get state() { return state; },
     get last() { return last; },
     peak,
