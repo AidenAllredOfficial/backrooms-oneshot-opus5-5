@@ -1,9 +1,164 @@
-# Performance audits, September 26-27, 2026
+# Performance audits, September 26-28, 2026
 
-Three passes. The third (graphics-realism budget) brought the frame back toward its budget after the realism
-packages; the second (rendering overhaul) cut the GPU cost of a frame by 2x at high and 4-5x at ultra without
-changing the image, and made screenshot / QA runs 3-9x faster; the first removed rebuilds and startup
-serialisation.
+Four passes. The fourth (iteration speed) made automation captures final at ready and reproducible across cache
+state, shot order and page reuse, and moved the tool cache's costs off the bake threads; the third
+(graphics-realism budget) brought the frame back toward its budget after the realism packages; the second
+(rendering overhaul) cut the GPU cost of a frame by 2x at high and 4-5x at ultra without changing the image, and
+made screenshot / QA runs 3-9x faster; the first removed rebuilds and startup serialisation.
+
+## Iteration speed: capture contract v2 and the tool cache (September 28, 2026)
+
+Screenshots were slow and not reproducible for the same reasons: the automation gate waited for chunk ring 1 only,
+so the frame at ready still changed while farther tiles streamed in, and tools slept 250 ms to hide part of it; the
+cold path spent a fifth of its time gzipping and uploading cache entries on the bake threads; and 16 of the last
+38 commits that touched the worker's import graph threw the whole cache away without changing what the worker
+computes. This pass makes readiness a function of position and view (docs/DESIGN.md §7.5), adds an in-place
+`__backrooms.load()` for tools that keep one page per boot group, and rebuilds the cache keys and write path.
+The game itself is unchanged for players: their gate, `READY_FRAMES` and streaming are as before.
+
+### What made captures depend on timing
+
+Measured on the D2 list (12 shots: 9 high, 2 ultra, 1 medium; 1600 × 900) before the change:
+
+| Comparison | Pixels that differed |
+| --- | ---: |
+| ready vs ready + 250 ms, POOLROOMS | 771k |
+| cold cache vs warm | up to 15.7k (max 125 levels) |
+| in-place vs fresh page | up to 12k |
+| two full-idle captures | 0 |
+
+Three causes, all fixed:
+
+- **Tiles after ready.** Ring 1 is 36 tiles, but the reflection probe renders a 120 m cube and the light atlas is
+  sampled up to 56 m, so tiles 38-61 m away changed the frame when they arrived (each re-captured the probe). The
+  capture set now holds every tile that can reach a still frame: 44-52 at high, 62-68 at ultra.
+- **Simulation time before the freeze.** `time=` froze the clock only when the stream was ready, so flicker, water
+  drips and sway, the anomaly director and breathing ran for however long the stream took, and the probe kept
+  faces captured at other times. An automation launch gate now freezes the clock when it opens, and the probe
+  re-captures after the launch toggles.
+- **Exposure.** The gate snapped the next three meter readings, one every 8 frames, but went ready 10 frames later,
+  and the spring then adapted on wall-clock time. The settle meters every frame from a fixed EV once the frame is
+  quiet, drops a reading in flight, and waits for three readings.
+
+Also found and fixed: the probe marked itself stale only for tiles within a 60 m circle, not the 60 m cube its
+faces render, and re-estimated its room box only every 15 frames after a layout arrived.
+
+### Result: a capture at ready is final
+
+Every comparison below is 0 px on all 12 D2 shots, in two independent runs with separate cache directories:
+
+| Gate-v2 capture at ready, compared with | Differing pixels |
+| --- | ---: |
+| the same page after full idle + 60 frames | 0 |
+| the same shot with an empty cache | 0 |
+| `noprime=1` | 0 |
+| `stream=capture` (only the capture set streamed) | 0 |
+| `load()` in place after 3 other shots (pass 1) and after 9 (pass 2) | 0 |
+
+`converge.mjs` (captures at ready + 0, + 250 ms, + 1 s, full idle, idle + 60 frames on one page) gives 0 px for
+every step on POOLROOMS high, PARKING high and PARKING ultra, so tools need no wait after ready. Compared with the
+old gate, images change by 0.04-0.65 % of pixels (more tiles present, settled exposure, time frozen from the start):
+baselines are refreshed once.
+
+### Speed
+
+Cold shots, the four cold locations of the profiling pass at high, a fresh cache directory per run, variants
+interleaved (mean time to ready; job latency p50 of the full builds):
+
+| Variant | Quiet window | Loaded window (load average 7-16) |
+| --- | ---: | ---: |
+| no cache at all (`BACKROOMS_TILE_CACHE=0`) | 7.6-7.9 s, 573-586 ms | 9.4-9.5 s |
+| cache reads only (measurement variant) | 8.0-8.2 s, 605-617 ms | |
+| before: gzip + PUT on the bake thread | 9.4-9.5 s, 801 ms | 10.2-12.1 s |
+| **after: writer worker per bake worker** | **8.7 s, 687-698 ms** | 11.0-13.2 s |
+| raw PUT from the bake thread (server gzips) | 12.9-13.2 s (base 9.4-9.5 in the same rounds) | |
+| raw PUT from the writer (server gzips) | | 14.1-14.7 s |
+| gate v2 + writer, 191 full bakes instead of 144 | | 13.2-15.6 s (before: 10.2-12.0 s in the same rounds) |
+
+- The writer recovers 0.7-0.8 s of the 1.6-1.9 s the cache used to cost a cold location (job latency p50 801 → 687-698 ms; 573-586 ms without a cache). The rest is the reads (0.3 s:
+  key digests and GET misses in front of every job) and the writers' gzip running next to memory-bandwidth-bound
+  bakes (bake compute +13 %). Getting it back needs the writes deferred until the gate opens, which would lose
+  entries on pages closed right after the capture unless the tools wait for a flush (see Open).
+- Gate v2 bakes 33 % more tiles per cold location at high (48 instead of 36). In four interleaved rounds a cold
+  location took 10-30 % longer than before the pass (per-job latency fell from 1025-1044 ms to 847-981 ms, but
+  there are more jobs); in exchange the image no longer depends on the cache or on timing.
+
+Warm and in place (D2 list; 1600 × 900):
+
+| | Result |
+| --- | --- |
+| fresh page, warm cache, time to ready (12 shots) | p50 2.05-2.3 s; no wait after ready (was 250 ms, plus 0.07-0.11 s of polling) |
+| the settle (`br:captureReady` → `br:settled`) | about 0.15 s |
+| full idle, for comparison | +3.0-45.5 s per shot (the far ring, cold) |
+| `load()` in place, nearby pose (same capture set) | 0.13-0.29 s |
+| `load()` in place, new place, `stream=capture` | p50 1.37 s at load average 10 (1.0-2.1 s); 69 cache entries (was 93-200); 20 misses in 24 loads |
+| `load()` in place, new place, full streaming | p50 1.47-1.49 s (0.9-4.7 s: the last shot's far-ring jobs still running) |
+
+### The tool cache
+
+- **Keys from bundles.** The code hash is SHA-1 of a tree-shaken, minified rolldown bundle of `chunk.worker.ts`
+  (tile hash) and of `worldStage.ts` (world hash: layout, spawn and find). Over the 38 non-merge commits that
+  touched the worker's import graph between September 26 and 28, the raw-source hash invalidated the cache 38 times
+  and the tile hash 22 times: 14 render-only commits (presets in `core/quality.ts`, `settings.ts`,
+  `emitterProfile.ts`), one comment reflow and one `ids.ts` edit no longer invalidate. The world hash changed on 5
+  of them, so layouts, spawns and finds stayed warm through 17 of the 22 tile invalidations. Hashing takes about
+  0.3 s cold and 22 ms from the memo (a stamp of the graph's paths, mtimes and sizes).
+- **World keys ignore bake settings**, so layouts, spawns and finds are shared between qualities, and a `bake` miss
+  is answered from the `build lighting:'full'` entry of the same tile.
+- **Writes off the bake threads.** The bake worker transfers the encoded entry to its own writer worker, which gzips
+  and uploads it. Raw uploads from the bake thread (the server gzipping at zlib level 1) were slower than the old
+  path: mean cold ready 13.0-13.2 s against 9.4-9.5 s, job latency p50 1148 ms against 801 ms with the same compute
+  time, so the upload itself blocks the thread. The server still accepts raw PUTs behind a bounded queue.
+- **Store.** Namespaced directories (the first 12 hex of the code hash), asynchronous I/O, batched mtime updates, and
+  eviction of dead code versions first (legacy flat files, then namespaces unused for 24 h beyond the 3 most
+  recent, then LRU), in batches above cap × 1.05.
+
+### Memory
+
+100 in-place `load()` shots on one page at high, cycling through the 9 high D2 shots (warm cache):
+
+| | `stream=capture` | full streaming |
+| --- | ---: | ---: |
+| Chromium tree PSS, plateau / peak | 1.95-2.1 GB / 2.18 GB | 1.95-2.1 GB / 2.21 GB |
+| JS heap, max | 161 MB | 215 MB |
+| `load()` p50 / p90 | 0.81 s / 1.25 s | 0.83 s / 1.49 s |
+| cache entries per new place | 63-73 (56-131 MB) | 92-125 (up to 167 MB) |
+| entries computed (misses with a PUT) | 2 in 100 shots | 0 |
+| errors | 0 | 0 |
+
+Captures of the last cycle (after about 90 shots on the page) equal fresh pages to the pixel in both modes. Fresh
+pages (Chromium and Vite PSS, sampled every second): 1.5-1.8 GB warm at high, 1.6-2.2 GB at ultra, 1.9-3.0 GB
+while baking cold; `stream=capture` keeps 44-68 tiles resident instead of the whole radius (100 at high, 196 at
+ultra). Full idle, which the tools no longer need,
+reached 3.6-3.8 GB with the ultra radius resident.
+
+### Measured and not changed
+
+- **Raw PUTs** (the server gzips at zlib level 1): slower from the bake thread (cold 12.9-13.2 s against 9.4-9.5 s,
+  job latency p50 1148 ms against 801 ms at the same compute time) and from the writer (latency p50 1168-1252 ms:
+  the 4-7 MB uploads hold the page's connections while every job's GET waits). The server keeps accepting them.
+- **A single capture set for every view** (all tiles within the fog end): the ultra set would grow from 62-68 to
+  about 110 tiles for no pixel; the view-dependent band is exact against full idle.
+- **Settling on wall-clock time** (the old 250 ms wait): the frame-counted settle costs about 0.15 s and is exact.
+
+### Open
+
+- **Deferred cache writes.** Holding encoded entries while an automation gate is closed and writing them once it
+  opens would bring a cold location to the reads-only time (8.0-8.2 s instead of 8.7 s at high). A page closed
+  right after its capture would lose the held entries, so the tools would have to wait for a flush first
+  (a `__backrooms` flush call), and the held entries cost up to 50 MB per bake worker at high.
+- **The remaining in-place misses** (3-4 entries on a first visit to a new place, 0 on the second pass) are not
+  identified; they are computed once and cached.
+
+### Methodology
+
+One tool browser at a time (`BACKROOMS_BROWSER_SLOTS=1 BACKROOMS_MIN_FREE_MB=4500`), 4 bake workers, scratch
+cache directories, 1600 × 900, CDP `Page.captureScreenshot` with `optimizeForSpeed` (decodes to the same RGBA as a
+default PNG). Cold timings are interleaved A/B runs of the four cold locations of the profiling pass (POOLROOMS,
+PARKING, OFFICE, WAREHOUSE at high), each with a fresh cache directory; the machine was shared with other agents'
+test runs (load average 6-16), so compare within a round. Pixel comparisons count pixels whose largest channel
+difference is above 0.
+
 
 ## Graphics-realism budget (third pass, September 27, 2026)
 
@@ -262,6 +417,9 @@ Headless: `node tools/shoot.mjs --size 1920x1080 --params "seed=7&quality=ultra&
 baseline and the change on the same machine, one browser at a time.
 
 ## Screenshot and QA runs
+
+(Second pass. The fourth pass replaced the gate ring with the capture set and the 250 ms wait with a frame-counted
+settle; see the top of this file.)
 
 A QA shot took about 20 s to reach ready (up to 32 s) plus a fixed 4 s wait. Phase marks and tile counts sampled
 every 100 ms showed the engine ready after about 2 s; the rest was the bake workers. The automation gate (`bake`
