@@ -9,7 +9,7 @@ import { genNb, tileKey } from './helpers.ts';
 
 vi.setConfig({ testTimeout: 180_000 }); // heavy generation + meshing under shared-machine load
 
-test('buildTile (excluding props) median <= 20 ms per tile at tpc 12', () => {
+test('buildTile (excluding props) median <= 20 ms per tile at tpc 12', { tags: ['sweep'] }, () => {
   const cases: [ZoneId, StoreyId][] = [[Zone.OFFICE, 0], [Zone.LOBBY, 0], [Zone.MAZE, 0], [Zone.DARK, 0], [Zone.POOLROOMS, 2], [Zone.WAREHOUSE, 1], [Zone.PIPEWORKS, 1]];
   const nbs = cases.map(([z, s]) => ({ nb: genNb(13, s, 0, 0, z), s }));
   // warm-up (JIT)

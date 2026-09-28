@@ -46,15 +46,15 @@ describe('bake pipeline', () => {
     expect(lm.stats.texels).toBeGreaterThan(1000);
     expect(lm.stats.lights).toBeGreaterThan(0);
     if (lm.flick) expect(lm.volume.c).not.toBeNull();
-  }, 60_000);
+  });
 
-  it('is deterministic (full)', () => {
+  it('is deterministic (full)', { tags: ['sweep'] }, () => {
     const a = bakeTile(nb, tile, s, 'full', Q_HIGH, 'all');
     const b = bakeTile(nb, tile, s, 'full', Q_HIGH, 'all');
     expectSame(a, b);
-  }, 120_000);
+  });
 
-  it('is byte-identical with and without a warm BakeCache (full and preview)', () => {
+  it('is byte-identical with and without a warm BakeCache (full and preview)', { tags: ['sweep'] }, () => {
     const fresh = bakeTile(nb, tile, s, 'full', Q_HIGH, 'all');
     const freshP = bakeTile(nb, tile, s, 'preview', Q_HIGH, 'all');
     const cache = createBakeCache();
@@ -71,7 +71,7 @@ describe('bake pipeline', () => {
     expectSame(freshP, warmP);
     cache.clear();
     expect(cache.chunks).toBe(0);
-  }, 180_000);
+  });
 
   it('verifies the chart hash of the SurfaceSet', () => {
     const bad = { ...s, hash: (s.hash + 1) >>> 0 };
@@ -80,7 +80,7 @@ describe('bake pipeline', () => {
     expect(() => bakeTile(nb, tile, moved, 'preview', Q_HIGH, 'all')).toThrow(/chartHash/);
     const other = { ...s, tileKey: '0:0:0:2' };
     expect(() => bakeTile(nb, tile, other, 'preview', Q_HIGH, 'all')).toThrow();
-  }, 60_000);
+  });
 
   it('term !== all zeroes the other term', () => {
     const all = bakeTile(nb, tile, s, 'preview', Q_HIGH, 'all');
@@ -98,5 +98,5 @@ describe('bake pipeline', () => {
     let maxW = 0;
     for (let i = 3; i < ind.dir.length; i += 4) maxW = Math.max(maxW, ind.dir[i]);
     expect(maxW).toBe(0);
-  }, 60_000);
+  });
 });

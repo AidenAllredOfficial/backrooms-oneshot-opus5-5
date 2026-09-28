@@ -61,10 +61,13 @@ export interface GenWorld {
   readonly facade: WorldGen;
 }
 
+type MetaEnv = { MODE?: string; DEV?: boolean };
 /** 'test' under vitest (failures throw), 'dev' in the Vite dev server (failures warn), null otherwise (production,
  * plain Node tools). `WORLD_VALIDATE=warn` (Node env) downgrades test-mode failures to warnings; `off` disables. */
 const ENV_MODE: 'test' | 'dev' | null = (() => {
-  const env = (import.meta as { env?: { MODE?: string; DEV?: boolean } }).env;
+  // vitest loads src natively (vitest.config.ts: no Vite transform, so no import.meta.env); its worker state carries
+  // the env the transform would have injected (MODE 'test'). Plain Node tools, even ones a test spawns, have neither.
+  const env = (import.meta as { env?: MetaEnv }).env ?? (globalThis as { __vitest_worker__?: { metaEnv?: MetaEnv } }).__vitest_worker__?.metaEnv;
   if (!env) return null;
   return env.MODE === 'test' ? 'test' : env.DEV ? 'dev' : null;
 })();

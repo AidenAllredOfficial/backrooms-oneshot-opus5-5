@@ -32,6 +32,8 @@ import { lowExpanseFeatures, lowExpanseGenerator } from '../../src/world/zones/l
 import { MAZE_NARROW, MAZE_WIDE, mazeGenerator, mazeSeamPattern } from '../../src/world/zones/maze.ts';
 import { isAisle, officeDebug, officeGenerator } from '../../src/world/zones/office.ts';
 import { PENDANT_HANG_CM, pillarHallGenerator, pillarLattice } from '../../src/world/zones/pillarHall.ts';
+import { sweepSize } from '../scale.ts';
+import { isDeepStrictEqual, sameValues } from '../util/check.ts';
 
 const N = CHUNK_CELLS;
 const L0_ZONES: readonly ZoneId[] = [Zone.LOBBY, Zone.MANILA, Zone.DARK, Zone.MAZE, Zone.LOW_EXPANSE, Zone.PILLAR_HALL, Zone.OFFICE];
@@ -329,10 +331,12 @@ describe('WP2 palettes and lighting', () => {
 // ------------------------------------------------------------------------------------------------ generic invariants
 
 describe('WP2 generators: invariants over 200 seeds x each zone (mini pipeline)', () => {
+  // an invariant sweep: all 200 seeds under `npm test`, the first 25 in the quick tiers (tests/scale.ts)
+  const INVARIANT_SEEDS = sweepSize(SEEDS, 25);
   for (const zone of L0_ZONES) {
     it(`${zoneName(zone)}: seams untouched, stamps untouched, connected from the ports, validateLayout = []`, () => {
       let minReach = 1;
-      for (let seed = 1; seed <= SEEDS; seed++) {
+      for (let seed = 1; seed <= INVARIANT_SEEDS; seed++) {
         const stamp: Stamp = seed % 3 === 0 ? 'tower' : seed % 3 === 1 ? 'artery' : 'none';
         const cx = (seed % 7) - 3, cz = ((seed * 5) % 7) - 3;
         const s = (zone === Zone.OFFICE || seed % 4 !== 0 ? 0 : (seed >> 2) % 3) as StoreyId;
@@ -346,13 +350,14 @@ describe('WP2 generators: invariants over 200 seeds x each zone (mini pipeline)'
         // reserved cells and every edge touching them are untouched
         for (let c = 0; c < N * N; c++) {
           if (!(b.flags[c] & CellFlag.RESERVED)) continue;
-          expect([l.flags[c], l.floorCm[c], l.ceilCm[c], l.floorMat[c], l.blockCm[c]]).toEqual([b.flags[c], b.floorCm[c], b.ceilCm[c], b.floorMat[c], b.blockCm[c]]);
+          const got = [l.flags[c], l.floorCm[c], l.ceilCm[c], l.floorMat[c], l.blockCm[c]], want = [b.flags[c], b.floorCm[c], b.ceilCm[c], b.floorMat[c], b.blockCm[c]];
+          if (!sameValues(got, want)) expect(got).toEqual(want);
         }
         for (let j = 0; j < N; j++) {
           for (let i = 0; i <= N; i++) {
             const e = exIdx(i, j);
             const touch = (i > 0 && b.flags[cellIdx(i - 1, j)] & CellFlag.RESERVED) || (i < N && b.flags[cellIdx(i, j)] & CellFlag.RESERVED);
-            if (touch) expect(l.ex.kind[e]).toBe(b.ex.kind[e]);
+            if (touch && !Object.is(l.ex.kind[e], b.ex.kind[e])) expect(l.ex.kind[e]).toBe(b.ex.kind[e]);
           }
         }
         // heights are sane: openings clear the player above the higher adjacent floor (hA is storey-relative
@@ -367,36 +372,39 @@ describe('WP2 generators: invariants over 200 seeds x each zone (mini pipeline)'
               const ca = axis === 'x' ? (i > 0 ? cellIdx(i - 1, j) : -1) : (j > 0 ? cellIdx(i, j - 1) : -1);
               const cb = axis === 'x' ? (i < N ? cellIdx(i, j) : -1) : (j < N ? cellIdx(i, j) : -1);
               const sill = Math.max(ca >= 0 ? l.floorCm[ca] : -1e4, cb >= 0 ? l.floorCm[cb] : -1e4);
-              if (k === EdgeKind.HEADER) expect(eg.hA[e] - sill).toBeGreaterThanOrEqual(190);
-              if (k === EdgeKind.DOORWAY) expect(eg.hA[e] - sill, `${zoneName(zone)} seed ${seed} door ${axis} ${i},${j}`).toBeGreaterThanOrEqual(200);
+              if (k === EdgeKind.HEADER && !(eg.hA[e] - sill >= 190)) expect(eg.hA[e] - sill).toBeGreaterThanOrEqual(190);
+              if (k === EdgeKind.DOORWAY && !(eg.hA[e] - sill >= 200)) expect(eg.hA[e] - sill, `${zoneName(zone)} seed ${seed} door ${axis} ${i},${j}`).toBeGreaterThanOrEqual(200);
               // zone-written doors keep a lintel (>= 10 cm) under the lower adjacent ceiling (stamp doors excluded)
               const stampEdge = (ca >= 0 && (l.flags[ca] & CellFlag.RESERVED) !== 0) || (cb >= 0 && (l.flags[cb] & CellFlag.RESERVED) !== 0);
               if (k === EdgeKind.DOORWAY && !stampEdge) {
                 const lowCeil = Math.min(ca >= 0 ? l.ceilCm[ca] : 1e4, cb >= 0 ? l.ceilCm[cb] : 1e4);
-                expect(eg.hA[e], `${zoneName(zone)} seed ${seed} door lintel ${axis} ${i},${j}`).toBeLessThanOrEqual(lowCeil - 10);
+                if (!(eg.hA[e] <= lowCeil - 10)) expect(eg.hA[e], `${zoneName(zone)} seed ${seed} door lintel ${axis} ${i},${j}`).toBeLessThanOrEqual(lowCeil - 10);
               }
-              if (k === EdgeKind.PARTITION) expect(eg.hA[e]).toBe(150);
+              if (k === EdgeKind.PARTITION && !Object.is(eg.hA[e], 150)) expect(eg.hA[e]).toBe(150);
             }
           }
         }
-        for (let c = 0; c < N * N; c++) if (!(l.flags[c] & CellFlag.RESERVED)) expect(l.ceilCm[c] - l.floorCm[c]).toBeGreaterThanOrEqual(200);
+        for (let c = 0; c < N * N; c++) if (!(l.flags[c] & CellFlag.RESERVED) && !(l.ceilCm[c] - l.floorCm[c] >= 200)) expect(l.ceilCm[c] - l.floorCm[c]).toBeGreaterThanOrEqual(200);
         // fixture ids unique; props inside the chunk and valid kinds
         expect(new Set(l.fixtures.map((f) => f.id)).size).toBe(l.fixtures.length);
         for (const p of l.props) {
-          expect(PROP_DEFS[p.kind]).toBeDefined();
-          expect(p.x).toBeGreaterThanOrEqual(0); expect(p.x).toBeLessThan(N * CELL);
-          expect(p.z).toBeGreaterThanOrEqual(0); expect(p.z).toBeLessThan(N * CELL);
-          expect(Number.isFinite(p.yaw)).toBe(true);
+          if (PROP_DEFS[p.kind] === undefined) expect(PROP_DEFS[p.kind]).toBeDefined();
+          if (!(p.x >= 0)) expect(p.x).toBeGreaterThanOrEqual(0);
+          if (!(p.x < N * CELL)) expect(p.x).toBeLessThan(N * CELL);
+          if (!(p.z >= 0)) expect(p.z).toBeGreaterThanOrEqual(0);
+          if (!(p.z < N * CELL)) expect(p.z).toBeLessThan(N * CELL);
+          if (!Number.isFinite(p.yaw)) expect(Number.isFinite(p.yaw)).toBe(true);
         }
         // connectivity from the seam ports (before WP1's repair): nearly everything is reachable
         const r = reachFromPorts(l);
         minReach = Math.min(minReach, r.reached / Math.max(1, r.walkable));
-        if (stamp === 'none' && zone !== Zone.LOW_EXPANSE && zone !== Zone.PILLAR_HALL) expect(r.reached, `seed ${seed}`).toBe(r.walkable);
+        if (stamp === 'none' && zone !== Zone.LOW_EXPANSE && zone !== Zone.PILLAR_HALL && !Object.is(r.reached, r.walkable)) expect(r.reached, `seed ${seed}`).toBe(r.walkable);
         // then the rest of WP1's structural pipeline (repair, rooms, ports) and its validator
         repairConnectivity(ctx.grid, stamp === 'tower' ? [[15, 17]] : [], zone === Zone.OFFICE || zone === Zone.MANILA ? 'doorway' : 'open');
         labelRooms(l);
         l.ports = computePorts(l);
-        expect(validateLayout(l), `${zoneName(zone)} seed ${seed}`).toEqual([]);
+        const problems = validateLayout(l);
+        if (problems.length !== 0) expect(problems, `${zoneName(zone)} seed ${seed}`).toEqual([]);
       }
       expect(minReach).toBeGreaterThan(0.85);
     });
@@ -408,7 +416,7 @@ describe('WP2 generators: invariants over 200 seeds x each zone (mini pipeline)'
         const a = build(zone, seed, 0, seed, -seed, { stamp: 'artery' }).l;
         build(Zone.LOBBY, seed + 99, 0, 3, 3); // unrelated work in between
         const b = build(zone, seed, 0, seed, -seed, { stamp: 'artery' }).l;
-        expect(b).toEqual(a);
+        if (!isDeepStrictEqual(b, a)) expect(b).toEqual(a);
       }
     }
   });
@@ -534,7 +542,8 @@ describe('WP2 LOBBY recursive division', () => {
         expect([45, 90]).toContain(rise);
         expect(r.steps).toBe(rise === 45 ? 3 : 6);
       }
-      for (let c = 0; c < N * N; c++) expect([0, -45, -90, 45, -300, -450, -600]).toContain(l.floorCm[c]);
+      const LEVELS = [0, -45, -90, 45, -300, -450, -600];
+      for (let c = 0; c < N * N; c++) if (LEVELS.indexOf(l.floorCm[c]) === -1) expect(LEVELS).toContain(l.floorCm[c]);
     }
     expect(bays).toBeGreaterThan(0); expect(bulk).toBeGreaterThan(0); expect(sunk).toBeGreaterThan(0); expect(stages).toBeGreaterThan(0);
   });
@@ -569,8 +578,8 @@ describe('WP2 MAZE seams', () => {
         let run = 0, maxRun = 0, open = 0;
         for (let c = 0; c < N; c++) {
           if (EDGE_WALKABLE[e.kind[c]]) { open++; run = 0; } else { run++; maxRun = Math.max(maxRun, run); }
-          if (v === MAZE_NARROW && EDGE_WALKABLE[e.kind[c]]) expect(c & 1).toBe(1);
-          if (v === MAZE_WIDE) expect(e.kind[c & ~1]).toBe(e.kind[c | 1]); // macro edges are 2 cells
+          if (v === MAZE_NARROW && EDGE_WALKABLE[e.kind[c]] && !Object.is(c & 1, 1)) expect(c & 1).toBe(1);
+          if (v === MAZE_WIDE && !Object.is(e.kind[c & ~1], e.kind[c | 1])) expect(e.kind[c & ~1]).toBe(e.kind[c | 1]); // macro edges are 2 cells
         }
         expect(maxRun).toBeLessThanOrEqual(12);
         expect(open).toBeGreaterThanOrEqual(2);
@@ -587,7 +596,7 @@ describe('WP2 MAZE seams', () => {
           const c = cellIdx(li, lj);
           if (l.flags[c] & CellFlag.RESERVED) continue;
           const node = (li & 1) === 1 && (lj & 1) === 1;
-          if (node) expect(l.flags[c] & CellFlag.SOLID).toBe(0);
+          if (node && !Object.is(l.flags[c] & CellFlag.SOLID, 0)) expect(l.flags[c] & CellFlag.SOLID).toBe(0);
           if ((li & 1) === 0 && (lj & 1) === 0 && !(l.flags[c] & CellFlag.SOLID)) {
             // an open pillar cell only exists inside a chamber (all 4 neighbours open) or behind a port / stamp
             // opening (next to a border or a reserved cell)
@@ -598,12 +607,12 @@ describe('WP2 MAZE seams', () => {
               if (l.flags[cellIdx(a, b)] & CellFlag.RESERVED) nearOpening = true;
               else if (!(l.flags[cellIdx(a, b)] & CellFlag.SOLID)) openNbrs++;
             }
-            expect(nearOpening || openNbrs === 4).toBe(true);
+            if (!(nearOpening || openNbrs === 4)) expect(nearOpening || openNbrs === 4).toBe(true);
           }
         }
       }
       // no interior thin walls in the narrow variant
-      for (let j = 0; j < N; j++) for (let i = 1; i < N; i++) if (!(l.flags[cellIdx(i - 1, j)] & CellFlag.RESERVED) && !(l.flags[cellIdx(i, j)] & CellFlag.RESERVED)) expect(l.ex.kind[exIdx(i, j)]).toBe(EdgeKind.OPEN);
+      for (let j = 0; j < N; j++) for (let i = 1; i < N; i++) if (!(l.flags[cellIdx(i - 1, j)] & CellFlag.RESERVED) && !(l.flags[cellIdx(i, j)] & CellFlag.RESERVED) && !Object.is(l.ex.kind[exIdx(i, j)], EdgeKind.OPEN)) expect(l.ex.kind[exIdx(i, j)]).toBe(EdgeKind.OPEN);
     }
   });
 
@@ -620,8 +629,8 @@ describe('WP2 MAZE seams', () => {
     for (let seed = 1; seed <= 60; seed++) {
       const d = districtOf(Zone.MAZE, seed, 0, { variant: MAZE_WIDE, phaseX: 0, phaseZ: 0 });
       const { l } = build(Zone.MAZE, seed, 0, seed, seed, { d });
-      for (let j = 0; j < N; j++) for (let i = 1; i < N; i += 2) expect(l.ex.kind[exIdx(i, j)]).toBe(EdgeKind.OPEN);
-      for (let j = 1; j < N; j += 2) for (let i = 0; i < N; i++) expect(l.ez.kind[ezIdx(i, j)]).toBe(EdgeKind.OPEN);
+      for (let j = 0; j < N; j++) for (let i = 1; i < N; i += 2) if (!Object.is(l.ex.kind[exIdx(i, j)], EdgeKind.OPEN)) expect(l.ex.kind[exIdx(i, j)]).toBe(EdgeKind.OPEN);
+      for (let j = 1; j < N; j += 2) for (let i = 0; i < N; i++) if (!Object.is(l.ez.kind[ezIdx(i, j)], EdgeKind.OPEN)) expect(l.ez.kind[ezIdx(i, j)]).toBe(EdgeKind.OPEN);
       let walls = 0;
       for (let e = 0; e < l.ex.kind.length; e++) if (l.ex.kind[e] === EdgeKind.WALL) walls++;
       expect(walls).toBeGreaterThan(100);
@@ -671,12 +680,14 @@ describe('WP2 GLOBAL seams agree from both sides (500 pairs per zone)', () => {
         for (let j = 0; j < N; j++) for (let i = 0; i <= N; i++) {
           if (f.ex[exIdx(i, j)] !== EdgeKind.DOORWAY) continue;
           doors++;
-          expect(solidAt(i - 1, j) || solidAt(i, j), `seed ${seed} cx ${cx} ex ${i},${j}`).toBe(false);
+          const hit = solidAt(i - 1, j) || solidAt(i, j);
+          if (!Object.is(hit, false)) expect(hit, `seed ${seed} cx ${cx} ex ${i},${j}`).toBe(false);
         }
         for (let j = 0; j <= N; j++) for (let i = 0; i < N; i++) {
           if (f.ez[ezIdx(i, j)] !== EdgeKind.DOORWAY) continue;
           doors++;
-          expect(solidAt(i, j - 1) || solidAt(i, j), `seed ${seed} cx ${cx} ez ${i},${j}`).toBe(false);
+          const hit = solidAt(i, j - 1) || solidAt(i, j);
+          if (!Object.is(hit, false)) expect(hit, `seed ${seed} cx ${cx} ez ${i},${j}`).toBe(false);
         }
       }
     }
@@ -725,7 +736,7 @@ describe('WP2 PILLAR_HALL', () => {
         for (let z = s.min[2] + 0.01; z < s.max[2]; z += 0.2) {
           for (let x = s.min[0] + 0.01; x < s.max[0]; x += 0.2) {
             const li = Math.floor(x / CELL), lj = Math.floor(z / CELL);
-            if (li >= 0 && lj >= 0 && li < N && lj < N) expect(l.flags[cellIdx(li, lj)] & CellFlag.RESERVED).toBe(0);
+            if (li >= 0 && lj >= 0 && li < N && lj < N && !Object.is(l.flags[cellIdx(li, lj)] & CellFlag.RESERVED, 0)) expect(l.flags[cellIdx(li, lj)] & CellFlag.RESERVED).toBe(0);
           }
         }
       }
@@ -753,16 +764,16 @@ describe('WP2 PILLAR_HALL', () => {
           for (let i = Math.round(w.x0 / CELL); i < Math.round(w.x1 / CELL); i++) {
             const c = cellIdx(i, j);
             cover[c]++;
-            expect(Math.round(w.floorY * 100)).toBe(l.floorCm[c]);
-            expect(Math.round(w.y * 100)).toBe(l.floorCm[c] + 2);
+            if (!Object.is(Math.round(w.floorY * 100), l.floorCm[c])) expect(Math.round(w.floorY * 100)).toBe(l.floorCm[c]);
+            if (!Object.is(Math.round(w.y * 100), l.floorCm[c] + 2)) expect(Math.round(w.y * 100)).toBe(l.floorCm[c] + 2);
           }
         }
       }
       for (let c = 0; c < N * N; c++) {
         const expected = wet && walkableCell(l, c) ? 1 : 0;
-        expect(cover[c], `seed ${seed} cell ${c & 31},${c >> 5}`).toBe(expected);
-        expect((l.flags[c] & CellFlag.WET) !== 0).toBe(expected === 1);
-        if (expected) expect(l.waterCm[c]).toBe(l.floorCm[c] + 2);
+        if (!Object.is(cover[c], expected)) expect(cover[c], `seed ${seed} cell ${c & 31},${c >> 5}`).toBe(expected);
+        if (!Object.is((l.flags[c] & CellFlag.WET) !== 0, expected === 1)) expect((l.flags[c] & CellFlag.WET) !== 0).toBe(expected === 1);
+        if (expected && !Object.is(l.waterCm[c], l.floorCm[c] + 2)) expect(l.waterCm[c]).toBe(l.floorCm[c] + 2);
       }
     }
     expect(humid).toBeGreaterThan(0);
@@ -773,6 +784,7 @@ describe('WP2 PILLAR_HALL', () => {
 describe('WP2 OFFICE', () => {
   it('aisles are open VINYL_VCT lanes; blocks never cross a seam; pods face their aisle', () => {
     let desks = 0, vending = 0, ramps = 0, doors = 0;
+    const PARTITION_MATS: number[] = [Mat.FABRIC_PARTITION, Mat.METAL_PAINTED];
     for (let seed = 1; seed <= SEEDS; seed++) {
       const { l, ctx } = build(Zone.OFFICE, seed, 0, seed - 100, 3 * seed - 50);
       const g = ctx.grid;
@@ -781,19 +793,19 @@ describe('WP2 OFFICE', () => {
           const aisle = isAisle(g.gi0 + li) || isAisle(g.gj0 + lj);
           if (!aisle) continue;
           const c = cellIdx(li, lj);
-          expect(l.floorMat[c]).toBe(Mat.VINYL_VCT);
-          expect(walkableCell(l, c)).toBe(true);
+          if (!Object.is(l.floorMat[c], Mat.VINYL_VCT)) expect(l.floorMat[c]).toBe(Mat.VINYL_VCT);
+          if (!Object.is(walkableCell(l, c), true)) expect(walkableCell(l, c)).toBe(true);
           // aisle-to-aisle edges stay open
           if (li > 0 && (isAisle(g.gi0 + li - 1) || isAisle(g.gj0 + lj))) {
-            if (isAisle(g.gi0 + li - 1) && isAisle(g.gi0 + li)) expect(l.ex.kind[exIdx(li, lj)]).toBe(EdgeKind.OPEN);
+            if (isAisle(g.gi0 + li - 1) && isAisle(g.gi0 + li) && !Object.is(l.ex.kind[exIdx(li, lj)], EdgeKind.OPEN)) expect(l.ex.kind[exIdx(li, lj)]).toBe(EdgeKind.OPEN);
           }
         }
       }
       for (let e = 0; e < l.ex.kind.length; e++) {
         for (const eg of [l.ex, l.ez]) {
-          if (eg.kind[e] === EdgeKind.DOORWAY) { expect(eg.trim[e] & EdgeTrim.CASING).toBe(EdgeTrim.CASING); doors++; }
+          if (eg.kind[e] === EdgeKind.DOORWAY) { if (!Object.is(eg.trim[e] & EdgeTrim.CASING, EdgeTrim.CASING)) expect(eg.trim[e] & EdgeTrim.CASING).toBe(EdgeTrim.CASING); doors++; }
           // cubicle partitions are fabric; R2 restroom stalls are painted metal
-          if (eg.kind[e] === EdgeKind.PARTITION) expect([Mat.FABRIC_PARTITION, Mat.METAL_PAINTED]).toContain(eg.matNeg[e]);
+          if (eg.kind[e] === EdgeKind.PARTITION && PARTITION_MATS.indexOf(eg.matNeg[e]) === -1) expect(PARTITION_MATS).toContain(eg.matNeg[e]);
         }
       }
       for (const p of l.props) {
@@ -831,8 +843,8 @@ describe('WP2 OFFICE', () => {
       let raised = false;
       for (let c = 0; c < N * N; c++) {
         if (l.floorCm[c] === 0 || l.floorCm[c] <= -300) continue; // R2 atrium blocks drop 3.0 / 4.5 m
-        expect(l.floorCm[c]).toBe(30);
-        expect(l.floorMat[c]).toBe(Mat.VINYL_VCT);
+        if (!Object.is(l.floorCm[c], 30)) expect(l.floorCm[c]).toBe(30);
+        if (!Object.is(l.floorMat[c], Mat.VINYL_VCT)) expect(l.floorMat[c]).toBe(Mat.VINYL_VCT);
         raised = true;
       }
       if (raised) raisedChunks++;
@@ -840,8 +852,8 @@ describe('WP2 OFFICE', () => {
       for (let lj = 0; lj < N; lj++) {
         for (let li = 0; li < N; li++) {
           const c = cellIdx(li, lj);
-          if (li < N - 1 && l.floorCm[c] !== l.floorCm[c + 1] && passKind(l.ex.kind[exIdx(li + 1, lj)], l.ex.hA[exIdx(li + 1, lj)])) expect(ramp[c] || ramp[c + 1]).toBe(1);
-          if (lj < N - 1 && l.floorCm[c] !== l.floorCm[c + N] && passKind(l.ez.kind[ezIdx(li, lj + 1)], l.ez.hA[ezIdx(li, lj + 1)])) expect(ramp[c] || ramp[c + N]).toBe(1);
+          if (li < N - 1 && l.floorCm[c] !== l.floorCm[c + 1] && passKind(l.ex.kind[exIdx(li + 1, lj)], l.ex.hA[exIdx(li + 1, lj)]) && !Object.is(ramp[c] || ramp[c + 1], 1)) expect(ramp[c] || ramp[c + 1]).toBe(1);
+          if (lj < N - 1 && l.floorCm[c] !== l.floorCm[c + N] && passKind(l.ez.kind[ezIdx(li, lj + 1)], l.ez.hA[ezIdx(li, lj + 1)]) && !Object.is(ramp[c] || ramp[c + N], 1)) expect(ramp[c] || ramp[c + N]).toBe(1);
         }
       }
       for (const r of l.solids) {
@@ -879,19 +891,20 @@ describe('WP2 through the WP1 pipeline (forceZone)', () => {
   })();
   if (!probe) console.warn('[zones-l0] WP1 generateChunk does not honour forceZone yet: full-pipeline acceptance skipped');
 
-  it.skipIf(!probe)('validateLayout = [] for 200 seeds x each Level 0 zone', { timeout: 300_000 }, () => {
+  it.skipIf(!probe)('validateLayout = [] for 200 seeds x each Level 0 zone', { tags: ['sweep'] }, () => {
     for (const zone of L0_ZONES) {
       for (let seed = 1; seed <= SEEDS; seed++) {
         const wg = createWorldGen({ seed, seedText: String(seed), forceZone: zone, forceMood: null, forceLandmark: null, testScene: null, lights: 'default' });
         const key: ChunkKey = { s: (seed % 3) as StoreyId, cx: (seed % 11) - 5, cz: ((seed * 7) % 11) - 5 };
         const l = wg.generateChunk(key);
-        expect(l.zone).toBe(zone);
-        expect(validateLayout(l, wg), `${zoneName(zone)} seed ${seed}`).toEqual([]);
+        if (!Object.is(l.zone, zone)) expect(l.zone).toBe(zone);
+        const problems = validateLayout(l, wg);
+        if (problems.length !== 0) expect(problems, `${zoneName(zone)} seed ${seed}`).toEqual([]);
       }
     }
   });
 
-  it.skipIf(!probe)('seed 1 spawn district is LOBBY with the famous-photo ingredients nearby', { timeout: 60_000 }, () => {
+  it.skipIf(!probe)('seed 1 spawn district is LOBBY with the famous-photo ingredients nearby', () => {
     const wg = createWorldGen({ seed: 1, seedText: '1', forceZone: null, forceMood: null, forceLandmark: null, testScene: null, lights: 'default' });
     const sp = wg.findSpawn(0);
     expect(sp.zone).toBe(Zone.LOBBY);
@@ -959,7 +972,11 @@ describe('R2 LOBBY architecture (mini pipeline)', () => {
         expect(f.py - l.floorCm[c] / 100).toBeCloseTo(3, 5);
       }
       // NO_CEIL cells have no ceiling tiles and sit under a deck
-      for (let c = 0; c < N * N; c++) if (l.flags[c] & CellFlag.NO_CEIL) { expect(l.ceilKind[c]).toBe(CeilKind.OPEN_DARK); expect(l.tiles[c]).toBe(0); }
+      for (let c = 0; c < N * N; c++) {
+        if (!(l.flags[c] & CellFlag.NO_CEIL)) continue;
+        if (!Object.is(l.ceilKind[c], CeilKind.OPEN_DARK)) expect(l.ceilKind[c]).toBe(CeilKind.OPEN_DARK);
+        if (!Object.is(l.tiles[c], 0)) expect(l.tiles[c]).toBe(0);
+      }
     }
     expect(tot.splits).toBeGreaterThan(0); expect(tot.tall).toBeGreaterThan(0); expect(tot.sunken).toBeGreaterThan(0);
     expect(tot.stages).toBeGreaterThan(0); expect(tot.wells).toBeGreaterThan(0); expect(tot.programs).toBeGreaterThan(SEEDS / 4);

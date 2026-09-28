@@ -36,7 +36,7 @@ const maxWallRun = (kind: Uint8Array, hA: Int16Array): number => {
 };
 
 describe('seams', () => {
-  it('2000+ adjacent generated pairs: A line 32 equals B line 0 for all 6 edge arrays', () => {
+  it('2000+ adjacent generated pairs: A line 32 equals B line 0 for all 6 edge arrays', { tags: ['sweep'] }, () => {
     const rng = new Rng(77);
     let pairs = 0;
     for (const s of [0, 1, 2] as StoreyId[]) {
@@ -68,7 +68,7 @@ describe('seams', () => {
       expect(bad, `storey ${s}`).toBe(0);
     }
     expect(pairs).toBeGreaterThanOrEqual(2000);
-  }, 120_000);
+  });
 
   it('every seam has a port; hard BOUNDARY seams have >= 2 openings; PATTERN seams have no wall run > 12', () => {
     const rng = new Rng(4);
@@ -94,7 +94,7 @@ describe('seams', () => {
     }
     expect(hard).toBeGreaterThan(100);
     expect(pattern).toBeGreaterThan(100);
-  }, 60_000);
+  });
 
   it('soft BOUNDARY seams are 40% ± 5% of eligible district pairs (one decision per pair)', () => {
     let eligible = 0, soft = 0, inconsistent = 0;
@@ -120,7 +120,7 @@ describe('seams', () => {
     expect(inconsistent, 'every seam of a district pair has the same soft/hard decision').toBe(0);
     expect(eligible).toBeGreaterThan(1000);
     expect(Math.abs(soft / eligible - 0.4)).toBeLessThanOrEqual(0.05);
-  }, 60_000);
+  });
 
   it('hard boundary styles follow styleFor', () => {
     const { seams, districts } = worlds(31);
@@ -313,5 +313,5 @@ describe('sites', () => {
       }
     }
     expect(n).toBeGreaterThan(20);
-  }, 60_000);
+  });
 });

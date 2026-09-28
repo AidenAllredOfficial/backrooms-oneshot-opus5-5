@@ -310,7 +310,7 @@ function forced(seed: number, kind: number, s: StoreyId): { l: ChunkLayout; entr
 }
 
 describe('landmark stamping', () => {
-  it('every kind stamps, claims LANDMARK cells and returns walkable entrances in every storey it lists', () => {
+  it('every kind stamps, claims LANDMARK cells and returns walkable entrances in every storey it lists', { tags: ['sweep'] }, () => {
     for (let k = 0; k < LANDMARK_COUNT; k++) {
       for (const s of LANDMARKS[k].storeys) {
         let ok = 0;
@@ -341,9 +341,9 @@ describe('landmark stamping', () => {
         expect(ok, `${LANDMARK_NAMES[k]} s${s} placed`).toBeGreaterThanOrEqual(3);
       }
     }
-  }, 240_000);
+  });
 
-  it('entrances are walkable and reachable after repair (1000 chunks, forceLandmark rotation)', () => {
+  it('entrances are walkable and reachable after repair (1000 chunks, forceLandmark rotation)', { tags: ['sweep'] }, () => {
     const total = Number(process.env.WP4_LANDMARK_CHUNKS ?? 1000);
     const pairs: [number, StoreyId][] = [];
     for (let k = 0; k < LANDMARK_COUNT; k++) for (const s of LANDMARKS[k].storeys) pairs.push([k, s]);
@@ -356,14 +356,14 @@ describe('landmark stamping', () => {
       const seen = reachable(l);
       for (const [li, lj] of entrances) {
         const c = cellIdx(li, lj);
-        expect(cellWalkable(l, c), `${LANDMARK_NAMES[k]} seed ${7000 + i}: entrance (${li},${lj}) walkable`).toBe(true);
-        expect(seen[c], `${LANDMARK_NAMES[k]} seed ${7000 + i}: entrance (${li},${lj}) reachable`).toBe(1);
+        if (!Object.is(cellWalkable(l, c), true)) expect(cellWalkable(l, c), `${LANDMARK_NAMES[k]} seed ${7000 + i}: entrance (${li},${lj}) walkable`).toBe(true);
+        if (!Object.is(seen[c], 1)) expect(seen[c], `${LANDMARK_NAMES[k]} seed ${7000 + i}: entrance (${li},${lj}) reachable`).toBe(1);
         entrancesChecked++;
       }
     }
     expect(placed).toBeGreaterThan(total * 0.9);
     expect(entrancesChecked).toBeGreaterThan(placed);
-  }, 600_000);
+  });
 });
 
 // ------------------------------------------------------------------------------------------ R2 architecture stamps

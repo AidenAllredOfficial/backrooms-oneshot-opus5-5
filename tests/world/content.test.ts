@@ -1,7 +1,7 @@
 // WP4 — content: colour temperature, lattice fixtures, fixture states and the one-dynamic-light-per-tile rule, props,
 // vignettes, keepClear, leaks, exit signs, chalk, decals and anomalies. Includes the §5 WP4 acceptance sweeps over
 // generated chunks (1000 chunks of the spawn storey, a 20 x 20-chunk vignette region).
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { CEIL_TILE, CELL, CHUNK_SIZE, LIGHT, PLAYER, TILE_SIZE, WALL_T } from '../../src/core/constants.ts';
 import { cellIdx, exIdx, ezIdx, forwardXZ, tileOfPoint } from '../../src/core/grid.ts';
 import {
@@ -31,6 +31,7 @@ import { meanField } from '../../src/world/content/util.ts';
 import {
   composeVignette, RACK_SPILL_MAX, RACK_SPILL_MIN, VIG_DROP, VIG_GRID, VIG_MIN_SPACING, VIGNETTE_WEIGHTS, placeVignettes, vignetteCandidates, zoneColumn,
 } from '../../src/world/content/vignettes.ts';
+import { isDeepStrictEqual } from '../util/check.ts';
 import { ctxFor, fixtureHitsWall, fixtureRect, N, openLayout, opts } from './wp4-helpers.ts';
 
 const T2 = WALL_T / 2;
@@ -272,7 +273,7 @@ function sweep(): Sweep {
   return (sweepCache = { chunks, gen });
 }
 
-describe('acceptance sweep: 1000 chunks of the spawn storey', () => {
+describe('acceptance sweep: 1000 chunks of the spawn storey', { tags: ['sweep'] }, () => {
   it('fixtures: ids unique, recessed rects never straddle a tile line, no fixture in a wall or a SOLID cell, <= 1 dynamic per tile', () => {
     const { chunks } = sweep();
     let fixtures = 0, dynamic = 0;
@@ -281,32 +282,34 @@ describe('acceptance sweep: 1000 chunks of the spawn storey', () => {
       const dyn = [0, 0, 0, 0];
       for (const f of l.fixtures) {
         fixtures++;
-        expect(ids.has(f.id)).toBe(false);
+        if (!Object.is(ids.has(f.id), false)) expect(ids.has(f.id)).toBe(false);
         ids.add(f.id);
         const c = cellIdx(Math.min(N - 1, Math.floor(f.px / CELL)), Math.min(N - 1, Math.floor(f.pz / CELL)));
-        expect(l.flags[c] & CellFlag.SOLID, `fixture ${f.id} kind ${f.kind} in a SOLID cell of ${l.key.cx},${l.key.cz}`).toBe(0);
+        if (!Object.is(l.flags[c] & CellFlag.SOLID, 0)) expect(l.flags[c] & CellFlag.SOLID, `fixture ${f.id} kind ${f.kind} in a SOLID cell of ${l.key.cx},${l.key.cz}`).toBe(0);
         if (isRecessedFixture(f.kind) && f.shape === 0) {
           const [x0, z0, x1, z1] = fixtureRect(f);
-          expect(x0 < TILE_SIZE - 1e-4 && x1 > TILE_SIZE + 1e-4).toBe(false);
-          expect(z0 < TILE_SIZE - 1e-4 && z1 > TILE_SIZE + 1e-4).toBe(false);
+          const sx = x0 < TILE_SIZE - 1e-4 && x1 > TILE_SIZE + 1e-4, sz = z0 < TILE_SIZE - 1e-4 && z1 > TILE_SIZE + 1e-4;
+          if (!Object.is(sx, false)) expect(sx).toBe(false);
+          if (!Object.is(sz, false)) expect(sz).toBe(false);
         }
         // (artery fixtures are WP1's: arteries.ts; R2 B5 window glow panels (vertical SODIUM records) sit inside the
         // WINDOW reveal by design: structures/windows.ts)
         const windowGlow = f.kind === FixtureKind.SODIUM && Math.abs(f.ny) < 0.5;
         if (f.bakeGroup === 0 && !windowGlow && !(l.flags[c] & (CellFlag.LANDMARK | CellFlag.ARTERY))) {
-          expect(fixtureHitsWall(l, f), `fixture ${f.id} kind ${f.kind} at ${f.px.toFixed(2)},${f.pz.toFixed(2)} of ${l.key.cx},${l.key.cz} (zone ${l.zone})`).toBe(false);
+          const hit = fixtureHitsWall(l, f);
+          if (!Object.is(hit, false)) expect(hit, `fixture ${f.id} kind ${f.kind} at ${f.px.toFixed(2)},${f.pz.toFixed(2)} of ${l.key.cx},${l.key.cz} (zone ${l.zone})`).toBe(false);
         }
         if (f.dynamic) {
           dynamic++;
           dyn[tileOfPoint(f.px, f.pz)]++;
-          expect(f.py - l.floorCm[c] / 100).toBeLessThanOrEqual(LIGHT.DYN_MAX_MOUNT);
+          if (!(f.py - l.floorCm[c] / 100 <= LIGHT.DYN_MAX_MOUNT)) expect(f.py - l.floorCm[c] / 100).toBeLessThanOrEqual(LIGHT.DYN_MAX_MOUNT);
         }
       }
-      for (const n of dyn) expect(n).toBeLessThanOrEqual(1);
+      for (const n of dyn) if (!(n <= 1)) expect(n).toBeLessThanOrEqual(1);
     }
     expect(fixtures).toBeGreaterThan(20000);
     expect(dynamic).toBeGreaterThan(50);
-  }, 600_000);
+  });
 
   it('the state mix is within +-3% of the formula expectation', () => {
     const { chunks, gen } = sweep();
@@ -333,7 +336,7 @@ describe('acceptance sweep: 1000 chunks of the spawn storey', () => {
     }
     expect(n).toBeGreaterThan(10000);
     for (const i of [0, 1, 3, 4]) expect(Math.abs(got[i] / n - exp[i] / n), `state bucket ${i}`).toBeLessThan(0.03);
-  }, 600_000);
+  });
 
   it('placeProps never overlaps walls, other props, SOLID or keepClear cells', () => {
     const { chunks, gen } = sweep();
@@ -361,12 +364,13 @@ describe('acceptance sweep: 1000 chunks of the spawn storey', () => {
       for (const p of fresh) {
         const def = PROP_DEFS[p.kind];
         const b = propAABB(p.kind, p.x, p.z, p.yaw);
-        expect(rectHitsEdges(l, b.x0, b.z0, b.x1, b.z1), `prop ${def.name} in a wall`).toBe(false);
+        const inWall = rectHitsEdges(l, b.x0, b.z0, b.x1, b.z1);
+        if (!Object.is(inWall, false)) expect(inWall, `prop ${def.name} in a wall`).toBe(false);
         for (let lj = Math.floor(b.z0 / CELL); lj <= Math.floor((b.z1 - 1e-6) / CELL); lj++) {
           for (let li = Math.floor(b.x0 / CELL); li <= Math.floor((b.x1 - 1e-6) / CELL); li++) {
             const c = cellIdx(li, lj);
-            expect(keep[c], `prop ${def.name} on a keepClear cell`).toBe(0);
-            expect(l.flags[c] & (CellFlag.SOLID | CellFlag.TOWER | CellFlag.ELEVATOR)).toBe(0);
+            if (!Object.is(keep[c], 0)) expect(keep[c], `prop ${def.name} on a keepClear cell`).toBe(0);
+            if (!Object.is(l.flags[c] & (CellFlag.SOLID | CellFlag.TOWER | CellFlag.ELEVATOR), 0)) expect(l.flags[c] & (CellFlag.SOLID | CellFlag.TOWER | CellFlag.ELEVATOR)).toBe(0);
           }
         }
         for (const q of l.props) {
@@ -374,12 +378,12 @@ describe('acceptance sweep: 1000 chunks of the spawn storey', () => {
           const o = propAABB(q.kind, q.x, q.z, q.yaw, 0, q.scale || 1);
           const hy = PROP_DEFS[q.kind].size[1] * (q.scale || 1);
           const overlap = o.x0 < b.x1 - 1e-6 && o.x1 > b.x0 + 1e-6 && o.z0 < b.z1 - 1e-6 && o.z1 > b.z0 + 1e-6 && q.y < p.y + def.size[1] && q.y + hy > p.y;
-          expect(overlap, `prop ${def.name} overlaps ${PROP_DEFS[q.kind].name}`).toBe(false);
+          if (!Object.is(overlap, false)) expect(overlap, `prop ${def.name} overlaps ${PROP_DEFS[q.kind].name}`).toBe(false);
         }
       }
     }
     expect(added).toBeGreaterThan(200);
-  }, 600_000);
+  });
 
   it('decals: placeDecals adds <= 60 per chunk, never on TOWER / ELEVATOR cells', () => {
     const { chunks, gen } = sweep();
@@ -394,7 +398,7 @@ describe('acceptance sweep: 1000 chunks of the spawn storey', () => {
         expect(l.flags[cellIdx(li, lj)] & (CellFlag.TOWER | CellFlag.ELEVATOR)).toBe(0);
       }
     }
-  }, 600_000);
+  });
 });
 
 // ------------------------------------------------------------------------------------------ vignettes
@@ -413,12 +417,14 @@ describe('vignettes', () => {
     expect(minD).toBeGreaterThanOrEqual(VIG_DROP - 1e-9);
     const cells = (1800 / VIG_GRID) ** 2;
     expect(a.length / cells).toBeGreaterThan(0.05);
-    // sub-rectangles see the same candidates
+    // sub-rectangles see the same candidates (indexed by position; a strict deep-equal match implies toContainEqual)
     const part = vignetteCandidates(9, 0, 0, 0, 300, 300);
-    for (const c of part) expect(a).toContainEqual(c);
+    const byPos = new Map<string, (typeof a)[number][]>();
+    for (const v of a) { const k = `${v.x},${v.z}`; const list = byPos.get(k); if (list) list.push(v); else byPos.set(k, [v]); }
+    for (const c of part) if (!(byPos.get(`${c.x},${c.z}`) ?? []).some((v) => isDeepStrictEqual(v, c))) expect(a).toContainEqual(c);
   });
 
-  it('zone weights: never a zero-weight kind; FALLEN_TILES only in the L0 family, POOL_FLOAT only in POOLROOMS', () => {
+  it('zone weights: never a zero-weight kind; FALLEN_TILES only in the L0 family, POOL_FLOAT only in POOLROOMS', { tags: ['sweep'] }, () => {
     for (const zone of [Zone.LOBBY, Zone.OFFICE, Zone.POOLROOMS, Zone.PARKING, Zone.PIPEWORKS, Zone.WAREHOUSE, Zone.CONCRETE] as ZoneId[]) {
       const c = vignetteCandidates(4, 1, -3000, -3000, 3000, 3000, () => zone);
       expect(c.length).toBeGreaterThan(100);
@@ -436,9 +442,9 @@ describe('vignettes', () => {
     expect(VIGNETTE_WEIGHTS[VignetteKind.FALLEN_TILES]).toEqual([8, 0, 0, 0, 0, 0]);
     expect(VIGNETTE_WEIGHTS[VignetteKind.POOL_FLOAT]).toEqual([0, 10, 0, 0, 0, 0]);
     expect(VIGNETTE_WEIGHTS[VignetteKind.OPEN_CAR]).toEqual([0, 0, 8, 0, 0, 0]);
-  }, 30_000);
+  });
 
-  it('realised vignettes are >= VIG_MIN_SPACING apart over a 20 x 20-chunk region (storeys 0 and 1)', () => {
+  it('realised vignettes are >= VIG_MIN_SPACING apart over a 20 x 20-chunk region (storeys 0 and 1)', { tags: ['sweep'] }, () => {
     for (const s of [0, 1] as StoreyId[]) {
       const gen = createWorldGen(opts(31 + s));
       const pts: { x: number; z: number; kind: number }[] = [];
@@ -446,8 +452,8 @@ describe('vignettes', () => {
         const l = gen.generateChunk({ s, cx, cz });
         for (const v of l.vignettes) {
           pts.push({ x: cx * CHUNK_SIZE + v.x, z: cz * CHUNK_SIZE + v.z, kind: v.kind });
-          expect(v.x).toBeGreaterThanOrEqual(0);
-          expect(v.x).toBeLessThan(CHUNK_SIZE);
+          if (!(v.x >= 0)) expect(v.x).toBeGreaterThanOrEqual(0);
+          if (!(v.x < CHUNK_SIZE)) expect(v.x).toBeLessThan(CHUNK_SIZE);
         }
       }
       expect(pts.length).toBeGreaterThan(40);
@@ -457,7 +463,7 @@ describe('vignettes', () => {
       const kinds = new Set(pts.map((p) => p.kind));
       expect(kinds.size).toBeGreaterThanOrEqual(5);
     }
-  }, 600_000);
+  });
 
   it('CHAIR_FACING_WALL: a stacking chair 0.5 m from a wall, facing it', () => {
     const gen = createWorldGen(opts(31));
@@ -774,7 +780,7 @@ describe('anomalies', () => {
     expect(l.anomalies.some((a) => a.kind === AnomalyKind.CEILING_FURNITURE)).toBe(true);
   });
 
-  it('spark vignettes turn a fixture OFF and add a SPARKING site; open-car lamps and sign flags are well-formed', () => {
+  it('spark vignettes turn a fixture OFF and add a SPARKING site; open-car lamps and sign flags are well-formed', { tags: ['sweep'] }, () => {
     // across the sweep region: every SPARKING site sits on an OFF fixture
     const { chunks } = sweep();
     let sites = 0;
@@ -789,7 +795,10 @@ describe('anomalies', () => {
       }
     }
     expect(sites).toBeGreaterThan(0);
-  }, 600_000);
+  });
+
+  // the sweep's 1000 layouts (~600 MB of heap) are last used by the check above
+  afterAll(() => { sweepCache = null; });
 });
 
 // ------------------------------------------------------------------------------------------ misc invariants

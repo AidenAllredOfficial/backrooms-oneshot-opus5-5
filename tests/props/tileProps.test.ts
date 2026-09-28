@@ -170,7 +170,7 @@ describe('WP6 buildTileProps', () => {
     }
   });
 
-  it('reports the per-tile props triangle count on generated chunks (target <= 40k)', () => {
+  it('reports the per-tile props triangle count on generated chunks (target <= 40k)', { tags: ['sweep'] }, () => {
     const cases: [ZoneId, StoreyId, number, number][] = [
       [Zone.OFFICE, 0, 0, 0], [Zone.OFFICE, 0, 1, 0], [Zone.LOBBY, 0, 0, 0], [Zone.PILLAR_HALL, 0, 0, 0],
       [Zone.WAREHOUSE, 1, 0, 0], [Zone.WAREHOUSE, 1, 1, 1], [Zone.PIPEWORKS, 1, 0, 0], [Zone.PIPEWORKS, 1, 1, 0],

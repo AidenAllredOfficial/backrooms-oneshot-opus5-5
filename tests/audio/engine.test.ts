@@ -13,7 +13,8 @@ import { createPlayerState, type PlayerState } from '../../src/core/player.ts';
 import { QUALITY } from '../../src/core/quality.ts';
 import type { AudioSystem, EmitterRef, FixtureRef, LightingRuntime, WorldQuery } from '../../src/core/runtime.ts';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.ts';
-import { createAudioSystem } from '../../src/audio/AudioEngine.ts';
+import { createAudioSystem, type AudioSystemEx } from '../../src/audio/AudioEngine.ts';
+import { BufferBank } from '../../src/audio/bank.ts';
 import type { AudioEnv } from '../../src/audio/env.ts';
 import { Foley } from '../../src/audio/foley.ts';
 import { Ambience } from '../../src/audio/ambience.ts';
@@ -108,7 +109,7 @@ function grid(w: number, l: number, state: LightStateId = LightState.ON): RoomOp
 const lighting = { intensityOf: () => 1 } as unknown as LightingRuntime;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-interface Rig { audio: AudioSystem; bus: EventBus<GameEvents>; ctx: MockContext; player: PlayerState; t: number }
+interface Rig { audio: AudioSystemEx; bus: EventBus<GameEvents>; ctx: MockContext; player: PlayerState; t: number }
 
 async function rig(): Promise<Rig> {
   const bus = new EventBus<GameEvents>();
@@ -118,16 +119,13 @@ async function rig(): Promise<Rig> {
   return { audio, bus, ctx, player: createPlayerState(0, 6, 0, 6, 0, 0), t: 0 };
 }
 
-/** Wait until the main-thread DSP fallback has rendered everything queued (buffer count stable for 1.5 s). */
+/** Wait until the main-thread DSP fallback (no Worker under Node) has rendered everything queued: the buffer bank
+ * reports idle (nothing queued or rendering), capped at maxMs like before. */
 async function drain(r: Rig, maxMs = 60000): Promise<void> {
-  const t0 = Date.now();
-  let last = -1, stableSince = Date.now();
-  for (;;) {
-    await sleep(100);
-    const n = r.ctx.buffers;
-    if (n !== last) { last = n; stableSince = Date.now(); }
-    if (Date.now() - stableSince > 1500 || Date.now() - t0 > maxMs) return;
-  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([r.audio.idle(), new Promise<void>((res) => { timer = setTimeout(res, maxMs); })]);
+  clearTimeout(timer);
+  await sleep(0); // createBuffer calls chained on the last resolved requests
 }
 
 function run(r: Rig, world: WorldQuery, seconds: number, dt = 1 / 60, each?: (t: number) => void): void {
@@ -145,8 +143,9 @@ function place(p: PlayerState, x: number, z: number): void {
 }
 
 let restore: () => void = () => undefined;
-beforeAll(() => { restore = installWebAudioMock(); });
-afterAll(() => restore());
+// every rig renders the same ~180 buffers on the main-thread fallback: synthesise each once per file
+beforeAll(() => { restore = installWebAudioMock(); BufferBank.synthMemo = new Map(); });
+afterAll(() => { restore(); BufferBank.synthMemo = null; });
 
 describe('AudioSystem runtime (Web Audio mock)', () => {
   it('disconnects old ambience beds and wading nodes after a world reset', () => {
@@ -307,7 +306,7 @@ describe('AudioSystem runtime (Web Audio mock)', () => {
     expect(log).toMatch(/mains 50 Hz/);
     expect(r.audio.stats().voices).toBeGreaterThan(0);
     r.audio.dispose();
-  }, 120000);
+  });
 
   it('flicker transients are scheduled exactly once when the frame dt varies', async () => {
     const r = await rig();
@@ -396,7 +395,7 @@ describe('AudioSystem runtime (Web Audio mock)', () => {
     try { run(r, w, 10.5); } finally { MockContext.meterAmp = 0.1; }
     expect(r.audio.recentEvents().join('\n')).toMatch(/output WARNING: \d+ non-finite samples/);
     r.audio.dispose();
-  }, 60000);
+  });
 
   it('voice fades run on a separate envelope, so level automation never bends the fade-in ramp', () => {
     const ctx = new MockContext();
@@ -460,7 +459,7 @@ describe('AudioSystem runtime (Web Audio mock)', () => {
     r.bus.emit('ui', { name: 'click' });
     expect(r.ctx.starts).toBe(before);
     r.audio.dispose();
-  }, 60000);
+  });
 
   it('radio: each press tunes to the next station (tuning sweep), then off, then back on; phone pick-up opens the line', async () => {
     const r = await rig();

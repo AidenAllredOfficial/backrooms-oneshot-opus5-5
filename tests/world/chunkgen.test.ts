@@ -25,7 +25,7 @@ const opts = (seed: number, o: Partial<WorldGenOptions> = {}): WorldGenOptions =
 const GOLDEN = new URL('./golden.json', import.meta.url);
 
 describe('generateChunk', () => {
-  it('is deterministic: 200 random keys hash identically fresh and after 50 other chunks', () => {
+  it('is deterministic: 200 random keys hash identically fresh and after 50 other chunks', { tags: ['sweep'] }, () => {
     const rng = new Rng(2025);
     const keys = Array.from({ length: 200 }, () => ({ s: rng.int(0, 2) as StoreyId, cx: rng.int(-400, 400), cz: rng.int(-400, 400) }));
     const others = Array.from({ length: 50 }, () => ({ s: rng.int(0, 2) as StoreyId, cx: rng.int(-400, 400), cz: rng.int(-400, 400) }));
@@ -37,7 +37,23 @@ describe('generateChunk', () => {
     // and the hash is the layoutHash of the returned layout
     const l = g.generateChunk(keys[0]);
     expect(layoutHash(l)).toBe(l.hash);
-  }, 120_000);
+  });
+
+  it('validates every layout it returns under vitest: a failing validateLayout throws', () => {
+    // chunkgen.ts takes test mode from import.meta.env (Vite) or, under vitest's native loading, from its worker env.
+    // Without it no chunk generated anywhere in the suite would be validated.
+    const g = createWorldGen(opts(5));
+    const districtAt = g.districtAt;
+    // validateLayout(l, facade) checks the layout's zone against facade.districtAt: make the two disagree
+    (g as { districtAt: typeof districtAt }).districtAt = (s, cx, cz) => ({ ...districtAt(s, cx, cz), zone: ZONE_COUNT as ZoneId });
+    const saved = process.env.WORLD_VALIDATE;
+    delete process.env.WORLD_VALIDATE;
+    try {
+      expect(() => g.generateChunk({ s: 0, cx: 3, cz: 3 })).toThrow(/zone \/ district differ from districtAt/);
+    } finally {
+      if (saved !== undefined) process.env.WORLD_VALIDATE = saved;
+    }
+  });
 
   it('writes the district palette per cell (wallMat / trimMat) and the hash covers them', () => {
     const g = createWorldGen(opts(5));
@@ -123,7 +139,7 @@ describe('generateChunk', () => {
       }
     }
     expect(found).toBeGreaterThanOrEqual(3);
-  }, 30_000);
+  });
 
   it('tower and elevator cells belong to STRUCTURE_ZONE; tower exits are walkable', () => {
     const g = createWorldGen(opts(3));
@@ -142,7 +158,7 @@ describe('generateChunk', () => {
       }
     }
     expect(towers).toBeGreaterThan(8);
-  }, 30_000);
+  });
 
   it('every zone generates valid layouts under forceZone (all storeys)', () => {
     for (let z = 0; z < ZONE_COUNT; z++) {
@@ -154,7 +170,7 @@ describe('generateChunk', () => {
         expect(validateLayout(l, g), `${ZONE_NAMES[z]} ${key.s}:${key.cx}:${key.cz}`).toEqual([]);
       }
     }
-  }, 60_000);
+  });
 
   it('test scenes: valid, scene at chunk (0,0), SOLID elsewhere (grid tiles everywhere), seams agree', () => {
     for (const id of TEST_SCENES) {
@@ -277,7 +293,7 @@ describe('generateChunk', () => {
     console.log(`generateChunk: mean ${r.mean.toFixed(2)} ms, p95 ${r.p95.toFixed(2)} ms, max ${r.max.toFixed(2)} ms`);
     expect(r.mean).toBeLessThanOrEqual(6);
     expect(r.p95).toBeLessThanOrEqual(12);
-  }, 60_000);
+  });
 
   it('golden hashes (3 chunks per zone)', () => {
     const entries: { zone: string; s: number; cx: number; cz: number; hash: number }[] = [];
@@ -299,5 +315,5 @@ describe('generateChunk', () => {
     const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as { genVersion: number; entries: typeof entries };
     expect(golden.genVersion, 'GEN_VERSION changed: regenerate golden.json with UPDATE_GOLDEN=1').toBe(GEN_VERSION);
     expect(entries).toEqual(golden.entries);
-  }, 60_000);
+  });
 });

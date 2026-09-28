@@ -72,9 +72,9 @@ describe('beam early-out (OFFICE: desks, cubicle partitions)', () => {
     }
     expect(tested).toBeGreaterThan(5000);
     expect(clear).toBeGreaterThan(200); // the beam does fire in a furnished zone
-  }, 60_000);
+  });
 
-  it('does not change the bake output and saves classification rays', () => {
+  it('does not change the bake output and saves classification rays', { tags: ['sweep'] }, () => {
     const s = surfacesOf(nb, tile, 12);
     beamOpts.enabled = false;
     let off: LightmapData, raysOff: number;
@@ -85,5 +85,5 @@ describe('beam early-out (OFFICE: desks, cubicle partitions)', () => {
     const on = bakeTile(nb, tile, s, 'full', Q_HIGH, 'all', createBakeCache());
     expect(sameBytes(off, on)).toBe(true);
     expect(lastBake.rays).toBeLessThan(raysOff);
-  }, 120_000);
+  });
 });

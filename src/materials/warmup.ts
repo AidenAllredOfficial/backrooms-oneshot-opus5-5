@@ -106,7 +106,8 @@ export async function runWarmup(renderer: THREE.WebGLRenderer, camera: THREE.Cam
     group.visible = true;
     renderer.setRenderTarget(rt);
     renderer.render(scene, camera);
-    if (import.meta.env.DEV) {
+    // import.meta.env is undefined when vitest loads this natively (Node): keep the check on in tests
+    if (import.meta.env ? import.meta.env.DEV : true) {
       for (const m of mats) {
         const n = activeSamplerUnits(renderer, m);
         if (n > SURFACE_SAMPLER_BUDGET) console.error(`surface sampler budget: ${m.name} uses ${n} texture units (max ${SURFACE_SAMPLER_BUDGET})`);

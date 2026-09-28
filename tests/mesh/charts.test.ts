@@ -22,7 +22,7 @@ const hashBuf = (a: ArrayLike<number>): number => {
 };
 
 describe('chart hash: build == bake', () => {
-  test('buildTileSurfaces hash equals buildTile hash over 100 tiles (mixed zones, both densities)', () => {
+  test('buildTileSurfaces hash equals buildTile hash over 100 tiles (mixed zones, both densities)', { tags: ['sweep'] }, () => {
     let n = 0;
     const seen = new Set<number>();
     for (let cz = 0; cz < 5; cz++) {

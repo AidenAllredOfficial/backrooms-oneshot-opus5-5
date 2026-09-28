@@ -1,0 +1,164 @@
+// tests/util/forks.test.ts — vitest fork sizing and admission (tests/util/forks.ts, used by vitest.config.ts).
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  browserRunning, createForkRegistry, forksThatFit, isQuickTier, parseVitestArgv, planForks, weightOf, type ForkRegistry, type Ledger, type PlanInput,
+} from './forks.ts';
+
+const base = (o: Partial<PlanInput>): PlanInput => ({
+  want: 4, watch: false, minFreeMb: 4500, ledger: null, label: 'vitest test', memAvailableMb: () => 16000,
+  browserRunning: () => false, log: () => {}, sleep: async () => {}, pollMs: 0, ...o,
+});
+
+type FakeLedger = Ledger & { calls: { weightMb: number; wait?: boolean }[]; live: number; releases: number };
+/** A ledger admitting while the sum of live weights + weight <= budget (wait: true always admits); records calls. */
+function fakeLedger(budgetMb: number, held = 0): FakeLedger {
+  const l: FakeLedger = {
+    calls: [], live: held, releases: 0,
+    acquire(o: { weightMb: number; wait?: boolean }) {
+      l.calls.push({ weightMb: o.weightMb, wait: o.wait });
+      if (l.live + o.weightMb > budgetMb && !o.wait) return null;
+      l.live += o.weightMb;
+      return { release: () => { l.live -= o.weightMb; l.releases++; } };
+    },
+  };
+  return l;
+}
+
+let tmp: string | null = null;
+afterEach(() => { if (tmp) rmSync(tmp, { recursive: true, force: true }); tmp = null; });
+
+describe('fork sizing', () => {
+  it('weights are 300 MB + 700 MB per fork; MemAvailable must keep minFree after the weight', () => {
+    expect(weightOf(1)).toBe(1000);
+    expect(weightOf(4)).toBe(3100);
+    expect(forksThatFit(11400, 4, 4500)).toBe(4);
+    expect(forksThatFit(7600, 4, 4500)).toBe(4); // 7600 - 3100 = 4500
+    expect(forksThatFit(7599, 4, 4500)).toBe(3);
+    expect(forksThatFit(5499, 4, 4500)).toBe(0);
+    expect(forksThatFit(16000, 2, 4500)).toBe(2);
+  });
+
+  it('without a ledger: the most forks that leave MemAvailable >= minFree, never more than 4, 2 while a browser runs', async () => {
+    expect((await planForks(base({}))).forks).toBe(4);
+    expect((await planForks(base({ want: 9 }))).forks).toBe(4);
+    expect((await planForks(base({ memAvailableMb: () => 6900 }))).forks).toBe(3);
+    expect((await planForks(base({ browserRunning: () => true }))).forks).toBe(2);
+    expect((await planForks(base({ want: 1 }))).forks).toBe(1);
+    expect((await planForks(base({})).then((p) => p.via))).toBe('memory');
+  });
+
+  it('without a ledger: waits (with a message) only when even 1 fork does not fit', async () => {
+    const mem = [5000, 5200, 6000];
+    const logs: string[] = [];
+    const p = await planForks(base({ memAvailableMb: () => mem.shift() ?? 6000, log: (m) => logs.push(m) }));
+    expect(p.forks).toBe(1);
+    expect(p.waited).toBe(true);
+    expect(logs.join('\n')).toMatch(/waiting/);
+  });
+
+  it('watch mode takes no ledger entry and never waits', async () => {
+    const ledger = fakeLedger(0);
+    const p = await planForks(base({ watch: true, ledger, memAvailableMb: () => 3000 }));
+    expect(p.forks).toBe(1);
+    expect(p.via).toBe('watch');
+    expect(ledger.calls).toEqual([]);
+  });
+
+  it('with a ledger: the largest admitted weight; later runs get fewer forks, then wait for 1; release is idempotent', async () => {
+    const ledger = fakeLedger(7000, 1700); // a tool browser (700) and a page (1000) hold weight
+    const a = await planForks(base({ ledger }));
+    expect([a.forks, a.via, ledger.live]).toEqual([4, 'ledger', 4800]);
+    const b = await planForks(base({ ledger }));
+    expect([b.forks, ledger.live]).toEqual([2, 6500]); // 4 (+3100) and 3 (+2400) forks are refused
+    const logs: string[] = [];
+    const c = await planForks(base({ ledger, log: (m) => logs.push(m) }));
+    expect([c.forks, c.waited]).toEqual([1, true]);
+    expect(ledger.calls.at(-1)).toEqual({ weightMb: 1000, wait: true });
+    expect(logs.join('\n')).toMatch(/does not admit even 1 fork/);
+    a.release(); a.release();
+    expect(ledger.releases).toBe(1);
+    expect(ledger.live).toBe(6500 + 1000 - 3100);
+  });
+
+  it('while it waits for the ledger, a run holds only 1 fork of its registry reservation', async () => {
+    const sets: number[] = [];
+    const reg: ForkRegistry = { reserve: (want) => want, set: (n) => { sets.push(n); }, release: () => {}, others: () => 0 };
+    const ledger = fakeLedger(7000, 7000); // full: only the waiting request is admitted
+    const p = await planForks(base({ registry: reg, ledger }));
+    expect([p.forks, p.via, p.waited]).toEqual([1, 'ledger', true]);
+    expect(sets).toEqual([1, 1]); // shrunk to 1 before the wait, then the final count
+  });
+
+  it('a ledger that throws on every call falls back to MemAvailable', async () => {
+    const ledger: Ledger = { acquire: () => { throw new Error('boom'); } };
+    const logs: string[] = [];
+    const p = await planForks(base({ ledger, log: (m) => logs.push(m) }));
+    expect([p.forks, p.via]).toEqual([4, 'memory']);
+    expect(logs.join('\n')).toMatch(/did not answer as expected/);
+  });
+
+  it('a live browser slot (tools/shoot.mjs acquireSlot) or a ledger holder labelled as a browser counts as a browser', async () => {
+    tmp = mkdtempSync(path.join(tmpdir(), 'br-slots-'));
+    expect(await browserRunning(null, tmp)).toBe(false);
+    mkdirSync(path.join(tmp, 'slot-0'));
+    writeFileSync(path.join(tmp, 'slot-0', 'pid'), '999999999'); // no such process
+    expect(await browserRunning(null, tmp)).toBe(false);
+    writeFileSync(path.join(tmp, 'slot-0', 'pid'), String(process.pid));
+    expect(await browserRunning(null, tmp)).toBe(true);
+    rmSync(path.join(tmp, 'slot-0'), { recursive: true });
+    const ledger: Ledger = { acquire: () => null, status: () => ({ holders: [{ pid: process.pid, label: 'rsd browser', weightMb: 700 }] }) };
+    expect(await browserRunning(ledger, tmp)).toBe(true);
+  });
+
+  it('concurrent runs share the machine-wide fork total: 4, then 2, then wait; dead runs do not count', () => {
+    tmp = mkdtempSync(path.join(tmpdir(), 'test-forks-'));
+    const a = createForkRegistry(tmp, process.pid), b = createForkRegistry(tmp, process.ppid), c = createForkRegistry(tmp, 1);
+    expect(a.reserve(4, 6)).toBe(4);
+    expect(b.reserve(4, 6)).toBe(2);
+    expect(c.reserve(4, 6)).toBe(0);
+    expect(c.others()).toBe(6);
+    a.set(3); // the ledger admitted fewer than reserved
+    expect(c.reserve(4, 6)).toBe(1);
+    a.release();
+    expect(b.others()).toBe(1);
+    writeFileSync(path.join(tmp, '999999999.json'), JSON.stringify({ forks: 4 })); // a dead run
+    expect(createForkRegistry(tmp, process.pid).reserve(4, 6)).toBe(3);
+  });
+
+  it('a run waits for a registry reservation, then sizes by memory within it; release frees both', async () => {
+    const free = [0, 0, 2];
+    const reg: ForkRegistry & { set: (n: number) => void; sets: number[]; released: number } = {
+      sets: [], released: 0,
+      reserve: (want) => Math.min(want, free.shift() ?? 2), set(n) { reg.sets.push(n); }, release() { reg.released++; }, others: () => 4,
+    };
+    const logs: string[] = [];
+    const p = await planForks(base({ registry: reg, log: (m) => logs.push(m), memAvailableMb: () => 6000 }));
+    expect([p.forks, p.waited]).toEqual([1, true]); // reserved 2, MemAvailable 6000 fits 1
+    expect(reg.sets).toEqual([1]);
+    expect(logs.join('\n')).toMatch(/other test runs hold 4 of the 6 forks/);
+    p.release(); p.release();
+    expect(reg.released).toBe(1);
+  });
+
+  it('recognises quick-tier runs by their tags filter', () => {
+    expect(isQuickTier(['node', 'vitest.mjs', 'run', "--tags-filter=!sweep"])).toBe(true);
+    expect(isQuickTier(['node', 'vitest.mjs', 'related', '--run', '--tagsFilter', '!sweep', 'src/a.ts'])).toBe(true);
+    expect(isQuickTier(['node', 'vitest.mjs', 'run', '--tags-filter=sweep'])).toBe(false);
+    expect(isQuickTier(['node', 'vitest.mjs', 'run'])).toBe(false);
+  });
+
+  it('reads watch mode and --maxWorkers from the vitest command line', () => {
+    const argv = (...a: string[]): string[] => ['node', 'vitest.mjs', ...a];
+    expect(parseVitestArgv(argv('run'), {}, true)).toEqual({ watch: false, maxWorkers: null, command: 'run' });
+    expect(parseVitestArgv(argv('related', '--run', 'src/a.ts'), {}, true).watch).toBe(false);
+    expect(parseVitestArgv(argv('related', 'src/a.ts'), {}, true).watch).toBe(true);
+    expect(parseVitestArgv(argv('related', 'src/a.ts'), {}, false).watch).toBe(false);
+    expect(parseVitestArgv(argv(), { CI: '1' }, true).watch).toBe(false);
+    expect(parseVitestArgv(argv('list'), {}, true).watch).toBe(false);
+    expect(parseVitestArgv(argv('run', '--maxWorkers=3'), {}, false).maxWorkers).toBe(3);
+    expect(parseVitestArgv(argv('run', '--maxWorkers', '2'), {}, false).maxWorkers).toBe(2);
+  });
+});

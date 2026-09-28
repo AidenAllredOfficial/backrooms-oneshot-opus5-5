@@ -164,7 +164,7 @@ describe('landmark density (sites)', () => {
       }
       for (let i = 0; i < regular.length; i++) for (let j = i + 1; j < regular.length; j++) {
         const d = Math.max(Math.abs(regular[i].cx - regular[j].cx), Math.abs(regular[i].cz - regular[j].cz));
-        expect(d, `${JSON.stringify(regular[i])} ${JSON.stringify(regular[j])}`).toBeGreaterThanOrEqual(2);
+        if (!(d >= 2)) expect(d, `${JSON.stringify(regular[i])} ${JSON.stringify(regular[j])}`).toBeGreaterThanOrEqual(2);
       }
     }
   });
@@ -223,7 +223,7 @@ describe('hero rooms', () => {
   });
 });
 
-describe('curious-wanderer pacing', () => {
+describe('curious-wanderer pacing', { tags: ['sweep'] }, () => {
   it('>= 1.5 landmarks or hero rooms per km on every storey; the gaps stay short', () => {
     const report: string[] = [];
     for (const s of [0, 1, 2] as StoreyId[]) {
@@ -252,5 +252,5 @@ describe('curious-wanderer pacing', () => {
       expect(Math.max(...gapsNew), report[report.length - 1]).toBeLessThanOrEqual(300);
     }
     console.log(report.join('\n'));
-  }, 240_000);
+  });
 });

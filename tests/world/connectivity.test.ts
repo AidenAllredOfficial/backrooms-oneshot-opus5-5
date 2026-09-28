@@ -218,7 +218,7 @@ describe('global connectivity (5x5 chunks per storey)', () => {
       expect(ports).toBeGreaterThan(100);
       expect(missed.slice(0, 10), `storey ${s}: ${missed.length} unreachable port cells`).toEqual([]);
     }
-  }, 60_000);
+  });
 });
 
 // ------------------------------------------------------------------------------------------ R2 zone transitions
@@ -227,7 +227,7 @@ import { EdgeTrim, FixtureKind, PropKind } from '../../src/core/ids.ts';
 import { CONNECTOR_CEIL_CM } from '../../src/world/structures/transitions.ts';
 
 describe('R2 zone-transition connectors (full pipeline)', () => {
-  it('fire doors with THRESHOLD trim sit at the end of a 230 cm bulkhead connector, with an EXIT sign; chunks validate', () => {
+  it('fire doors with THRESHOLD trim sit at the end of a 230 cm bulkhead connector, with an EXIT sign; chunks validate', { tags: ['sweep'] }, () => {
     let connectors = 0, leaves = 0;
     for (const seed of [1, 7, 42]) {
       const gen = createWorldGen({ seed, seedText: String(seed), forceZone: null, forceMood: null, forceLandmark: null, testScene: null, lights: 'default' });

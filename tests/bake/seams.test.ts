@@ -88,7 +88,7 @@ function compareX(a: Side, b: Side, kind: number): { n: number; worst: number; m
 
 const ZONES: ZoneId[] = [Zone.LOBBY, Zone.LOW_EXPANSE, Zone.PILLAR_HALL, Zone.WAREHOUSE];
 
-describe('tile seams', () => {
+describe('tile seams', { tags: ['sweep'] }, () => {
   for (const zone of ZONES) {
     it(`${ZONE_NAMES[zone]}: same chunk (q0 | q1) and across a chunk seam (cx 0 q1 | cx 1 q0)`, () => {
       const nb0 = zoneNeighborhood(zone, 0, 0);
@@ -107,6 +107,6 @@ describe('tile seams', () => {
         if (label === 'in-chunk' && WALL_SEAM_ZONES.includes(zone)) expect(w.n, `${label}: compared wall seam texels`).toBeGreaterThan(50);
         expect(w.worst, `${label}: wall seam worst relative difference`).toBeLessThan(0.02);
       }
-    }, 300_000);
+    });
   }
 });

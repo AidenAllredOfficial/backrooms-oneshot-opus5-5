@@ -1,25 +1,28 @@
-// tests/integration/pipeline.test.ts (WP10) — the first-try integration gate (DESIGN §5 WP10, §8.1 P2a).
+// tests/integration/pipelineHarness.ts — the WP10 worker-pipeline gate (DESIGN §5 WP10, §8.1 P2a), shared by its shards.
 //
 // In Node, handleRequest runs init -> layout, build and bake for 50 tiles across all 12 zones (forceZone rotation),
 // plus the tower and leak test scenes. The worker boundary is simulated: every response goes through
 // structuredClone(res, { transfer }) before the next request; after each layout response a build of a tile of the
 // SAME chunk runs on the SAME HandlerState and must equal a fresh-state build (catches transferred/detached LRU
 // buffers); no transferred buffer may be referenced by HandlerState. Every payload passes validate*.
+//
+// The 50 real full-bake tiles are split by zone index mod 3 into pipeline-a/b/c.test.ts (17 + 17 + 16 tiles), so the
+// gate runs on three forks at once; PIPELINE_SHARD_TILES sums to the 50-tile guarantee. The gate is a 'sweep' (npm test
+// only); each shard also has an untagged smoke test (runSmokeShard: its zones at low bake quality, ~1.5 s) that keeps
+// the boundary checks in the quick tier.
 
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { expect } from 'vitest';
 import type { TileKey } from '../../src/core/grid.ts';
 import { tileKeyStr } from '../../src/core/grid.ts';
-import { ZONE_COUNT, ZONE_NAMES, type StoreyId, type ZoneId } from '../../src/core/ids.ts';
-import { bakeQualityOf, QUALITY } from '../../src/core/quality.ts';
+import { Zone, ZONE_COUNT, ZONE_NAMES, type StoreyId, type ZoneId } from '../../src/core/ids.ts';
+import { bakeQualityOf, QUALITY, type QualityName } from '../../src/core/quality.ts';
 import type { HandlerResult, WorkerInit, WorkerRequest, WorkerResponse } from '../../src/core/worker.ts';
 import type { TestSceneId } from '../../src/core/world.ts';
 import { createHandlerState, handleRequest, handlerCachesOf, type HandlerState } from '../../src/workers/handler.ts';
 import { validateBake, validateBuild, validateLayoutPayload } from '../../src/workers/validatePayload.ts';
 
-// ---------------------------------------------------------------- helpers
-
-function makeInit(o: { forceZone?: ZoneId | null; testScene?: TestSceneId | null; quality: 'medium' | 'high'; seed?: number }): WorkerInit {
+export function makeInit(o: { forceZone?: ZoneId | null; testScene?: TestSceneId | null; quality: QualityName; seed?: number }): WorkerInit {
   const seed = o.seed ?? 7;
   return {
     opts: {
@@ -78,7 +81,7 @@ function digest(v: unknown): string {
 interface Run { st: HandlerState; bakeMs: number[]; buildMs: number[]; tiles: number; chartHash: Map<string, number> }
 
 /** handleRequest + the simulated worker boundary. Returns the structured-cloned (received) response. */
-function send(run: Run, req: WorkerRequest): WorkerResponse {
+export function send(run: Run, req: WorkerRequest): WorkerResponse {
   const r: HandlerResult = handleRequest(req, run.st);
   if (r.res.t === 'error') throw new Error(`${req.t} failed in the handler: ${r.res.message}\n${r.res.stack}`);
   // no duplicate or LRU/cache-referenced buffer in the transfer list
@@ -94,7 +97,7 @@ function send(run: Run, req: WorkerRequest): WorkerResponse {
   return received;
 }
 
-function newRun(init: WorkerInit): Run {
+export function newRun(init: WorkerInit): Run {
   const run: Run = { st: createHandlerState(), bakeMs: [], buildMs: [], tiles: 0, chartHash: new Map() };
   const res = send(run, { t: 'init', job: 1, init });
   expect(res.t).toBe('ready');
@@ -102,8 +105,9 @@ function newRun(init: WorkerInit): Run {
 }
 
 let jobId = 100;
+export const nextJob = (): number => ++jobId;
 
-function layoutStep(run: Run, init: WorkerInit, s: StoreyId, cx: number, cz: number): void {
+export function layoutStep(run: Run, init: WorkerInit, s: StoreyId, cx: number, cz: number): void {
   const res = send(run, { t: 'layout', job: ++jobId, key: { s, cx, cz } });
   expect(res.t).toBe('layout');
   if (res.t !== 'layout') return;
@@ -121,13 +125,30 @@ function layoutStep(run: Run, init: WorkerInit, s: StoreyId, cx: number, cz: num
   expect(digest(fl)).toBe(digest({ ...res, job: fl.job }));
 }
 
-function tileStep(run: Run, key: TileKey): void {
+/** A layout request through the boundary: payload valid, key echoed (layoutStep adds the determinism checks). */
+export function layoutOnlyStep(run: Run, s: StoreyId, cx: number, cz: number): void {
+  const res = send(run, { t: 'layout', job: ++jobId, key: { s, cx, cz } });
+  expect(res.t).toBe('layout');
+  if (res.t !== 'layout') return;
+  expect(validateLayoutPayload(res.layout, res.collision)).toEqual([]);
+  expect(res.layout.key).toEqual({ s, cx, cz });
+}
+
+/** A build request through the boundary (mesh + preview lightmap): payload valid, tile key echoed. */
+export function buildStep(run: Run, key: TileKey): Extract<WorkerResponse, { t: 'build' }> | null {
   const b = send(run, { t: 'build', job: ++jobId, key });
   expect(b.t).toBe('build');
-  if (b.t !== 'build') return;
+  if (b.t !== 'build') return null;
   expect(validateBuild(b.mesh, b.lightmap), `build ${tileKeyStr(key)}`).toEqual([]);
   expect(b.mesh.tileKey).toBe(tileKeyStr(key));
   run.buildMs.push(b.ms.gen + b.ms.mesh + b.ms.bake);
+  return b;
+}
+
+/** buildStep, then the full bake of the same tile: valid, same atlas (chartHash) and lightmap size as the build. */
+export function tileStep(run: Run, key: TileKey): void {
+  const b = buildStep(run, key);
+  if (!b) return;
   const f = send(run, { t: 'bake', job: ++jobId, key });
   expect(f.t).toBe('bake');
   if (f.t !== 'bake') return;
@@ -140,79 +161,77 @@ function tileStep(run: Run, key: TileKey): void {
   run.tiles++;
 }
 
-const stats = { tiles: 0, bakeMs: [] as number[], buildMs: [] as number[] };
-function collect(run: Run): void {
+export interface PipelineStats { tiles: number; bakeMs: number[]; buildMs: number[] }
+export const createStats = (): PipelineStats => ({ tiles: 0, bakeMs: [], buildMs: [] });
+export function collect(stats: PipelineStats, run: Run): void {
   stats.tiles += run.tiles;
   stats.bakeMs.push(...run.bakeMs);
   stats.buildMs.push(...run.buildMs);
 }
 
-// ---------------------------------------------------------------- the gate
+/** The storey and chunk of zone z in the 50-tile gate. */
+export function zonePlacement(z: number): { s: StoreyId; cx: number; cz: number } {
+  const zone = z as ZoneId;
+  return { s: (zone === 7 ? 2 : zone >= 8 ? 1 : 0) as StoreyId, cx: z - 6, cz: ((z * 7) % 5) - 2 };
+}
 
-const TIMEOUT = 30 * 60 * 1000; // real full bakes: ~0.5 s per tile per core
-
-describe('worker pipeline (Node, handleRequest)', () => {
-  it('rejects work before init and reports errors as responses', () => {
-    const st = createHandlerState();
-    const r = handleRequest({ t: 'layout', job: 5, key: { s: 0, cx: 0, cz: 0 } }, st);
-    expect(r.res.t).toBe('error');
-    expect(r.res.job).toBe(5);
-    expect(r.transfer).toEqual([]);
-  });
-
-  it('50 tiles across all 12 zones: layout, build, bake through structuredClone(res, { transfer })', () => {
-    let extra = 2; // 12 zones x 4 tiles + 2 = 50
-    for (let z = 0; z < ZONE_COUNT; z++) {
-      const zone = z as ZoneId;
-      const init = makeInit({ forceZone: zone, quality: z % 2 === 0 ? 'high' : 'medium' });
-      const run = newRun(init);
-      const s: StoreyId = zone === 7 ? 2 : zone >= 8 ? 1 : 0;
-      const cx = z - 6, cz = ((z * 7) % 5) - 2;
-      layoutStep(run, init, s, cx, cz);
-      for (let q = 0; q < 4; q++) tileStep(run, { s, cx, cz, q: q as 0 | 1 | 2 | 3 });
-      if (extra > 0 && (z === 0 || z === 7)) {
-        // a tile of the neighbouring chunk (warm LRU / bake cache on the same state)
-        tileStep(run, { s, cx: cx + 1, cz, q: 0 });
-        extra--;
-      }
-      expect(run.tiles, `zone ${ZONE_NAMES[z]}`).toBeGreaterThanOrEqual(4);
-      collect(run);
-    }
-    expect(stats.tiles).toBe(50);
-  }, TIMEOUT);
-
-  it('test scenes: tower and leak', () => {
-    for (const scene of ['tower', 'leak'] as TestSceneId[]) {
-      const init = makeInit({ testScene: scene, quality: 'high' });
-      const run = newRun(init);
-      layoutStep(run, init, 0, 0, 0);
-      for (let q = 0; q < 4; q++) tileStep(run, { s: 0, cx: 0, cz: 0, q: q as 0 | 1 | 2 | 3 });
-      if (scene === 'tower') {
-        // the storey below sees the same periodic tower
-        layoutStep(run, init, 1, 0, 0);
-        tileStep(run, { s: 1, cx: 0, cz: 0, q: 0 });
-      }
-      collect(run);
-    }
-  }, TIMEOUT);
-
-  it('find / spawn / ascii round-trip the boundary', () => {
-    const run = newRun(makeInit({ quality: 'medium' }));
-    const sp = send(run, { t: 'spawn', job: ++jobId, s: 0 });
-    expect(sp.t).toBe('spawn');
-    if (sp.t === 'spawn') expect(Number.isFinite(sp.result.x) && Number.isFinite(sp.result.z)).toBe(true);
-    const f = send(run, { t: 'find', job: ++jobId, query: 'spawn', from: { s: 0, x: 0, z: 0 }, maxChunks: 4 });
-    expect(f.t).toBe('find');
-    const a = send(run, { t: 'ascii', job: ++jobId, s: 0, cx0: -1, cz0: -1, cx1: 0, cz1: 0 });
-    expect(a.t).toBe('ascii');
-    if (a.t === 'ascii') expect(typeof a.text).toBe('string');
-  });
-
-  it('logs bench numbers', () => {
-    const mean = (a: number[]): number => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
-    const p95 = (a: number[]): number => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length * 0.95)] : 0);
-    console.log(`[pipeline] tiles ${stats.tiles}; full bake mean ${mean(stats.bakeMs).toFixed(1)} ms, p95 ${p95(stats.bakeMs).toFixed(1)} ms; ` +
-      `build (gen+mesh+preview) mean ${mean(stats.buildMs).toFixed(1)} ms, p95 ${p95(stats.buildMs).toFixed(1)} ms`);
-    expect(stats.tiles).toBeGreaterThanOrEqual(50);
-  });
+/** Zones that get a tile of the neighbouring chunk (warm LRU / bake cache on the same state): 12 x 4 + 2 = 50. */
+const EXTRA_TILE_ZONES = [0, 7];
+export const PIPELINE_SHARDS = 3;
+/** Tiles per shard (zones z % 3 === shard): the three sum to the 50-tile gate. */
+export const PIPELINE_SHARD_TILES: readonly number[] = Array.from({ length: PIPELINE_SHARDS }, (_, k) => {
+  let n = 0;
+  for (let z = k; z < ZONE_COUNT; z += PIPELINE_SHARDS) n += 4 + (EXTRA_TILE_ZONES.includes(z) ? 1 : 0);
+  return n;
 });
+
+/** One shard of the 50-tile gate: zones z % 3 === shard, all four tiles of one chunk each (high / medium quality
+ * alternating), full bakes, plus a neighbouring-chunk tile for zones 0 and 7. */
+export function runGateShard(shard: number, stats: PipelineStats): void {
+  const before = stats.tiles;
+  for (let z = shard; z < ZONE_COUNT; z += PIPELINE_SHARDS) {
+    const zone = z as ZoneId;
+    const init = makeInit({ forceZone: zone, quality: z % 2 === 0 ? 'high' : 'medium' });
+    const run = newRun(init);
+    const { s, cx, cz } = zonePlacement(z);
+    layoutStep(run, init, s, cx, cz);
+    for (let q = 0; q < 4; q++) tileStep(run, { s, cx, cz, q: q as 0 | 1 | 2 | 3 });
+    if (EXTRA_TILE_ZONES.includes(z)) tileStep(run, { s, cx: cx + 1, cz, q: 0 });
+    expect(run.tiles, `zone ${ZONE_NAMES[z]}`).toBeGreaterThanOrEqual(4);
+    collect(stats, run);
+  }
+  expect(stats.tiles - before).toBe(PIPELINE_SHARD_TILES[shard]);
+}
+
+/** Smoke: full bake + same-state == fresh-state determinism on one zone per shard (LOBBY, storey 2 POOLROOMS with its
+ * water meshes, storey 1 PARKING); layout + build through the boundary for the others. */
+const SMOKE_FULL_CHECK_ZONES: readonly number[] = [Zone.LOBBY, Zone.POOLROOMS, Zone.PARKING];
+
+/** The quick-tier slice of one shard: its zones at low bake quality, one tile each, through the simulated boundary
+ * (transfer list, detached LRU, payload validation on every response). */
+export function runSmokeShard(shard: number): void {
+  let tiles = 0, full = 0;
+  for (let z = shard; z < ZONE_COUNT; z += PIPELINE_SHARDS) {
+    const init = makeInit({ forceZone: z as ZoneId, quality: 'low' });
+    const run = newRun(init);
+    const { s, cx, cz } = zonePlacement(z);
+    const key: TileKey = { s, cx, cz, q: (z % 4) as 0 | 1 | 2 | 3 };
+    if (SMOKE_FULL_CHECK_ZONES.includes(z)) {
+      layoutStep(run, init, s, cx, cz);
+      tileStep(run, key);
+      full += run.tiles;
+    } else {
+      layoutOnlyStep(run, s, cx, cz);
+      if (buildStep(run, key)) tiles++;
+    }
+  }
+  expect(full, 'zones with the full bake + determinism checks').toBe(1);
+  expect(tiles + full).toBe(Math.ceil((ZONE_COUNT - shard) / PIPELINE_SHARDS));
+}
+
+export function logBench(label: string, stats: PipelineStats): void {
+  const mean = (a: number[]): number => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
+  const p95 = (a: number[]): number => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length * 0.95)] : 0);
+  console.log(`[pipeline ${label}] tiles ${stats.tiles}; full bake mean ${mean(stats.bakeMs).toFixed(1)} ms, p95 ${p95(stats.bakeMs).toFixed(1)} ms; ` +
+    `build (gen+mesh+preview) mean ${mean(stats.buildMs).toFixed(1)} ms, p95 ${p95(stats.buildMs).toFixed(1)} ms`);
+}
