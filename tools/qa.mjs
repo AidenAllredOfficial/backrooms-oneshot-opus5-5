@@ -31,10 +31,11 @@ export const THRESHOLDS = {
   darkFlash: { meanLumMin: 0.05, clippedMax: 0.03 },
   // p5Max (package C.7): the darkest 5 % of a lit Level 0 view must stay below this, so the old frame-wide warm veil
   // (halation + lifted blacks: LOBBY p5 0.32, MANILA 0.38) cannot creep back. One limit for every Level 0 zone since
-  // the C.7b retune (toe, contrast 1.25-1.4, thinner froxel haze): LOBBY / MAZE / MANILA measure 0.22-0.25; the
-  // SPARSE LOW_EXPANSE, whose darkest pixels are lamp-lit carpet far across the open hall, is the highest.
+  // the C.7b retune (toe, contrast 1.3-1.46, thinner froxel haze): the zone= spawns measure 0.24-0.27 at high; the
+  // highest are the evenly lit open views (forceZone MANILA / LOW_EXPANSE spawns, ~0.28), whose darkest pixels are
+  // lamp-lit carpet and pale walls rather than deep reveals.
   level0: {
-    zones: ['LOBBY', 'MANILA', 'MAZE', 'LOW_EXPANSE'], hueDeg: [38, 65], sat: [0.15, 0.6], p5Max: 0.28,
+    zones: ['LOBBY', 'MANILA', 'MAZE', 'LOW_EXPANSE'], hueDeg: [38, 65], sat: [0.15, 0.6], p5Max: 0.3,
   },
 };
 

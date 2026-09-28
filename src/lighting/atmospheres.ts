@@ -25,21 +25,24 @@ const grade = (g: Partial<ColorGrade>): ColorGrade => ({
 // `pedestal` is the sensor black level (sRGB-encoded) added after the contrast curve: no pure #000 anywhere.
 // Package C.7 retune (C.7b, with every realism package merged: energy-conserving glare, froxel haze, SSR / probe,
 // pre-shade SSAO, luminaire profiles, water, torch + bounce). No halation veil and a filmic `toe` (ColorGradeEffect):
-// lift is (almost) gone, the pedestal sits at 0.02-0.03 and a luma S-curve of 1.2-1.4 takes the deep reveals toward
+// lift is (almost) gone, the pedestal sits at 0.02-0.03 and a luma S-curve of 1.15-1.46 takes the deep reveals toward
 // black while the mids stay bright and the famous yellow keeps its saturation. Measured p5 / p50 (imageStats of the
 // zone= spawn views, ultra 1920x1080, seed 7, time 10, grain off; before -> after C.7b):
-//   LOBBY .26/.47 -> .24/.52 (clipped .03, hue 43, sat .53)   MANILA .29/.46 -> .25/.44 (hue 54 -> 49)
-//   MAZE .26/.50 -> .24/.53   LOW_EXPANSE (SPARSE) .30/.43 -> .27/.45   PILLAR_HALL .31/.44 -> .28/.44
+//   LOBBY .26/.47 -> .24/.52 (clipped .03, hue 43, sat .53)   MANILA .29/.46 -> .24/.44 (hue 54 -> 49)
+//   MAZE .26/.50 -> .24/.53   LOW_EXPANSE (SPARSE) .30/.43 -> .25/.45   PILLAR_HALL .31/.44 -> .27/.44
 //   OFFICE .24/.41 -> .22/.43   POOLROOMS .37/.55 -> .33/.54   PARKING .17/.35 -> .17/.36
 //   WAREHOUSE .17/.33 -> .12/.31 (the haze no longer greys the dark roof)   PIPEWORKS / CONCRETE / DARK unchanged
 
-/** Level 0 look (LOBBY, LOW_EXPANSE): sickly fluorescent yellow, over-exposed (+1.35 EV bias): the green-yellow push
+/** Level 0 look (LOBBY; LOW_EXPANSE via GRADE_EXPANSE): sickly fluorescent yellow, over-exposed (+1.35 EV bias): the green-yellow push
  * lives in gamma (G up, B down) and shadowTint; white clips to white. */
 const GRADE_L0 = grade({
   temperature: 0.0, tint: -0.04, saturation: 1.06, contrast: 1.38,
   lift: [0, 0, 0], gamma: [1.0, 1.08, 0.86], gain: [1, 1, 1],
   shadowTint: [0.97, 1.0, 0.9], highlightTint: [1, 1, 1], pedestal: 0.02, toe: 0.6,
 });
+/** LOW_EXPANSE: the L0 look with a steeper curve: the open, evenly lit hall has no deep reveals, so its darkest pixels
+ * are lamp-lit carpet far across the floor (p5 ~0.3 at the L0 contrast) */
+const GRADE_EXPANSE = grade({ ...GRADE_L0, contrast: 1.46, toe: 0.65 });
 /** MAZE: the same office fluorescents seen by a slightly warmer, dimmer camera (narrow halls, older tubes). */
 const GRADE_MAZE = grade({
   temperature: 0.0, tint: -0.04, saturation: 0.97, contrast: 1.3,
@@ -49,7 +52,7 @@ const GRADE_MAZE = grade({
 const GRADE_MANILA = grade({
   // manila = pale sickly tan-green, desaturated; inside the §8.2 Level 0 hue band [38, 65] deg (C.7b: less green,
   // hue 54 -> ~48, so the walls read as manila paper rather than grey-green)
-  temperature: -0.02, tint: -0.06, saturation: 0.88, contrast: 1.25,
+  temperature: -0.02, tint: -0.06, saturation: 0.88, contrast: 1.32,
   lift: [0.006, 0.007, 0.005], gamma: [0.97, 1.08, 0.92], gain: [1, 1, 1],
   shadowTint: [0.95, 1.0, 0.93], highlightTint: [1, 1, 1], pedestal: 0.025, toe: 0.55,
 });
@@ -113,7 +116,7 @@ function buildAtmospheres(): Record<number, AtmosphereParams> {
   // table's "DARK (mood)" row: haze x1.5, tint x0.8, EV [5.5, 10], bloom 0.6, grain 0.8.
   t[Zone.DARK] = row({ haze: 0.006, tint: L0_TINT, albedo: 0.5, ev: [6.5, 11], bias: 0, bloom: 0.5, ao: 3.0, grain: 0.8, grade: GRADE_DARK });
   t[Zone.MAZE] = row({ haze: 0.005, tint: L0_TINT, albedo: 0.5, ev: [4, 11], bias: 1.2, bloom: 0.5, ao: 3.0, grain: 0.8, grade: GRADE_MAZE });
-  t[Zone.LOW_EXPANSE] = row({ haze: 0.006, tint: [1.0, 0.95, 0.8], albedo: 0.5, ev: [4, 11], bias: 1.2, bloom: 0.5, ao: 2.7, grain: 0.8, grade: GRADE_L0 });
+  t[Zone.LOW_EXPANSE] = row({ haze: 0.006, tint: [1.0, 0.95, 0.8], albedo: 0.5, ev: [4, 11], bias: 1.2, bloom: 0.5, ao: 2.7, grain: 0.8, grade: GRADE_EXPANSE });
   t[Zone.PILLAR_HALL] = row({ haze: 0.006, tint: [0.95, 0.95, 0.9], albedo: 0.5, ev: [4, 11.5], bias: 0.8, bloom: 0.45, ao: 2.7, grain: 0.7, grade: GRADE_MANILA });
   t[Zone.OFFICE] = row({ haze: 0.004, tint: [0.9, 0.95, 1.0], albedo: 0.5, ev: [4, 11], bias: 0.8, bloom: 0.4, ao: 3.0, grain: 0.65, grade: GRADE_OFFICE });
   // Poolrooms: bright soft daylight-like white tile (bias +1.6 EV, range up to 13.5 for the sunlit halls)
