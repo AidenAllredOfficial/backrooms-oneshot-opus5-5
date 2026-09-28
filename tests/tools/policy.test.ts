@@ -65,6 +65,13 @@ describe('lanes and job selection', () => {
     expect(order).toEqual(['s=2', 's=3', 's=4', 's=1']);
   });
 
+  it('keeps lane 1 off the boot key lane 0 moves through in place', () => {
+    const q = [job('a', 's=1', { warmKey: 'K' }), job('a', 's=2', { warmKey: 'M' })];
+    expect(pickJob(q, 1, { avoidKey: 'K' }).job.shot.params).toBe('s=2');
+    expect(pickJob([q[0]], 1, { avoidKey: 'K' }).job).toBeNull();
+    expect(pickJob([q[0]], 0, { warmKey: 'K' }).job.shot.params).toBe('s=1');
+  });
+
   it('gives shots with evals and the long presets the browser to themselves', () => {
     expect(isExclusive({ params: 'x', eval: ['1'] }, {})).toBe(true);
     expect(isExclusive({ params: 'x' }, { evals: ['__backrooms.perf(5)'] })).toBe(true);

@@ -355,7 +355,7 @@ function memoPut(key, distHash, entry, qa) {
 /** Next job for a lane (policy.mjs pickJob), removed from the queue. */
 function takeJob(l) {
   if (!queue.length) return null;
-  const r = pickJob(queue, l.id, { warmKey: l.lane.warmKey, exclusiveRunning: exclusiveRunning > 0, othersBusy: lanes.some((x) => x && x !== l && x.job), last: lastClient });
+  const r = pickJob(queue, l.id, { warmKey: l.lane.warmKey, avoidKey: l.id > 0 ? lane0InPlaceKey() : null, exclusiveRunning: exclusiveRunning > 0, othersBusy: lanes.some((x) => x && x !== l && x.job), last: lastClient });
   lastClient = r.last;
   if (r.job) queue.splice(queue.indexOf(r.job), 1);
   return r.job;
@@ -380,11 +380,19 @@ function pump() {
   if (stopping) return;
   if (!lanes[0]) newLaneSlot(0);
   if (!lanes[0].busy && queue.length) void runLane(lanes[0]);
-  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !coldCache() && !heavyLane0() && queue.some((j) => laneEligible(1, j))) {
+  const k0 = lane0InPlaceKey();
+  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !coldCache() && !heavyLane0() && queue.some((j) => laneEligible(1, j) && !(k0 && j.warmKey === k0))) {
     const l1 = lanes[1] ?? newLaneSlot(1);
     // a refused second page is retried at most every 2 s
     if (!l1.busy && (lanes[0].busy || queue.length > 1) && Date.now() - (l1.refusedAt ?? 0) > 2000) void runLane(l1);
   }
+}
+
+/** Boot key lane 0 moves through in place: its warm page's, or its running job's on a contract-v2 tree. */
+function lane0InPlaceKey() {
+  const l0 = lanes[0];
+  if (!l0) return null;
+  return l0.lane.warmKey ?? (l0.job?.features?.bootKeys ? l0.job.warmKey : null);
 }
 
 /** Lane 0 holds a heavy page (ultra, >= 1440p): a second page would take the tree past the 3.2 GB PSS cap. */

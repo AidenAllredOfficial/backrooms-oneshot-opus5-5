@@ -53,15 +53,17 @@ export function laneEligible(laneId, job) {
  * Next job for a lane: round-robin over the clients with queued work (client ids in sorted order, starting after
  * `last`, the client served last); within the chosen client prefer a job matching the lane's warm-page key, else
  * its first queued job. Nothing starts while an exclusive job runs, and an exclusive job starts only when no other
- * lane is busy. Returns { job, last } (job null when nothing fits) without mutating `queue`.
+ * lane is busy. `avoidKey` (lane 1): skip jobs of that boot key, which lane 0 moves through in place (a second
+ * page of the same key only competes for the bandwidth-bound tile uploads: 4 % faster for 1.3 GB on D2).
+ * Returns { job, last } (job null when nothing fits) without mutating `queue`.
  */
-export function pickJob(queue, laneId, { warmKey = null, exclusiveRunning = false, othersBusy = false, last = null } = {}) {
+export function pickJob(queue, laneId, { warmKey = null, avoidKey = null, exclusiveRunning = false, othersBusy = false, last = null } = {}) {
   if (exclusiveRunning) return { job: null, last };
   const clients = [...new Set(queue.map((j) => j.req.client))].sort();
   const start = last === null ? 0 : Math.max(0, clients.findIndex((c) => c > last));
   for (let k = 0; k < clients.length; k++) {
     const c = clients[(start + k) % clients.length];
-    const mine = queue.filter((j) => j.req.client === c && laneEligible(laneId, j) && !(j.exclusive && othersBusy));
+    const mine = queue.filter((j) => j.req.client === c && laneEligible(laneId, j) && !(j.exclusive && othersBusy) && !(avoidKey && j.warmKey === avoidKey));
     if (!mine.length) continue;
     const job = (warmKey && mine.find((j) => j.warmKey === warmKey)) || mine[0];
     return { job, last: c };
