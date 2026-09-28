@@ -932,6 +932,32 @@ describe('automation capture gate v2 (StreamerOptions.capture)', () => {
     r.st.dispose();
   });
 
+  it('a quality change then its gate: resident tiles outside the capture set are still rebuilt once it opens', async () => {
+    // app/boot.ts applyQuality: streamer.setQuality (rebuilds submitted), THEN gate.open('quality') closes the gate,
+    // which drops the rebuilds outside the capture set. They must come back: the tiles hold the old preset's atlas.
+    const { r, cc, closed } = gated();
+    closed.v = false;
+    r.tick(P, P);
+    await r.answerLayouts();
+    await r.answerBuilds();
+    await r.answerBakes();
+    for (let i = 0; i < 800 && !r.st.isIdle(); i++) { r.tick(P, P); if (i % 50 === 0) await r.answerBakes(); }
+    expect(r.st.stats().tilesResident).toBe(100);
+    await r.st.setQuality({ ...QUALITY.high, streamRadius: 2 }); // tpc change: every tile is rebuilt
+    expect(r.pool.pending('build').length).toBe(100);
+    closed.v = true;
+    r.tick(P, P);
+    const gateTiles = cc.stats().gateTiles;
+    expect(r.pool.pending('build').length).toBe(gateTiles);
+    await r.answerBuilds();
+    for (let i = 0; i < 600 && !cc.isCaptureReady(); i++) r.tick(P, P);
+    expect(cc.isCaptureReady()).toBe(true);
+    closed.v = false;
+    r.tick(P, P);
+    expect(r.pool.pending('build').length).toBe(100 - gateTiles);
+    r.st.dispose();
+  });
+
   it('players are untouched: no capture options, no gate flags, no holding', async () => {
     const r = rig(Q);
     r.tick(P, P);

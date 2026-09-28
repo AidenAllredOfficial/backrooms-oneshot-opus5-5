@@ -403,7 +403,10 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         if (t.buildJob) {
           t.buildJob.cancel();
           t.buildJob = null;
-          if (!t.gpu && !t.staging && !t.mesh) t.state = 'queued';
+          // a resident tile's build is a rebuild (restartAllJobs: a quality change, whose gate closes right after):
+          // it must be requested again, or the tile keeps the old preset's atlas for good
+          if (t.gpu) t.needBuild = true;
+          else if (!t.staging && !t.mesh) t.state = 'queued';
         }
         if (t.bakeJob) { t.bakeJob.cancel(); t.bakeJob = null; t.needBake = true; }
       }
