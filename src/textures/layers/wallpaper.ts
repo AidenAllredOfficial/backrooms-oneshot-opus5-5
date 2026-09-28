@@ -1,7 +1,7 @@
 // src/textures/layers/wallpaper.ts — wall coverings: WALLPAPER_L0, WALLPAPER_MANILA, DRYWALL, TRIM_PAINT (WP8).
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 /** Level 0 wallpaper: mustard vinyl-coated paper in two 0.6 m rolls (+-2 % shade offset). Print: vertical stripe
  * system on a 0.15 m pitch (a slightly darker ink band carrying a column of stacked up-pointing chevrons, flanked by
@@ -168,9 +168,22 @@ void gen(vec2 uv, inout Surf s) {
 // ~0.07-0.08 (manila and trim stay near 0.015: the linen is finer than a texel, and semi-gloss enamel is smooth). They
 // act before the mips (Toksvig and LEAN see the same slopes). Props that need a plain matte surface do not borrow these
 // layers (kraft boxes on DRYWALL read as stucco).
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const WALL_RECIPES: RecipeTable = {
-  [Mat.WALLPAPER_L0]: { glsl: WALLPAPER_L0, normalStrength: 6.0, heightScale: 0.0008 },
-  [Mat.WALLPAPER_MANILA]: { glsl: WALLPAPER_MANILA, normalStrength: 6.0, heightScale: 0.0006 },
-  [Mat.DRYWALL]: { glsl: DRYWALL, normalStrength: 10.0, heightScale: 0.0005 },
-  [Mat.TRIM_PAINT]: { glsl: TRIM_PAINT, normalStrength: 4.0, heightScale: 0.0003 },
+  [Mat.WALLPAPER_L0]: {
+    glsl: WALLPAPER_L0, normalStrength: 6.0, heightScale: 0.0008, trim: [1.016, 1.027, 1.052],
+    phys: phys(0.35, { det: 2, detS: 1 }),
+  },
+  [Mat.WALLPAPER_MANILA]: {
+    glsl: WALLPAPER_MANILA, normalStrength: 6.0, heightScale: 0.0006, trim: [1.012, 1.015, 1.02],
+    phys: phys(0.35, { det: 2, detS: 0.8 }),
+  },
+  [Mat.DRYWALL]: {
+    glsl: DRYWALL, normalStrength: 10.0, heightScale: 0.0005, trim: [1.007, 1.005, 1.005],
+    phys: phys(0.5, { det: 3, detS: 1 }),
+  },
+  [Mat.TRIM_PAINT]: {
+    glsl: TRIM_PAINT, normalStrength: 4.0, heightScale: 0.0003, trim: [1.007, 1.01, 1.005],
+    phys: phys(0.1, { det: 3, detS: 0.5 }),
+  },
 };

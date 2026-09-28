@@ -1,7 +1,7 @@
-// src/textures/layers/metal.ts — METAL_PAINTED, METAL_RUST, METAL_GRATE, METAL_DECK (WP8).
+// src/textures/layers/metal.ts — METAL_PAINTED, METAL_RUST, METAL_GRATE, METAL_DECK, METAL_BARE (WP8).
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 /** Painted steel (frame 1.2 x 1.0 m): orange peel, chips through to red-oxide primer and bare steel, fine
  * horizontal scratches. Paint is dielectric; only exposed steel is metallic. */
@@ -109,9 +109,30 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+/** METAL_BARE (reserved, texture realism v2; not placed in the world yet): placeholder flat metal at the table
+ * values. */
+const METAL_BARE = /* glsl */ `
+void gen(vec2 uv, inout Surf s) {
+}
+`;
+
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const METAL_RECIPES: RecipeTable = {
-  [Mat.METAL_PAINTED]: { glsl: METAL_PAINTED, normalStrength: 1.0, heightScale: 0.0008 },
-  [Mat.METAL_RUST]: { glsl: METAL_RUST, normalStrength: 1.0, heightScale: 0.0015 },
-  [Mat.METAL_GRATE]: { glsl: METAL_GRATE, normalStrength: 0.35, heightScale: 0.02 },
-  [Mat.METAL_DECK]: { glsl: METAL_DECK, normalStrength: 1.0, heightScale: 0.038 },
+  [Mat.METAL_PAINTED]: {
+    glsl: METAL_PAINTED, normalStrength: 1.0, heightScale: 0.0008, trim: [1.012, 1.017, 1.016],
+    phys: phys(0.05, { det: 3, detS: 0.6 }),
+  },
+  [Mat.METAL_RUST]: {
+    glsl: METAL_RUST, normalStrength: 1.0, heightScale: 0.0015, trim: [1.116, 1.099, 0.991],
+    phys: phys(0.4, { det: 4, detS: 0.6 }),
+  },
+  [Mat.METAL_GRATE]: {
+    glsl: METAL_GRATE, normalStrength: 0.35, heightScale: 0.02, trim: [1.259, 1.246, 1.261],
+    phys: phys(0),
+  },
+  [Mat.METAL_DECK]: {
+    glsl: METAL_DECK, normalStrength: 1.0, heightScale: 0.038, trim: [1.018, 1.022, 1.024],
+    phys: phys(0.02, { pomTop: 1, tok: 0.7, det: 8, detS: 0.6 }),
+  },
+  [Mat.METAL_BARE]: { glsl: METAL_BARE, normalStrength: 1.0, heightScale: 0.0002, phys: phys(0) },
 };

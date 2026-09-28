@@ -1,4 +1,4 @@
-// src/textures/TextureBaker.ts — GPU generation of the 28-layer PBR texture arrays + grime/water/cookie (WP8).
+// src/textures/TextureBaker.ts — GPU generation of the MAT_COUNT-layer PBR texture arrays + grime/water/cookie (WP8).
 //
 // Procedure (DESIGN WP8):
 //  - three single-attachment WebGLArrayRenderTargets (albedo SRGB8_ALPHA8, normal RGBA8, ormh RGBA8), mipmapped

@@ -1,7 +1,7 @@
 // src/textures/layers/ceiling.ts — CEILING_TILE, PANEL_LENS, PLENUM (WP8).
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 /** Drop ceiling: 2 x 2 mineral-fibre tiles of 0.6 m in a raised 24 mm off-white T-bar grid. Fissures are
  * thresholded warped ridged noise ("worm holes"), plus pinholes and a sanded stipple; per-tile brightness +-3 %.
@@ -79,8 +79,18 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const CEILING_RECIPES: RecipeTable = {
-  [Mat.CEILING_TILE]: { glsl: CEILING_TILE, normalStrength: 1.0, heightScale: 0.008 },
-  [Mat.PANEL_LENS]: { glsl: PANEL_LENS, normalStrength: 3.0, heightScale: 0.002 },
-  [Mat.PLENUM]: { glsl: PLENUM, normalStrength: 1.0, heightScale: 0.01 },
+  [Mat.CEILING_TILE]: {
+    glsl: CEILING_TILE, normalStrength: 1.0, heightScale: 0.008, trim: [1.012, 1.012, 1.006],
+    phys: phys(0.9, { tok: 0.8, det: 5, detS: 0.8 }),
+  },
+  [Mat.PANEL_LENS]: {
+    glsl: PANEL_LENS, normalStrength: 3.0, heightScale: 0.002, trim: [0.978, 0.978, 0.983],
+    phys: phys(0), aux: 'emissive',
+  },
+  [Mat.PLENUM]: {
+    glsl: PLENUM, normalStrength: 1.0, heightScale: 0.01, trim: [0.827, 0.838, 0.864],
+    phys: phys(0.8, { det: 4, detS: 1 }),
+  },
 };

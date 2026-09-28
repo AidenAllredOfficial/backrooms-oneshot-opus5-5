@@ -6,10 +6,11 @@
 
 import * as THREE from 'three';
 import { MAT_COUNT, Mat } from '../core/ids.ts';
-import { LAYER_DEFS, layerRepeatY } from '../core/materials.ts';
+import { LAYER_DEFS } from '../core/materials.ts';
 import { COOKIE_FRAGMENT } from './cookie.ts';
 import { buildRecipeFragment, FULLSCREEN_VERTEX, NORMAL_FRAGMENT, OUT_ALBEDO, OUT_HEIGHT, OUT_ORMH } from './glsl/common.ts';
 import { GRIME_FRAGMENT } from './grime.ts';
+import { AUX_KIND_ID } from './layers/types.ts';
 import { LAYER_RECIPES_FULL } from './registry.ts';
 import { drawSignageAtlas } from './signage.ts';
 import { WATER_NORMALS_FRAGMENT } from './waterNormals.ts';
@@ -70,7 +71,7 @@ export interface Generator {
   readonly grime: THREE.RawShaderMaterial;
   readonly water: THREE.RawShaderMaterial;
   readonly cookie: THREE.RawShaderMaterial;
-  /** Compile every program (29 layer programs + normal + grime/water/cookie) in parallel; returns elapsed ms. */
+  /** Compile every program (MAT_COUNT layer programs + normal + grime/water/cookie) in parallel; returns elapsed ms. */
   compile(): Promise<number>;
   /** Draw pass `out` of layer L into `target` (array layer `layer`); `origin` offsets the texel coordinates. */
   pass(L: number, out: number, target: THREE.WebGLRenderTarget | null, layer?: number, originX?: number, originY?: number): void;
@@ -140,7 +141,7 @@ export function createGenerator(renderer: THREE.WebGLRenderer, size: number): Ge
   const recipes = LAYER_RECIPES_FULL.map((r) => {
     const d = LAYER_DEFS[r.layer];
     const frag = buildRecipeFragment({
-      layer: r.layer, frame: [d.repeat, layerRepeatY(d)], albedo: d.albedoMean, rough: d.roughness, metal: d.metal, trim: r.trim,
+      layer: r.layer, frame: r.frame, albedo: d.albedoMean, rough: d.roughness, metal: d.metal, trim: r.trim, aux: AUX_KIND_ID[r.aux],
     }, r.glsl);
     const uniforms: Record<string, THREE.IUniform> = { uOut, uRes, uOrigin, uScratch, uHPackIn, uHPackOut, uHeightM: { value: r.heightScale } };
     if (r.layer === Mat.SIGNAGE) {
@@ -192,11 +193,10 @@ export function createGenerator(renderer: THREE.WebGLRenderer, size: number): Ge
       blit.draw(recipes[L], target, layer);
     },
     normalPass(L, target, layer = 0) {
-      const d = LAYER_DEFS[L];
       const r = LAYER_RECIPES_FULL[L];
       uRes.value = size;
       uOrigin.value.set(0, 0);
-      (normal.uniforms.uTexelM.value as THREE.Vector2).set(d.repeat / size, layerRepeatY(d) / size);
+      (normal.uniforms.uTexelM.value as THREE.Vector2).set(r.frame[0] / size, r.frame[1] / size); // the generator frame
       normal.uniforms.uScale.value = r.heightScale * r.normalStrength;
       blit.draw(normal, target, layer);
     },

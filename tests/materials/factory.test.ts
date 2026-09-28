@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { ShaderLib } from 'three';
+import { MAT_COUNT } from '../../src/core/ids.ts';
 import { bakeQualityOf, QUALITY, QUALITY_NAMES } from '../../src/core/quality.ts';
 import type { QualityConfig } from '../../src/core/quality.ts';
 import type { MaterialGlobals, MaterialSystem, TextureSet, TileMaterials } from '../../src/core/runtime.ts';
@@ -171,7 +172,7 @@ describe('WP9 material factory', () => {
     expect(a.uBrGrime.value).toBe(tex.grime);
     expect(a.uBrAlbedo).toBe(b.uBrAlbedo);
     expect(a.uBrLayerA).toBe(b.uBrLayerA);
-    expect((a.uBrLayerA.value as Float32Array).length).toBe(28 * 4);
+    expect((a.uBrLayerA.value as Float32Array).length).toBe(MAT_COUNT * 4);
   });
 
   it('100 tile material sets share one cache key per variant (one program per variant)', () => {
@@ -442,7 +443,7 @@ describe('A.0 contract: quality defines, program keys, globals', () => {
     const a = compile(sys.createTileMaterials(false).shell).uniforms;
     const b = compile(sys.createTileMaterials(false).props).uniforms;
     for (const n of ['uBrLayerC', 'uBrLayerD', 'uBrLayerE', 'uBrDetail']) expect(a[n], n).toBe(b[n]);
-    expect((a.uBrLayerC.value as Float32Array).length).toBe(28 * 4);
+    expect((a.uBrLayerC.value as Float32Array).length).toBe(MAT_COUNT * 4);
     expect(a.uBrDetail.value).toBeNull();
     expect(createGlobals().ssaoTex.value).not.toBe(g.ssaoTex.value); // per system, never shared module state
   });

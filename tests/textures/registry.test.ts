@@ -4,7 +4,10 @@
 import { describe, expect, it } from 'vitest';
 import { Mat, MAT_COUNT, SignKind } from '../../src/core/ids.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../src/core/materials.ts';
-import { buildRecipeFragment, buildStandaloneFragment, COMMON_GLSL, HEIGHT_PACK_GLSL, NORMAL_FRAGMENT, RECIPE_MAIN } from '../../src/textures/glsl/common.ts';
+import {
+  AUX_DEFINES, buildRecipeFragment, buildStandaloneFragment, COMMON_GLSL, HEIGHT_PACK_GLSL, NORMAL_FRAGMENT, RECIPE_MAIN,
+} from '../../src/textures/glsl/common.ts';
+import { AUX_KIND_ID } from '../../src/textures/layers/types.ts';
 import { NOISE_GLSL } from '../../src/textures/glsl/noise.ts';
 import { LAYER_RECIPES, LAYER_RECIPES_FULL } from '../../src/textures/registry.ts';
 import { SIGN_ASPECT, signSlotRect, STENCIL_SLOTS } from '../../src/textures/signage.ts';
@@ -111,6 +114,53 @@ describe('LAYER_RECIPES', () => {
   });
 });
 
+describe('texture realism v2 recipe rows', () => {
+  it('resolves the optional fields: trim 1, aux none, no aux2, frame = repeat x repeatY by default', () => {
+    for (const r of LAYER_RECIPES_FULL) {
+      const d = LAYER_DEFS[r.layer];
+      expect(r.frame.length, d.name).toBe(2);
+      expect(r.frame.every((x) => x > 0), d.name).toBe(true);
+      expect(Object.keys(AUX_KIND_ID)).toContain(r.aux);
+      expect(typeof r.aux2).toBe('boolean');
+      expect(r.phys, d.name).toBeDefined();
+    }
+    const d = LAYER_DEFS[Mat.CONCRETE_FLOOR];
+    expect(LAYER_RECIPES_FULL[Mat.CONCRETE_FLOOR].frame).toEqual([d.repeat, layerRepeatY(d)]);
+  });
+
+  it('reserves CMU_RAW (28) and METAL_BARE (29) with placeholder recipes', () => {
+    expect([Mat.CMU_RAW, Mat.METAL_BARE, MAT_COUNT]).toEqual([28, 29, 30]);
+    expect(LAYER_DEFS[Mat.CMU_RAW].name).toBe('CMU_RAW');
+    expect(LAYER_DEFS[Mat.METAL_BARE].name).toBe('METAL_BARE');
+    expect(LAYER_DEFS[Mat.METAL_BARE].metal).toBe(1);
+    expect(LAYER_RECIPES_FULL[Mat.CMU_RAW].heightScale).toBe(LAYER_RECIPES_FULL[Mat.CMU_PAINTED].heightScale);
+  });
+
+  it('the aux channels a recipe writes match its aux kind', () => {
+    for (const r of LAYER_RECIPES_FULL) {
+      const g = stripComments(r.glsl), n = LAYER_DEFS[r.layer].name;
+      if (/\bs\.emissive\s*[+*-]?=/.test(g)) expect(r.aux, n).toBe('emissive');
+      if (/\bs\.lean\s*[+*-]?=/.test(g)) expect(r.aux, n).toBe('lean');
+      if (/\bs\.aux\s*[+*-]?=/.test(g)) expect(['detailMask', 'wear', 'mask'], n).toContain(r.aux);
+    }
+  });
+
+  it('the program takes the generator frame and writes ormh.a by the aux kind', () => {
+    const r = LAYER_RECIPES_FULL[Mat.CMU_PAINTED];
+    const d = LAYER_DEFS[r.layer];
+    const src = buildRecipeFragment({ layer: r.layer, frame: [2.4, 2.4], albedo: d.albedoMean, rough: d.roughness, metal: d.metal, aux: AUX_KIND_ID.lean }, r.glsl);
+    expect(src).toContain('#define FRAME vec2(2.400000, 2.400000)');
+    expect(src).toContain(AUX_DEFINES);
+    expect(src).toContain(`#define AUX_KIND ${AUX_KIND_ID.lean}`);
+    expect(src).toContain('#define AUX_DEFAULT 0.0');
+    expect(buildRecipeFragment({ layer: 0, frame: [1, 1], albedo: [0.5, 0.5, 0.5], rough: 0.5, metal: 0, aux: AUX_KIND_ID.detailMask }, r.glsl))
+      .toContain('#define AUX_DEFAULT 1.0');
+    // default: 'none' writes ormh.a = 0 (today's value on every non-emissive layer)
+    expect(buildRecipeFragment({ layer: 0, frame: [1, 1], albedo: [0.5, 0.5, 0.5], rough: 0.5, metal: 0 }, r.glsl)).toContain(`#define AUX_KIND ${AUX_KIND_ID.none}`);
+    expect(RECIPE_MAIN).toMatch(/#if AUX_KIND == AUX_LEAN[^]*#elif AUX_KIND == AUX_NONE[^]*sat\(s\.metal\), 0\.0\);[^]*#elif AUX_KIND == AUX_EMISSIVE[^]*sat\(s\.emissive\)\);[^]*sat\(s\.aux\)\);/);
+  });
+});
+
 describe('GLSL assembly', () => {
   it('NOISE_GLSL provides the periodic library, all with integer periods', () => {
     for (const sig of [
@@ -127,7 +177,7 @@ describe('GLSL assembly', () => {
   it('uOut is an int uniform (one program per recipe), never a define', () => {
     for (const r of LAYER_RECIPES_FULL) {
       const d = LAYER_DEFS[r.layer];
-      const src = buildRecipeFragment({ layer: r.layer, frame: [d.repeat, layerRepeatY(d)], albedo: d.albedoMean, rough: d.roughness, metal: d.metal, trim: r.trim }, r.glsl);
+      const src = buildRecipeFragment({ layer: r.layer, frame: r.frame, albedo: d.albedoMean, rough: d.roughness, metal: d.metal, trim: r.trim }, r.glsl);
       expect(src).toMatch(/uniform int uOut;/);
       expect(src).not.toMatch(/#define\s+uOut/);
       expect(src).toContain(`#define FRAME vec2(${d.repeat.toFixed(6)}, ${layerRepeatY(d).toFixed(6)})`);

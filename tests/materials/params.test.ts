@@ -7,12 +7,17 @@ import { EMISSION, NOISE_WRAP, STOREY_PITCH, TILE_SIZE } from '../../src/core/co
 import { MAT_COUNT, Mat } from '../../src/core/ids.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../src/core/materials.ts';
 import { DYN_SLOT_OFFSETS } from '../../src/core/mesh.ts';
-import { buildLayerTable, f, glazeUnmix, glslConstants, GRIME_ID, hexLattice, slotLut, SURFACE_PHYS, TUNE } from '../../src/materials/chunks/params.ts';
-import { DETAIL_COUNT, DETAIL_RECIPES, DETAIL_RIPPLE } from '../../src/textures/detail.ts';
-import { LAYER_RECIPES } from '../../src/textures/registry.ts';
+import {
+  buildLayerTable, f, glazeUnmix, glslConstants, glslLayerArrays, GRIME_ID, hexLattice, slotLut, SURFACE_PHYS, TUNE,
+} from '../../src/materials/chunks/params.ts';
+import { DETAIL_COUNT, DETAIL_RECIPES, DETAIL_REPEAT, DETAIL_RIPPLE } from '../../src/textures/detail.ts';
+import { AUX_KIND_ID } from '../../src/textures/layers/types.ts';
+import { LAYER_RECIPES, LAYER_RECIPES_FULL } from '../../src/textures/registry.ts';
+import { readFileSync } from 'node:fs';
 import { ShaderLib } from 'three';
 import { buildSurfaceFragment } from '../../src/materials/SurfaceMaterial.ts';
 import { waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
+import { FAMILIES, familyHook, type HookPoint } from '../../src/materials/chunks/family/index.ts';
 
 const divides = (a: number, b: number): boolean => Math.abs(b / a - Math.round(b / a)) < 1e-9;
 
@@ -78,7 +83,7 @@ describe('WP9 parameters', () => {
       }
       expect(p.tok, d.name).toBeGreaterThan(0);
       expect(p.tok, d.name).toBeLessThanOrEqual(1);
-      expect(Number.isInteger(p.det) && p.det >= -1 && p.det < 11, d.name).toBe(true);
+      expect(Number.isInteger(p.det) && p.det >= -1 && p.det < DETAIL_COUNT && p.det !== DETAIL_RIPPLE, d.name).toBe(true);
       if (alphaTested.has(d.id) || d.id === Mat.PANEL_LENS) expect(p.det, d.name).toBe(-1);
       expect(p.detS, d.name).toBe(p.det < 0 ? 0 : p.detS);
       expect(p.detS).toBeGreaterThanOrEqual(0);
@@ -260,10 +265,128 @@ describe('WP9 parameters', () => {
     for (const src of [buildSurfaceFragment(ShaderLib.physical.fragmentShader), waterFragmentGlsl()]) {
       const used = new Set(src.match(/\bBR_[A-Z0-9_]+\b/g) ?? []);
       const defined = new Set([...(src.match(/#define (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.slice(8)),
-        ...(src.match(/const (?:int|float|vec[234]|mat2) (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.replace(/const (?:int|float|vec[234]|mat2) /, ''))]);
+        ...(src.match(/const (?:int|float|bool|vec[234]|mat2) (BR_[A-Z0-9_]+)/g) ?? []).map((x) => x.replace(/const (?:int|float|bool|vec[234]|mat2) /, ''))]);
       const missing = [...used].filter((u) => !defined.has(u) && !switches.has(u));
       expect(missing).toEqual([]);
       expect(src).toContain('const float BR_LV_Y[6]');
     }
+  });
+});
+
+describe('texture realism v2 per-layer constants (recipe rows -> BR_L_* const arrays)', () => {
+  const g = glslLayerArrays();
+  const arr = (name: string): string[] => {
+    const m = new RegExp(`const \\w+ ${name}\\[${MAT_COUNT}\\] = \\w+\\[${MAT_COUNT}\\]\\((.*)\\);`).exec(g);
+    expect(m, name).not.toBeNull();
+    return m![1].split(/,\s*(?![^()]*\))/); // top-level commas only
+  };
+
+  it('SURFACE_PHYS is the recipe rows (layers/*.ts RecipeBody.phys)', () => {
+    for (const r of LAYER_RECIPES_FULL) expect(SURFACE_PHYS[r.layer]).toBe(r.phys);
+  });
+
+  it('emits one entry per layer, in layer order, from the rows; costs no uniforms', () => {
+    const rows = LAYER_RECIPES_FULL.map((r) => r.phys);
+    expect(arr('BR_L_SIGMA')).toEqual(rows.map((p) => f(p.sigma)));
+    expect(arr('BR_L_PILE')).toEqual(rows.map((p) => `vec2(${p.pile.map(f).join(', ')})`));
+    expect(arr('BR_L_DETREP')).toEqual(rows.map((p) => f(p.detRep)));
+    expect(arr('BR_L_DETTINT')).toEqual(rows.map((p) => `vec3(${p.detTint.map(f).join(', ')})`));
+    expect(arr('BR_L_DETSO')).toEqual(rows.map((p) => f(p.detSO)));
+    expect(arr('BR_L_DIRT')).toEqual(rows.map((p) => `vec4(${p.dirt.map(f).join(', ')})`));
+    expect(arr('BR_L_WEAR')).toEqual(rows.map((p) => `vec4(${p.wear.map(f).join(', ')})`));
+    expect(arr('BR_L_RELIEF')).toEqual(rows.map((p) => f(p.reliefM)));
+    expect(arr('BR_AUX_KIND')).toEqual(LAYER_RECIPES_FULL.map((r) => String(AUX_KIND_ID[r.aux])));
+    expect(arr('BR_L_AUX2')).toEqual(LAYER_RECIPES_FULL.map((r) => String(r.aux2)));
+    expect(g).not.toMatch(/uniform/);
+    expect(glslConstants()).toContain(g);
+    for (const [k, v] of Object.entries(GRIME_ID)) expect(g).toContain(`#define BR_G_${k.toUpperCase()} ${v}`);
+    for (const [k, v] of Object.entries(AUX_KIND_ID)) expect(g).toContain(`#define BR_AUX_${k.toUpperCase()} ${v}`);
+  });
+
+  it('v2 parameters stay in range; the detail repeat still divides the world periods', () => {
+    for (const r of LAYER_RECIPES_FULL) {
+      const p = r.phys, n = LAYER_DEFS[r.layer].name;
+      expect(p.sigma >= 0 && p.sigma <= 1, `${n} sigma`).toBe(true);
+      expect(p.pile.every((x) => x >= 0), `${n} pile`).toBe(true);
+      expect(p.detRep, n).toBeGreaterThan(0);
+      for (const span of [TILE_SIZE, STOREY_PITCH, NOISE_WRAP]) {
+        const k = span / (DETAIL_REPEAT * p.detRep);
+        expect(Math.abs(k - Math.round(k)) < 1e-6, `${n} detRep ${p.detRep} vs ${span}`).toBe(true);
+      }
+      expect(p.detTint.every((x) => x >= 0 && x <= 1), `${n} detTint`).toBe(true);
+      expect(p.detSO >= 0 && p.detSO <= 1, `${n} detSO`).toBe(true);
+      for (const c of [p.dirt, p.wear]) expect(c.every((x) => x >= 0 && x <= 1), `${n} dirt / wear`).toBe(true);
+      expect(p.reliefM, n).toBeGreaterThan(0);
+    }
+  });
+
+  it('channel conventions: emissive only on lenses and signs, aux2 never on alpha-tested layers, lean layers are not metal', () => {
+    const alphaTested = new Set<number>([Mat.METAL_GRATE, Mat.SIGNAGE, Mat.DECAL_ATLAS, Mat.FLOOR_PAINT]);
+    for (const r of LAYER_RECIPES_FULL) {
+      const n = LAYER_DEFS[r.layer].name;
+      expect(r.aux === 'emissive', n).toBe(r.layer === Mat.PANEL_LENS || r.layer === Mat.SIGNAGE);
+      if (r.aux2) expect(alphaTested.has(r.layer), n).toBe(false);
+      if (r.aux === 'lean') expect(LAYER_DEFS[r.layer].metal, n).toBe(0);
+    }
+  });
+
+  it('grime profiles: paint (7) on DRYWALL and TRIM_PAINT, masonry (8) on CMU', () => {
+    expect([GRIME_ID.paint, GRIME_ID.masonry]).toEqual([7, 8]);
+    for (const m of [Mat.DRYWALL, Mat.TRIM_PAINT]) expect(LAYER_DEFS[m].grime).toBe('paint');
+    for (const m of [Mat.CMU_PAINTED, Mat.CMU_RAW]) expect(LAYER_DEFS[m].grime).toBe('masonry');
+  });
+});
+
+describe('texture realism v2 family hooks (chunks/family/*.ts)', () => {
+  const POINTS: HookPoint[] = ['pars', 'postSample', 'postDetail', 'grime', 'postWet', 'rough', 'normal', 'matPost', 'postLight', 'preFog'];
+  const frag = buildSurfaceFragment(ShaderLib.physical.fragmentShader);
+  const core = ['src/materials/chunks/surface.ts', 'src/materials/chunks/materialPost.ts', 'src/materials/chunks/haze.ts', 'src/materials/SurfaceMaterial.ts']
+    .map((p) => readFileSync(p, 'utf8')).join('\n');
+
+  it('every hook point is concatenated exactly once by the core chunks', () => {
+    for (const p of POINTS) expect(core.split(`familyHook('${p}')`).length - 1, p).toBe(1);
+    expect(FAMILIES.map(([n]) => n)).toEqual(['textile', 'walls', 'ceiling', 'concrete', 'masonry', 'tile', 'props']);
+  });
+
+  it('every grime profile but none has exactly one branch, in its owner family', () => {
+    const owner: Record<string, string> = {
+      carpet: 'textile', wallpaper: 'walls', paint: 'walls', ceilingTile: 'ceiling', concrete: 'concrete', masonry: 'masonry', tile: 'tile', metal: 'props',
+    };
+    for (const [k, id] of Object.entries(GRIME_ID)) {
+      const tag = `if ( brGrime == BR_G_${k.toUpperCase()} )`;
+      expect(frag.split(tag).length - 1, k).toBe(id === 0 ? 0 : 1);
+      if (id !== 0) expect(FAMILIES.find(([n]) => n === owner[k])![1].grime, k).toContain(tag);
+    }
+  });
+
+  it('the hooks sit at their points: grime inside the grime block, matPost between glaze and spec AA, preFog before haze', () => {
+    const at = (s: string): number => { const i = frag.indexOf(s); expect(i, s).toBeGreaterThanOrEqual(0); return i; };
+    expect(at('// ---- family textile: grime')).toBeGreaterThan(at('float wet = smoothstep( 0.22, 0.62, wetRaw );'));
+    expect(at('// ---- family props: grime')).toBeLessThan(at('float brBand = brWaterWetBand('));
+    expect(at('// ---- family textile: matPost')).toBeGreaterThan(at('// 2. glaze coverage'));
+    expect(at('// ---- family props: matPost')).toBeGreaterThan(at('// ---- family textile: matPost'));
+    expect(at('// 5. specular AA')).toBeGreaterThan(at('// ---- family props: matPost'));
+    expect(at('// ---- family textile: preFog')).toBeGreaterThan(at('if ( uDebugView != 0 ) {'));
+    expect(at('bool brDefer = false;')).toBeGreaterThan(at('// ---- family textile: preFog'));
+    expect(at('// ---- family textile: pars')).toBeLessThan(at('void main()'));
+    // the channel decode precedes the detail fetch; the detail multiplier is main-scope (postDetail rescales it)
+    expect(at('vec2 brLean = ')).toBeLessThan(at('vec4 brDt = brDetailFetch('));
+    expect(at('#define brRel ( ( brNrm.w - brMuH ) * uBrLayerC[ brL ].x )')).toBeLessThan(at('void main()'));
+    // the v2 debug views leave early (their values never stay live to the fog stage)
+    expect(at('if ( uDebugView == BR_DV_AUX ) BR_DEBUG_EXIT(')).toBeLessThan(at('vec4 brDt = brDetailFetch('));
+    expect(frag.slice(at('vec3 brDbg = vec3( 0.0 );'))).not.toMatch(/\b(brAux|brAux2|brLean|brRel)\b/);
+    expect(frag).toMatch(/float brAm = 1\.0;[^]*brAm = brDt\.b \/ brDmu\.b;\s*brA \*= mix\( 1\.0, brAm, brDetL\.y \);/);
+  });
+
+  it('hook strings are balanced GLSL', () => {
+    const stripComments = (s: string): string => s.replace(/\/\/.*$/gm, '');
+    for (const [name, h] of FAMILIES) {
+      for (const p of POINTS) {
+        let depth = 0;
+        for (const ch of stripComments(h[p])) { if (ch === '{') depth++; else if (ch === '}') depth--; expect(depth >= 0, `${name}.${p}`).toBe(true); }
+        expect(depth, `${name}.${p}`).toBe(0);
+      }
+    }
+    expect(familyHook('grime')).toContain('// ---- family walls: grime');
   });
 });

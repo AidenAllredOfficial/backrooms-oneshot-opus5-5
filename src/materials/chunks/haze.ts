@@ -1,37 +1,22 @@
 // src/materials/chunks/haze.ts — the fog_fragment replacement (it runs after colorspace_fragment in r186; every
-// target we render into is linear): debug views, submerged optics (the water body's absorption and in-scatter
-// live on the submerged surfaces, not on the transparent water mesh), per-fragment haze + edge fog + airlight
-// (HAZE_FUNCS_GLSL in chunks/common.ts), decal premultiply and the HDR clamp; then, under BR_SSR, the specular
-// G-buffer write (MRT attachments 1 and 2, chunks/gbuffer.ts).
+// target we render into is linear): debug views, the family preFog hooks (chunks/family/index.ts: the Level 0 carpet
+// pile trap), submerged optics (the water body's absorption and in-scatter live on the submerged surfaces, not on the
+// transparent water mesh), per-fragment haze + edge fog + airlight (HAZE_FUNCS_GLSL in chunks/common.ts), decal
+// premultiply and the HDR clamp; then, under BR_SSR, the specular G-buffer write (MRT attachments 1 and 2,
+// chunks/gbuffer.ts).
 
 import { FRAG_DEBUG_GLSL } from './debug.ts';
-
-/** Level 0 carpet pile trap (see below): radiance scale and the saturation exponent on the albedo's chroma. */
-export const CARPET_L0_PILE_TRAP = 0.55;
-export const CARPET_L0_PILE_SAT = 0.3;
+import { familyHook } from './family/index.ts';
 
 /** Replaces `#include <fog_fragment>` in the surface variants. */
 export const FRAG_FOG_GLSL = /* glsl */ `
-#define BR_PILE_TRAP ${CARPET_L0_PILE_TRAP.toFixed(4)}
-#define BR_PILE_SAT ${CARPET_L0_PILE_SAT.toFixed(4)}
 // ==== WP9 debug views / submerged optics / haze / HDR clamp
 if ( uDebugView != 0 ) {
 ${FRAG_DEBUG_GLSL}
 	gl_FragColor.rgb = brDbg * BR_DEBUG_NITS;
 } else {
-#ifndef BR_DECAL
-	if ( brL == BR_M_CARPET_L0 ) {
-		// Level 0 pile trap: the layer table albedo is the fibre colour (the bake's bounce uses it), but a damp cut
-		// pile under overhead light traps part of it between the tufts, and what escapes has scattered through more
-		// dyed fibre: darker and more saturated than a flat sample. Without this the floor, which receives ~2x the
-		// wall irradiance, rendered as bright as the wallpaper (reference photo: clearly darker, mustard-brown).
-		// Applied to the surface radiance only, before the submerged optics (FLOODED_HALL's carpet): the water's
-		// in-scatter is not the carpet's to trap.
-		vec3 brPa = max( diffuseColor.rgb, vec3( 1e-4 ) );
-		gl_FragColor.rgb *= BR_PILE_TRAP * pow( brPa / max( max( brPa.r, brPa.g ), brPa.b ), vec3( BR_PILE_SAT ) );
-	}
-#endif
-	bool brDefer = false;
+	// family preFog hooks: the surface radiance before the submerged optics (the water's in-scatter is not a surface's)
+${familyHook('preFog')}	bool brDefer = false;
 	if ( brSubInfo.x > 0.0 ) {
 		// submerged (package E, chunks/water.ts brSubInfo: shells, and props through the wall mask). The baked light
 		// reached the surface through the water above it (downwelling, x BR_WM_DOWN; not the surface's own emission).
