@@ -132,22 +132,28 @@ void br_add(inout Surf a, Surf b) {
   a.ao += b.ao; a.emissive += b.emissive;
 }
 float br_h(vec2 p) { vec4 t = texelFetch(uScratch, ivec2(mod(p, vec2(uRes))), 0); return uHPackIn == 1 ? br_unpackH(t) : t.r; }
-// cavity AO from the scratch height: mean positive slope toward 16 neighbours at 2 radii
+// cavity AO from the scratch height: the cosine-weighted visibility of the horizon (horizon-based AO). Along 8
+// azimuths the horizon is the steepest rise tan(h) = max(dh * heightScale / distance) over 7 radii from 1 to 16
+// texels (a 1-2 texel fissure, pore or pile gap and a joint's far wall are both found); an azimuth whose horizon
+// stands h above the plane hides sin^2(h) of its cosine-weighted share, so V = 1 - mean(sin^2 h), with
+// sin^2(atan t) = t^2 / (1 + t^2). (It replaced a mean of s / (1 + s) over 16 slopes at radii 2 and 7, which diluted
+// narrow grooves: high-pass correlation 0.86-0.95 with a ray-marched reference.)
 float br_cavity(vec2 px) {
   vec2 texM = FRAME / uRes;
   float h0 = br_h(px);
   float occ = 0.0;
-  for (int r = 0; r < 2; r++) {
-    float rad = r == 0 ? 2.0 : 7.0;
-    for (int k = 0; k < 8; k++) {
-      float a = float(k) * 0.785398 + float(r) * 0.3927;
-      vec2 o = floor(vec2(cos(a), sin(a)) * rad + 0.5);
-      float dist = length(o * texM);
-      float slope = max(0.0, (br_h(px + o) - h0) * uHeightM) / max(dist, 1e-6);
-      occ += slope / (1.0 + slope);
+  for (int k = 0; k < 8; k++) {
+    float a = float(k) * 0.785398;
+    vec2 dir = vec2(cos(a), sin(a));
+    float t = 0.0;
+    for (int r = 0; r < 7; r++) {
+      float rad = r == 0 ? 1.0 : r == 1 ? 2.0 : r == 2 ? 3.0 : r == 3 ? 5.0 : r == 4 ? 8.0 : r == 5 ? 12.0 : 16.0;
+      vec2 o = floor(dir * rad + 0.5);
+      t = max(t, (br_h(px + o) - h0) * uHeightM / max(length(o * texM), 1e-6));
     }
+    occ += t * t / (1.0 + t * t);
   }
-  return 1.0 - 0.75 * occ / 16.0;
+  return 1.0 - occ / 8.0;
 }
 `;
 

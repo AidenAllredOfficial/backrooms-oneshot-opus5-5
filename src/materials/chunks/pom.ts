@@ -1,8 +1,13 @@
 // src/materials/chunks/pom.ts — package B: parallax occlusion mapping of the shell (BR_POM = 1 steps only, 2 with
-// self-shadow) and the directional-light visibility terms (micro-shadowing, POM self-shadow).
+// self-shadow) and the directional-light visibility terms (the cavity's visibility cone, POM self-shadow).
 // The view march itself sits in chunks/surface.ts FRAG_MAP_GLSL (it moves brUv before the base sampling); this file
 // holds its height lookup and FRAG_DIRVIS_GLSL, which chunks/lighting.ts inlines inside `if ( brW > 0.0 )`, after the
 // contact shadow and before RE_Direct: it may only multiply `float brDirVis` (brLv, brNg, brNgL in scope).
+
+import { f } from './params.ts';
+
+/** Half-width (in N.L) of the soft edge of the cavity's visibility cone (FRAG_DIRVIS_GLSL). */
+export const CAV_CONE_SOFT = 0.15;
 
 /** Appended to the fragment common block. */
 export const POM_PARS_GLSL = /* glsl */ `
@@ -42,15 +47,19 @@ float brPomH( vec2 uv, vec2 cells, uint salt, float lf, float lod, inout vec2 ce
 /** Inline block in FRAG_LIGHTS_GLSL: multiplies brDirVis (the baked directional light's visibility). */
 export const FRAG_DIRVIS_GLSL = /* glsl */ `
 #ifndef BR_LITE
-	// micro-shadowing (Chan 2018): the texture cavities (ormh.r: grout, joints, pile gaps, fissures) shadow the baked
-	// directional light, the more the more it grazes the mapped normal
-	brDirVis *= clamp( abs( dot( normal, brLv ) ) + 2.0 * brOrmh.r * brOrmh.r - 1.0, 0.0, 1.0 );
+	// the cavity's visibility cone (ambient aperture): the texture cavity V (ormh.r: grout, joints, pile gaps,
+	// fissures) is the cosine-weighted visibility of a cone around the normal, V = sin^2(alpha), so the baked
+	// directional light is seen while it stands inside the cone, N.L > cos(alpha) = sqrt(1 - V), with a soft edge.
+	// (Chan's clamp(|N.L| + 2V^2 - 1) never fired: every layer's cavity p5 is >= 0.9, where it is 1 for N.L >= 0.38.)
+	float brCosA = sqrt( 1.0 - clamp( brOrmh.r, 0.0, 1.0 ) );
+	brDirVis *= smoothstep( brCosA - ${f(CAV_CONE_SOFT)}, brCosA + ${f(CAV_CONE_SOFT)}, dot( normal, brLv ) );
 #endif
 #if defined( BR_POM ) && BR_POM >= 2
 	if ( brPomOn ) {
 		// POM self-shadow: from the parallax hit toward the light up to the relief top (the same faded depth as the
 		// view march), in steps of the view march's pixel length, skipped when the shadow would be under half a pixel
-		// long (light near the normal: floors under their lamps); a less directional bake (small w) is shadowed less
+		// long (light near the normal: floors under their lamps). brDirVis scales only the directional share w E, so
+		// the occlusion applies in full (x w again left a fully occluded texel at w = 0.28 with 72 % of its light)
 		float brPl = dot( brPomN, brLv );
 		float brLen = brPomDepth * brPomK * ( 1.0 - brPomHitN ) * sqrt( max( 1.0 - brPl * brPl, 0.0 ) ) / ( max( brPl, 0.02 ) * brPomPx );
 		if ( brPl > 0.02 && brLen > BR_POM_MIN_PX ) {
@@ -69,7 +78,7 @@ export const FRAG_DIRVIS_GLSL = /* glsl */ `
 				float brHs = brPomH( brUv + brDuL * brT, brLA.xy, brPomSalt, brLayerF, brPomLod, brSc, brSm, brSb ) / brPTop;
 				brOcc = max( brOcc, ( brHs - brRay ) * BR_POM_SH_K * ( 1.0 - 0.5 * brT ) );
 			}
-			brDirVis *= 1.0 - clamp( brOcc, 0.0, 1.0 ) * brPomK * brW;
+			brDirVis *= 1.0 - clamp( brOcc, 0.0, 1.0 ) * brPomK;
 		}
 	}
 #endif
