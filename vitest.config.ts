@@ -91,10 +91,14 @@ export default defineConfig(async () => {
   const plan = await sizeForks();
   // V8 bytecode cache for three.js and src across the fresh fork processes (forks inherit the variable)
   process.env.NODE_COMPILE_CACHE ??= path.join(ROOT, 'node_modules', '.cache', 'node-compile');
+  // Invariant sweeps (tests/scale.ts) run at full scale unless the run skips the 'sweep' tag: a plain
+  // `npx vitest run` is the whole gate, as `npm test` is, not a mix of full sweeps and sliced invariants.
+  const quick = isQuickTier(process.argv);
+  if (!quick) process.env.BACKROOMS_TEST_FULL ??= '1';
   return {
     // Quick-tier runs keep their own results cache (vitest orders files longest-first from it): they get the order of
     // quick-tier durations, and never reorder the full run with their short ones.
-    ...(isQuickTier(process.argv) ? { cacheDir: path.join(ROOT, 'node_modules', '.vite', 'quick') } : {}),
+    ...(quick ? { cacheDir: path.join(ROOT, 'node_modules', '.vite', 'quick') } : {}),
     test: {
       environment: 'node',
       pool: 'forks',

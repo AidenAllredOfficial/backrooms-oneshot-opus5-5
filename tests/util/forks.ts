@@ -135,6 +135,9 @@ export async function planForks(o: PlanInput): Promise<Plan> {
       }
       if (threw < cap) {
         o.log(`vitest: the memory budget does not admit even 1 fork (${weightOf(1, w)} MB) right now; waiting for other jobs (node tools/lib/budget.mjs --status)...`);
+        // while it waits, hold only the fork it will get, not the whole reservation
+        cap = 1;
+        reg?.set(1);
         try {
           const lease = await tryAcquire(1, true);
           if (lease) return done(1, 'ledger', lease, true);

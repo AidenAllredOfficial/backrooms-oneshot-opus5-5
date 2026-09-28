@@ -12,7 +12,7 @@ full-bake gates. It runs a few invariant sweeps on a subset instead, and it is w
 | `npm run test:quick` | everything except `sweep` tests | 26-31 s at 4 forks, 37-46 s at 2 | 1.8-2.0 GB at 4 forks |
 | `npm run test:related -- <src files>` | quick-tier tests whose import graph reaches the files | see below | |
 | `npm run test:changed` | quick-tier tests reached by uncommitted changes | | |
-| `npx vitest run tests/post/ssr.test.ts` | one file, all of its tests; invariant sweeps at quick scale unless `BACKROOMS_TEST_FULL=1` | 0.6 s plus the tests | |
+| `npx vitest run tests/post/ssr.test.ts` | one file, all of its tests at full scale | 0.6 s plus the tests | |
 
 `test:related` after a typical edit, quick tier, 4 forks:
 
@@ -71,7 +71,9 @@ The first line of every run says what it got, for example
   - no `vi.mock`, which would need the module loader;
   - a guard around `import.meta.env`, which is undefined under Node. Write
     `import.meta.env ? import.meta.env.DEV : true`, as `src/materials/warmup.ts` does. Vite still folds it away in
-    production builds.
+    production builds. Code that must know it runs under vitest reads the env vitest would have injected,
+    `globalThis.__vitest_worker__?.metaEnv` (`MODE` is `'test'`), as `src/world/chunkgen.ts` does: that is what
+    turns on `validateLayout` for every generated chunk in the suite. `tests/world/chunkgen.test.ts` checks it.
 - **Projects.** The `heavy` project runs every file in a fresh process: tests/world, bake, integration, audio, mesh
   and workers, plus the slow files elsewhere (lighting/flicker, props/props, props/tileProps, player/traversal,
   materials/depthPrepass). The `unit` project runs everything else in shared worker processes (`isolate: false`,
@@ -94,7 +96,8 @@ The first line of every run says what it got, for example
   statistical threshold. A test that reads state built by a tagged test needs the tag too, like `logs bench numbers`
   in `tests/integration/pipeline-*.test.ts`.
 - **Invariant sweeps may keep a slice** in the quick tier. `sweepSize(full, quick)` from `tests/scale.ts` runs the
-  first `quick` items of the same sequence unless `BACKROOMS_TEST_FULL=1`, which `npm test` sets. Use it only for
+  first `quick` items of the same sequence in runs that skip the `sweep` tag. Every other run, `npm test` and a
+  plain `npx vitest run` included, gets `BACKROOMS_TEST_FULL=1` from `vitest.config.ts`. Use it only for
   checks that hold per item, or whose aggregate is a minimum or maximum, so the slice can never fail where the full
   sweep passes. Statistical thresholds (rates, means, "appears at least once per N chunks") get the tag instead and
   never run scaled down.

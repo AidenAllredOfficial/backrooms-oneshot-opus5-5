@@ -83,6 +83,15 @@ describe('fork sizing', () => {
     expect(ledger.live).toBe(6500 + 1000 - 3100);
   });
 
+  it('while it waits for the ledger, a run holds only 1 fork of its registry reservation', async () => {
+    const sets: number[] = [];
+    const reg: ForkRegistry = { reserve: (want) => want, set: (n) => { sets.push(n); }, release: () => {}, others: () => 0 };
+    const ledger = fakeLedger(7000, 7000); // full: only the waiting request is admitted
+    const p = await planForks(base({ registry: reg, ledger }));
+    expect([p.forks, p.via, p.waited]).toEqual([1, 'ledger', true]);
+    expect(sets).toEqual([1, 1]); // shrunk to 1 before the wait, then the final count
+  });
+
   it('a ledger that throws on every call falls back to MemAvailable', async () => {
     const ledger: Ledger = { acquire: () => { throw new Error('boom'); } };
     const logs: string[] = [];
