@@ -6,7 +6,8 @@ import { createStats, logBench, PIPELINE_SHARD_TILES, runGateShard, runSmokeShar
 const SHARD = 2;
 const stats = createStats();
 
-describe('worker pipeline (Node, handleRequest)', () => {
+// in order even under --sequence.shuffle: 'logs bench numbers' reads what the gate collected
+describe('worker pipeline (Node, handleRequest)', { shuffle: false }, () => {
   it('smoke, shard c (zones 2, 5, 8, 11): one tile each at low bake quality through structuredClone(res, { transfer })', () => {
     runSmokeShard(SHARD);
   });

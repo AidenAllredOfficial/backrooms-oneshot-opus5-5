@@ -997,7 +997,8 @@ describe('WP3 CONCRETE', () => {
 
 // ---------------------------------------------------------------- GLOBAL seams (500 pairs)
 
-describe('WP3 GLOBAL seams agree across 500 chunk pairs per zone', { tags: ['sweep'] }, () => {
+// in order even under --sequence.shuffle: 'some channels run through seam arches' reads the POOLROOMS pairs' count
+describe('WP3 GLOBAL seams agree across 500 chunk pairs per zone', { tags: ['sweep'], shuffle: false }, () => {
   const pairs = (name: string, gen: ZoneGenerator, s: StoreyId, check: (A: ChunkLayout, B: ChunkLayout, axis: 'x' | 'z') => void): void => {
     it(`${name}: shared line, water, floors and straddling solids agree`, () => {
       const rng = new Rng(8100 + gen.id);

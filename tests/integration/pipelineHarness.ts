@@ -188,6 +188,7 @@ export const PIPELINE_SHARD_TILES: readonly number[] = Array.from({ length: PIPE
 /** One shard of the 50-tile gate: zones z % 3 === shard, all four tiles of one chunk each (high / medium quality
  * alternating), full bakes, plus a neighbouring-chunk tile for zones 0 and 7. */
 export function runGateShard(shard: number, stats: PipelineStats): void {
+  const before = stats.tiles;
   for (let z = shard; z < ZONE_COUNT; z += PIPELINE_SHARDS) {
     const zone = z as ZoneId;
     const init = makeInit({ forceZone: zone, quality: z % 2 === 0 ? 'high' : 'medium' });
@@ -199,7 +200,7 @@ export function runGateShard(shard: number, stats: PipelineStats): void {
     expect(run.tiles, `zone ${ZONE_NAMES[z]}`).toBeGreaterThanOrEqual(4);
     collect(stats, run);
   }
-  expect(stats.tiles).toBe(PIPELINE_SHARD_TILES[shard]);
+  expect(stats.tiles - before).toBe(PIPELINE_SHARD_TILES[shard]);
 }
 
 /** Smoke: full bake + same-state == fresh-state determinism on one zone per shard (LOBBY, storey 2 POOLROOMS with its

@@ -11,7 +11,8 @@ import {
 const SHARD = 0;
 const stats = createStats();
 
-describe('worker pipeline (Node, handleRequest)', () => {
+// in order even under --sequence.shuffle: 'logs bench numbers' reads what the gate and the scenes collected
+describe('worker pipeline (Node, handleRequest)', { shuffle: false }, () => {
   it('rejects work before init and reports errors as responses', () => {
     const st = createHandlerState();
     const r = handleRequest({ t: 'layout', job: 5, key: { s: 0, cx: 0, cz: 0 } }, st);
