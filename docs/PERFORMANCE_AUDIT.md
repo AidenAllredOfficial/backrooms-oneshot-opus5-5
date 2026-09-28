@@ -1,8 +1,158 @@
-# Performance audits, September 26, 2026
+# Performance audits, September 26-27, 2026
 
-Two passes. The second (rendering overhaul) cut the GPU cost of a frame by 2x at high and 4-5x at ultra without
+Three passes. The third (graphics-realism budget) brought the frame back toward its budget after the realism
+packages; the second (rendering overhaul) cut the GPU cost of a frame by 2x at high and 4-5x at ultra without
 changing the image, and made screenshot / QA runs 3-9x faster; the first removed rebuilds and startup
 serialisation.
+
+## Graphics-realism budget (third pass, September 27, 2026)
+
+The graphics-realism packages (frame graph and contact shadows, detail maps and POM, glare and grade, screen-space
+reflections with the specular G-buffer and the reflection probe, refracting water, froxel volumetrics) made a high
+frame 1.5-1.9x and an ultra frame 1.4-1.9x as expensive. The budget: high at 1920 × 1080 within 4 ms, ultra at
+2560 × 1440 within 11 ms, low and medium within 10 % of their cost before the packages. Low meets it; high and
+medium sit at the line (high water frames 4.0-4.05 ms, medium POOLROOMS +12 %); ultra meets it except on water
+frames, which cost 11.3-12.9 ms (see "Open" below).
+
+### The pipeline and what each pass costs
+
+A frame at high or ultra, in order (`__backrooms.gpuProfile` segment names):
+
+1. `waterSim`: the ripple simulation (fixed steps, near zero).
+2. `probe`: one face of the reflection probe re-captured and re-filtered every fourth frame.
+3. `reflection`: the planar mirror of the nearest water plane (with its own depth prepass), only while water is in
+   view (below).
+4. `RenderPass`: the depth prepass (with the flashlight shadow map), the afterDepth hooks timed separately (`ssao`,
+   `hiz`, `lightAtlas`, `volumetrics`), then shading into the three-attachment G-buffer (colour, fallback specular,
+   normal and roughness). Most of the frame.
+5. `pyramid`: the colour and depth pyramid (SSR cones, water refraction).
+6. `ssr`: the Hi-Z trace (one ray per 2 × 2 display pixels) and, at ultra, its bilateral filter.
+7. `mrtComposite`: the fallback specular or the traced reflection added to the colour; the depth copied to the
+   composer's buffer.
+8. `late`: water, sparks and dust motes over the opaque colour.
+9. `AutoExposurePass`, the effect pass (motion blur, glare, exposure, AgX, grade), `SMAA`, the lens and grain pass.
+
+Mean ms per frame over 1.5 s of normal frames. Segments include the GPU's idle gaps while the CPU submits, so they
+sum to more than the back-to-back `gpuBench` time of the whole frame (last row):
+
+| Segment | high, OFFICE | high, goto=water | ultra 1.4x, LOBBY | ultra 1.4x, goto=water |
+| --- | ---: | ---: | ---: | ---: |
+| probe | 0.35 | 0.40 | 0.53 | 0.27 |
+| reflection | 0.01 | 1.40 | 0.00 | 1.89 |
+| RenderPass (prepass, shadow map, shading) | 2.19 | 2.42 | 6.91 | 5.49 |
+| ssao | 0.13 | 0.18 | 0.53 | 0.44 |
+| hiz | 0.06 | 0.07 | 0.15 | 0.12 |
+| volumetrics | 0.17 | 0.19 | 0.34 | 0.31 |
+| pyramid | 0.05 | 0.07 | 0.15 | 0.17 |
+| ssr | 0.13 | 0.09 | 0.60 | 0.19 |
+| mrtComposite | 0.04 | 0.10 | 0.44 | 0.19 |
+| late (water, sparks, motes) | 0.03 | 0.47 | 1.02 | 1.47 |
+| effect pass | 0.28 | 0.24 | 0.76 | 0.58 |
+| SMAA | 0.15 | 0.23 | 0.46 | 0.30 |
+| lens and grain | 0.10 | 0.13 | 0.37 | 0.39 |
+| `gpuBench`, whole frame | 3.02 | 4.17 | 9.62 | 12.96 |
+
+In-page A/B (below) put the optional features at: SSR as a whole (G-buffer split, Hi-Z, trace, composite) 1.1-2.5
+ms at ultra and 0.3-0.9 ms at high, of which the trace is 0.6-1.4 / 0.2-0.6 ms; the planar mirror 2-3.5 ms at ultra
+and 0.7-1.4 ms at high on water frames; contact shadows about 1 ms at ultra; detail maps 0.4-0.9 ms at ultra; the
+probe 0.15-0.4 ms at ultra.
+
+### Master and the final state
+
+GPU ms of the whole frame (`gpuBench`, the minimum of three runs per scene, and of two passes where both were
+taken). Master is `7c78e9c`, before the realism packages; "before" is the merged packages (`66f0ffb`) before this
+pass. Ultra renders 3840 × 2160 at 1.5x and 3584 × 2016 at 1.4x on the 2560 × 1440 display.
+
+| Scene | high: master | high: before | high: final | ultra: master (1.5x) | ultra: final (1.4x) | ultra: final at 1.5x |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| LOBBY | 1.66 | 3.07 | 3.04 | 6.21 | 9.62 | |
+| OFFICE | 1.74 | 3.11 | 3.02 | 6.25 | 9.64 | |
+| POOLROOMS | 1.80 | 3.73 | 3.66 | 6.83 | 11.41 | 13.01 |
+| FLOODED_HALL | 2.48 | 4.08 | 4.01 | 9.27 | 12.25 | 13.56 |
+| DEEP_END | 1.73 | 3.64 | 3.56 | 6.84 | 11.29 | |
+| PARKING | 2.00 | 3.15 | 3.12 | 7.22 | 9.27 | |
+| WAREHOUSE | 2.22 | 3.99 | 3.56 | 7.71 | 10.59 | |
+| PIPEWORKS | 1.90 | 3.57 | 3.28 | 6.66 | 9.81 | |
+| DARK, flashlight on | 1.92 | 3.39 | 3.10 | 7.25 | 9.04 | |
+| `goto=water` | 2.67 | 4.11 | 4.05 | 10.33 | 12.85 | 14.47 |
+
+| Scene | medium: master (0.9) | medium: final (0.85) | low: master | low: final |
+| --- | ---: | ---: | ---: | ---: |
+| LOBBY | 1.27 | 1.33 | 0.51 | 0.56 |
+| POOLROOMS | 1.46 | 1.63 | 0.53 | 0.56 |
+| OFFICE | 1.37 | 1.46 | 0.61 | 0.61 |
+| `goto=water` | 2.00 | 2.16 | 0.56 | 0.58 |
+
+Before this pass medium cost 1.46 / 1.75 / 1.56 / 2.36 ms at 0.9 (+14-20 %).
+
+### Changes
+
+- **The water mirror waits for visible water** (`materials/water/waterVisibility.ts`). The loop mirrors the nearest
+  water plane within 40 m ahead, and that scan does not see walls: in WAREHOUSE, PIPEWORKS and the DARK spawn a pool
+  or flooded room behind a wall cost a mirrored render of the scene every frame (0.3-0.45 ms at high here, 2-3 ms at
+  ultra). An `ANY_SAMPLES_PASSED_CONSERVATIVE` query now brackets every water draw, and where the water is the
+  mirror's only reader (high and ultra: SSR and the froxel presets compile the floors' planar path out) the mirror
+  renders only while a water draw passed the depth test within the last 0.5 s. Results arrive a frame or two late:
+  water coming into view shows its probe reflection for those frames; an unanswered query counts as visible. The
+  queries and the poll cost nothing measurable (within ±0.03 ms, in-page A/B). High captures of the ten scenes
+  matched the previous build except for scattered pixels (under 2 %, mostly 1-4 grey levels: the probe's refresh
+  phase).
+- **Reflection probe cadence:** one face every fourth frame instead of every second, halving the steady capture and
+  filter (GPU and main thread); flicker reaches a face at most 24 frames late.
+- **Ultra: 1.4x supersampling instead of 1.5x** (1.96 instead of 2.25 samples per display pixel; 10-12 % of every
+  frame, 1.3-1.6 ms on water frames, together with the next two), with **AO 12 samples** instead of 16 and **SMAA's HIGH search** instead of
+  ULTRA, which a supersampled image does not show. Side by side at 2560 × 1440 the images differ in grain and
+  sub-pixel edges; wallpaper stripes, grout and carpet stay clean.
+- **Medium: render scale 0.85 instead of 0.9.** No single medium feature costs more than 0.1 ms (motion blur, cloth
+  sheen, specular AA, puddles, water waves and ripples, water debris and the flashlight bounce were each switched
+  off in place); the growth is spread over the shared surface and water code (the shading pass +0.1 ms in LOBBY and
+  +0.4-0.5 ms where water is in view, the mirror +0.1-0.2 ms). 11 % fewer pixels bring medium back within 10 %
+  except POOLROOMS (+12 %), with a barely softer image; dynamic resolution still lowers it further on weak GPUs.
+
+### Measured and not changed
+
+In-page A/B, paired medians (the SSR and mirror numbers are the most reliable: those states switch every 8-16
+frames):
+
+- **SSR:** 48 → 32 trace steps saved 0.07-0.16 ms at high, a roughness cut-off of 0.35-0.4 instead of 0.45 nothing
+  measurable, the ultra filter under 0.2 ms: the trace's cost is per ray, not per step. Kept.
+- **Mirror:** 0.5 → 0.35 at ultra saved about 0.6 ms on water frames but showed the magnified texel grid in
+  saturated lamp reflections (package E's "stepped blobs"); 0.42 saved 0.1-0.3 ms. A scissor to the lower 60 % of
+  the mirror saved at most 0.2 ms; rendering it without its depth prepass cost 0.15-0.2 ms more at high (nothing at
+  medium); culling shell tiles farther than 25-40 m saved 0.05-0.1 ms; the lite surface path in reflection passes
+  (no anti-tiling, macro variation or wallpaper fades) saved nothing.
+- **Water shading at ultra** (`late`, 0.6-1.5 ms): 4 → 2 in-water lights, 10 → 8 refraction steps, 8 → 6 waves and
+  basic caustics each moved it by less than the noise (0.2 ms).
+- **Surface features at ultra:** detail maps off 0.4-0.9 ms, contact shadows off about 1 ms (6 instead of 8 steps:
+  nothing), POM 2 → 1 nothing (its steps are finer), texture anisotropy 16 → 4 up to 0.5 ms, the high froxel grid
+  under 0.2 ms, the probe off 0.15-0.4 ms. Each is visible, or saves too little.
+
+### Open
+
+- **Ultra water frames** (POOLROOMS, DEEP_END, FLOODED_HALL, `goto=water`) cost 11.3-12.9 ms at 1.4x. The largest
+  items are the mirror (about 2-3.5 ms, only partly per pixel: 0.35 of the buffer instead of 0.5 saved 0.6 ms) and
+  the water pass (1-1.5 ms).
+  Dynamic resolution (on by default) lowers the scale there in play; 1.3x would bring the flooded rooms to about 11
+  ms. A cheaper mirror (fewer draws: a coarser proxy of the room, or reusing SSR for the mirrored view) is the next
+  step.
+- High water frames sit at the 4 ms line (4.0-4.05 ms).
+
+### Methodology
+
+Four agents shared the GPU during this pass (two headless browsers at a time), and the same scene's `gpuBench` time
+swung by 30 % between runs. Decisions were made in-page:
+
+- States that switch at runtime (the mirror's scale and prepass, the probe, SSR on / off, the trace program and its
+  roughness cut-off, texture anisotropy, the water-visibility gate) were compared inside one frame hook: 40 rounds
+  alternating base and variant, each round an untimed warm-up frame and 8-20 frames in one `TIME_ELAPSED` query (as
+  `gpuBench` renders them: probe, mirror, composer), the variant against the mean of its neighbouring base rounds,
+  median over the rounds.
+- Quality rows that recompile programs were switched through the settings path (about 1 s) and alternated with the
+  base four times, timed by min-of-rounds benches or by one `gpuProfile` segment; those deltas are good to about
+  ±0.3 ms at ultra and ±0.05 ms at medium.
+- The absolute table: `BACKROOMS_UNCAPPED=1`, seed 7, `time=10`, `gpuBench` three times per scene, each run started
+  only when no other browser held a slot (other agents could still start one during a run: the minimum over two
+  passes is reported).
 
 ## Rendering overhaul (second pass)
 
