@@ -8,7 +8,7 @@
 // never bleeds a foreign colour into an edge and the atlas border is seamless. Alpha is 0 in the margin.
 
 import { Mat } from '../core/ids.ts';
-import type { RecipeTable } from './layers/types.ts';
+import { phys, type RecipeTable } from './layers/types.ts';
 
 export const DECAL_GLSL = /* glsl */ `
 #define SS 4
@@ -325,6 +325,7 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// trim: albedo calibration (layerAlbedoCheck at 1024)
 export const DECAL_RECIPES: RecipeTable = {
-  [Mat.DECAL_ATLAS]: { glsl: DECAL_GLSL, normalStrength: 1.0, heightScale: 0.002 },
+  [Mat.DECAL_ATLAS]: { glsl: DECAL_GLSL, normalStrength: 1.0, heightScale: 0.002, trim: [0.936, 0.965, 0.921], phys: phys(0) },
 };

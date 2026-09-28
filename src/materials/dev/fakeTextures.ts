@@ -189,6 +189,8 @@ const RECIPES: Partial<Record<number, Recipe>> = {
     s.rough = 0.8;
   },
 };
+// texture realism v2 reserved layers: CMU_RAW is the CMU stand-in at its own table grey; METAL_BARE stays flat
+RECIPES[Mat.CMU_RAW] = RECIPES[Mat.CMU_PAINTED];
 
 // ---------------------------------------------------------------- builders
 function arrayTex(data: Uint8Array, size: number, srgb: boolean, aniso: number): THREE.DataArrayTexture {

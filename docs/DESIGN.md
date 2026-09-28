@@ -565,9 +565,11 @@ export const Mat = {
   CMU_PAINTED: 12, POOL_TILE: 13, POOL_MOSAIC: 14, METAL_PAINTED: 15, METAL_RUST: 16, METAL_GRATE: 17,
   WOOD: 18, PLASTIC: 19, FABRIC_PARTITION: 20, PLENUM: 21, RUBBER: 22, SIGNAGE: 23, DECAL_ATLAS: 24,
   FLOOR_PAINT: 25, TERRAZZO: 26, METAL_DECK: 27, // 27 was SPARE_27: corrugated roof deck (WAREHOUSE TRUSS ceilings)
+  // texture realism v2 reserved layers (placeholder recipes; nothing places them in the world until their lanes do)
+  CMU_RAW: 28, METAL_BARE: 29,
 } as const;
 export type MatId = ValueOf<typeof Mat>;
-export const MAT_COUNT = 28;
+export const MAT_COUNT = 30;
 
 // DECAL_ATLAS / SIGNAGE layers are 4x4 atlases; slot s occupies uv [(s%4)/4, floor(s/4)/4] .. +1/4
 export const DecalKind = {
@@ -678,18 +680,19 @@ export const VFlag = {
 } as const;
 
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)
-// 16-23 belong to the graphics-realism packages (black until their package lands); the materials harness's private
-// anti-tiling rotation view is index 63
+// 16-23 belong to the graphics-realism packages (black until their package lands), 24-26 to texture realism v2; the
+// materials harness's private anti-tiling rotation view is index 63
 export const DebugView = {
   FINAL: 0, ALBEDO: 1, NORMAL: 2, ROUGHNESS: 3, LIGHTMAP: 4, DIRECTIONALITY: 5, AO: 6, FLICKER: 7,
   MASK: 8, LAYER: 9, TEXEL: 10, ZONE: 11, ROOM: 12, UV: 13, EMISSION: 14, LIGHT_VOLUME: 15,
   WETNESS: 16, HEIGHT: 17, VOLUMETRIC: 18, BOUNCE: 19, WATER: 20, PROBE: 21, SPECW: 22, SSAO: 23,
+  AUX: 24, TEXTILE: 25, RELIEF: 26,
 } as const;
 export type DebugViewId = ValueOf<typeof DebugView>;
 export const DEBUG_VIEW_NAMES: readonly string[] = [
   'final', 'albedo', 'normal', 'roughness', 'lightmap', 'directionality', 'ao', 'flicker', 'mask', 'layer',
   'texel', 'zone', 'room', 'uv', 'emission', 'lv', 'wetness', 'height', 'volumetric', 'bounce', 'water', 'probe',
-  'specw', 'ssao',
+  'specw', 'ssao', 'aux', 'textile', 'relief',
 ];
 ```
 
@@ -1624,7 +1627,7 @@ export type { Vec3 };
 
 import { Mat, type MatId, SurfaceSound, type SurfaceSoundId } from './ids.ts';
 
-export type GrimeProfile = 'carpet' | 'wallpaper' | 'ceilingTile' | 'concrete' | 'tile' | 'metal' | 'none';
+export type GrimeProfile = 'carpet' | 'wallpaper' | 'ceilingTile' | 'concrete' | 'tile' | 'metal' | 'paint' | 'masonry' | 'none';
 
 export interface MaterialLayerDef {
   id: MatId;
@@ -1648,15 +1651,15 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 1, name: 'CARPET_L0', repeat: 2.4, tileSize: 0, hexTile: 1.2, albedoMean: [0.33, 0.25, 0.1], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.35, reflective: true },
   { id: 2, name: 'CEILING_TILE', repeat: 1.2, tileSize: 0.6, albedoMean: [0.6, 0.56, 0.44], roughness: 0.9, metal: 0, grime: 'ceilingTile', sound: S.CARPET, absorption: 0.6, reflective: false },
   { id: 3, name: 'PANEL_LENS', repeat: 0.6, tileSize: 0, albedoMean: [0.7, 0.7, 0.68], roughness: 0.3, metal: 0, grime: 'none', sound: S.METAL, absorption: 0.05, reflective: false },
-  { id: 4, name: 'TRIM_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.45, 0.4, 0.3], roughness: 0.5, metal: 0, grime: 'wallpaper', sound: S.WOOD, absorption: 0.05, reflective: false },
+  { id: 4, name: 'TRIM_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.45, 0.4, 0.3], roughness: 0.5, metal: 0, grime: 'paint', sound: S.WOOD, absorption: 0.05, reflective: false },
   { id: 5, name: 'WALLPAPER_MANILA', repeat: 1.2, tileSize: 0, albedoMean: [0.5, 0.42, 0.28], roughness: 0.8, metal: 0, grime: 'wallpaper', sound: S.CARPET, absorption: 0.1, reflective: false },
   { id: 6, name: 'CARPET_OFFICE', repeat: 2.4, tileSize: 0.6, albedoMean: [0.12, 0.13, 0.15], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.3, reflective: false },
-  { id: 7, name: 'DRYWALL', repeat: 2.4, tileSize: 0, albedoMean: [0.62, 0.6, 0.55], roughness: 0.85, metal: 0, grime: 'wallpaper', sound: S.CONCRETE, absorption: 0.08, reflective: false },
+  { id: 7, name: 'DRYWALL', repeat: 2.4, tileSize: 0, albedoMean: [0.62, 0.6, 0.55], roughness: 0.85, metal: 0, grime: 'paint', sound: S.CONCRETE, absorption: 0.08, reflective: false },
   { id: 8, name: 'VINYL_VCT', repeat: 1.2, tileSize: 0.3, albedoMean: [0.45, 0.43, 0.38], roughness: 0.35, metal: 0, grime: 'tile', sound: S.VINYL, absorption: 0.03, reflective: true },
   { id: 9, name: 'CONCRETE_FLOOR', repeat: 4.8, repeatY: 3.0, tileSize: 0, hexTile: 2.4, albedoMean: [0.3, 0.29, 0.27], roughness: 0.6, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: true },
   { id: 10, name: 'CONCRETE_WALL', repeat: 2.4, repeatY: 1.5, tileSize: 0, albedoMean: [0.35, 0.34, 0.32], roughness: 0.85, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.03, reflective: false },
   { id: 11, name: 'CONCRETE_CEIL', repeat: 4.8, repeatY: 3.0, tileSize: 0, albedoMean: [0.33, 0.32, 0.3], roughness: 0.9, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.03, reflective: false },
-  { id: 12, name: 'CMU_PAINTED', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.5, 0.5, 0.46], roughness: 0.5, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.05, reflective: false },
+  { id: 12, name: 'CMU_PAINTED', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.5, 0.5, 0.46], roughness: 0.5, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.05, reflective: false },
   { id: 13, name: 'POOL_TILE', repeat: 1.2, tileSize: 0.15, albedoMean: [0.72, 0.76, 0.76], roughness: 0.08, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 14, name: 'POOL_MOSAIC', repeat: 0.6, tileSize: 0.3, albedoMean: [0.35, 0.6, 0.65], roughness: 0.1, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 15, name: 'METAL_PAINTED', repeat: 1.2, repeatY: 1.0, tileSize: 0, albedoMean: [0.4, 0.4, 0.38], roughness: 0.45, metal: 0.2, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
@@ -1672,6 +1675,9 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 25, name: 'FLOOR_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.65, 0.6, 0.2], roughness: 0.5, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: false },
   { id: 26, name: 'TERRAZZO', repeat: 2.4, tileSize: 0, albedoMean: [0.5, 0.48, 0.44], roughness: 0.25, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 27, name: 'METAL_DECK', repeat: 1.2, tileSize: 0, albedoMean: [0.3, 0.3, 0.29], roughness: 0.5, metal: 0.6, grime: 'metal', sound: S.METAL, absorption: 0.05, reflective: false },
+  // texture realism v2 reserved layers (placeholder recipes, not placed in the world yet)
+  { id: 28, name: 'CMU_RAW', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.22, 0.215, 0.2], roughness: 0.9, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.07, reflective: false },
+  { id: 29, name: 'METAL_BARE', repeat: 0.6, tileSize: 0, albedoMean: [0.56, 0.56, 0.56], roughness: 0.3, metal: 1, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
 ];
 export const layerRepeatY = (d: MaterialLayerDef): number => d.repeatY ?? d.repeat;
 /** The only layers WP4 may use on tower shell geometry (edges and periodic solids). No trims inside towers. */
@@ -4059,7 +4065,7 @@ export function createBakeCache(): BakeCache;
 
 ### WP8: Procedural textures (GPU)
 
-**Goal:** 28 tileable PBR layers at 1024² (512² on low) that read as real materials at 1–3 m, generated on the GPU in < 400 ms behind the loading screen. Measured albedo must match `LAYER_DEFS`.
+**Goal:** 30 tileable PBR layers (28 placed, 2 reserved by texture realism v2) at 1024² (512² on low) that read as real materials at 1–3 m, generated on the GPU in < 400 ms behind the loading screen. Measured albedo must match `LAYER_DEFS`.
 
 **Files:** `src/textures/*`, `harness/materials.html`, `src/harness/materials.ts`, `tests/textures/*`.
 
@@ -4104,16 +4110,16 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
    **Water normals** (512², RG): 2 octaves of periodic gradient noise.
    **Cookie** (512², RGBA16F; package F): the beam profile of `lighting/flashlightOptics.ts` (`beamProfileGlsl`: a softly square LED-die core, a dark ring, a yellow phosphor ring, corona, flat spill, reflector lip, crisp rim) times lens dirt and a thumb smudge, cool core / warm spill. The texture spans `CONE × MAP_FOCUS` (see WP11 §4).
 8. **Detail maps** (package B, only when `QualityConfig.detailMaps`: boot generates them after the layers, a quality
-   switch lazily; `TextureSet.detail`). One `WebGLArrayRenderTarget(512, 512, 12)` RGBA8, linear, trilinear + anisotropic,
+   switch lazily; `TextureSet.detail`). One `WebGLArrayRenderTarget(512, 512, 21)` RGBA8, linear, trilinear + anisotropic,
    repeat, over a 0.3 m frame (divides NOISE_WRAP, STOREY_PITCH and TILE_SIZE). Recipes (`textures/detail.ts`, the layer
    recipe environment): D0 cut pile, D1 loop pile, D2 embossed vinyl paper, D3 rolled paint, D4 fine concrete (sand,
    pinholes), D5 mineral fibre, D6 glaze waviness, D7 basket weave, D8 brushed sheet, D9 open wood grain, D10 haircell, D11
-   the puddle ripple. Per layer: HEIGHT → the shared scratch, then the pack pass (`DETAIL_MAIN`, the normal pass's Scharr
+   the puddle ripple, D12-D20 the texture realism v2 slots (below). Per layer: HEIGHT → the shared scratch, then the pack pass (`DETAIL_MAIN`, the normal pass's Scharr
    slope `br_slope`): rg = mean slope / S, b = albedo multiplier × AO × cavity / 2, a = E[|slope|²] / 2S², S about 4 × the
    layer's rms slope (harness `extra=detail`, `stats().detailMoments`). The box-filtered mips keep both slope moments
    exact (LEAN). ~15 MiB, ~15 ms compile + ~20 ms generation.
 
-**Recipes** (`uv.x` ∈ [0,1) spans `repeat` metres and `uv.y` spans `layerRepeatY` metres, so layers with `repeatY` are authored in a non-square frame; all noise is periodic with an integer period, so every layer tiles). Output `Surf{ albedo (linear), alpha, height, rough, metal, ao, emissive }`.
+**Recipes** (`uv.x` ∈ [0,1) spans `repeat` metres and `uv.y` spans `layerRepeatY` metres (or the recipe's generator `frame`, texture realism v2), so layers with `repeatY` are authored in a non-square frame; all noise is periodic with an integer period, so every layer tiles). Output `Surf{ albedo (linear), alpha, height, rough, metal, ao, emissive, aux, lean }` (aux and lean: texture realism v2, below).
 - **Sampling limits.** Every periodic feature spans ≥ 3 texels at 1024² (and at 512² on low), or is supersampled 4× inside the generator (box-filtered), so no moiré is baked into the texture.
 - **No one-off features in short repeats.** Anything that must not visibly repeat (lifted wallpaper edges, fades, carpet blotches, oil spots) is NOT in the layer texture; it comes from the world-space grime/mask path (WP7 mask, WP9 hashed world features) instead.
 
@@ -4148,6 +4154,59 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
   - The page calls `__backrooms.layerAlbedoCheck()`, and every layer is within 10% of its `albedoMean` per channel (absolute floor 0.01). The check is a **reduction shader over mip level 0** (decoded to linear before averaging), not the driver's sRGB 1×1 mip (some drivers average sRGB mips in gamma space).
   - `tileSeamCheck` max edge delta < 2/255.
 - Generation time < 400 ms at 1024 on the target machine, plus shader compile ≤ 1.5 s under ANGLE (both logged separately and counted in the boot budget).
+
+**Texture realism v2 conventions (TEX2; `docs/contract-changes/TEX2.md`).** The v2 lanes code against these; lane 0
+(foundation) set them up without changing a pixel.
+- **Recipe rows.** Each family file declares its layers as `RecipeBody = { glsl, normalStrength, heightScale, trim?,
+  phys, aux?, aux2?, frame? }` (`textures/layers/types.ts`): the albedo calibration trim (was the `TRIM` table of
+  `registry.ts`) and the `SurfacePhys` row (was `SURFACE_PHYS` in `chunks/params.ts`, which now collects the rows from
+  `LAYER_RECIPES_FULL`) sit next to the GLSL. Family files: `layers/carpet.ts` (A), `layers/concrete.ts` (B: slabs,
+  formwork, soffit, FLOOR_PAINT, TERRAZZO), `layers/masonry.ts` (C: CMU_PAINTED, CMU_RAW), `layers/tile.ts` (C),
+  `layers/wallpaper.ts` and `layers/ceiling.ts` (D), `layers/metal.ts` and `layers/misc.ts` (E); SIGNAGE and
+  DECAL_ATLAS stay in `signage.ts` / `decals.ts`.
+- **SurfacePhys v2 fields**, all neutral by default (`phys(por, {...})`): `sigma` (EON diffuse roughness, 0 = Lambert),
+  `pile` [kp, kv] (0 = off; kp > 0 also skips the baked-light cavity visibility), `detRep` (detail repeat scale, 1; the
+  repeat 0.3 m × detRep must still divide 19.2, 3.0 and NOISE_WRAP), `detTint` (rgb, 0), `detSO` (detail cavity into
+  specular occlusion, 0), `dirt` / `wear` ([r, g, b, amount], amount 0), `reliefM` (metres of full convexity, 0.001).
+  They reach the shaders as GLSL const arrays indexed by the layer (`BR_L_SIGMA`, `BR_L_PILE`, `BR_L_DETREP`,
+  `BR_L_DETTINT`, `BR_L_DETSO`, `BR_L_DIRT`, `BR_L_WEAR`, `BR_L_RELIEF`, `BR_AUX_KIND`, `BR_L_AUX2`), not uniforms.
+- **Generator frame.** `frame?: [w, h]` metres is generator-only (the recipe `FRAME`, the normal pass's texel metres,
+  the cavity metric) and defaults to `[repeat, repeatY]`; the mesher's UVs still follow `LAYER_DEFS`, so a floor layer
+  can be authored square while its tower walls keep `repeatY` 3.0. Hence `w` = `repeat` and `h` = `repeat` or `repeatY`.
+- **Channels.** `Surf` gains `float aux` and `vec2 lean`. ormh.a follows the layer's aux kind (`AuxKind`): `none` 0 (every
+  layer before v2 but the two below), `emissive` Surf.emissive (PANEL_LENS, SIGNAGE), `detailMask` Surf.aux (default 1;
+  multiplies the detail strength), `wear` Surf.aux as a rank-normalised threshold field (P(W < x) = x), `mask` Surf.aux
+  as a family-defined mask, `lean` Surf.lean in [-1, 1]: ormh.b = x · 0.5 + 0.5, ormh.a = y · 0.5 + 0.5 (the shader
+  forces metalness to 0 on such layers). albedo.a = Surf.alpha is a second aux channel on layers with `aux2`, allowed
+  on every layer but the alpha-tested METAL_GRATE, SIGNAGE, DECAL_ATLAS and FLOOR_PAINT.
+- **Reserved layers.** `Mat.CMU_RAW` = 28 (repeat 2.4 × 1.0, albedo 0.22 / 0.215 / 0.20, roughness 0.9, grime
+  `masonry`; placeholder: the CMU_PAINTED body at raw grey) and `Mat.METAL_BARE` = 29 (repeat 0.6, albedo 0.56, roughness
+  0.3, metal 1; placeholder: flat metal). `MAT_COUNT` 30; nothing places them in the world yet (the `materials` test
+  scene keeps its 28 layers). The harness gallery is 7 × 5.
+- **Grime profiles** 7 `paint` (DRYWALL, TRIM_PAINT) and 8 `masonry` (CMU_PAINTED, CMU_RAW) start as verbatim copies of
+  the wallpaper and concrete branches (WP9 below).
+- **Detail slots.** `DETAIL_COUNT` 21; the recipes live in `textures/detailRecipes/{textile, mineral, walls, masonry,
+  props}.ts` (ids in `detailRecipes/types.ts` `Det`), `textures/detail.ts` is the index and keeps D11 RIPPLE. D12 SLAB and
+  D13 POLISH (B), D14 CMU_FACE and D15 CMU_RAW (C), D16 ROLLER_STIPPLE and D17 LINEN (D), D18 ENAMEL, D19 RUST_GRAIN and
+  D20 KRAFT (E) are neutral placeholders (height 0.5, albedo 1, heightScale 1e-4, slope 0.05, no cavity) until their
+  lanes fill them. 21 layers of 512² take ~29 MiB (high and ultra only).
+- **Ownership.** Each lane edits only its family files, its `LAYER_DEFS` rows and its detail and hook files; the core
+  files (`glsl/common.ts`, `programs.ts`, `registry.ts`, `detail.ts`, the bakers, `chunks/surface.ts`,
+  `materialPost.ts`, `haze.ts`, `pom.ts`) belong to lane 0.
+
+#### Lane 0: foundation
+0a: the file split, the recipe rows, the channels, the reserved ids and slots and the hook points, bit-identical on the
+28 gallery framings (high) and 4 medium framings (`node tools/ab.mjs --base a5c03e1 --expect same`).
+
+#### Lane A: textiles
+
+#### Lane B: concrete, terrazzo, floor paint
+
+#### Lane C: masonry and tile
+
+#### Lane D: walls and ceilings
+
+#### Lane E: props
 
 **Must NOT touch:** material shaders (WP9), except that you own the albedo *numbers* via contract-changes.
 
@@ -4407,6 +4466,40 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - `view=lightmap|directionality|ao|mask|layer|texel|emission` all render with no errors;
   - `view=final` shows specular sheen on damp carpet and the troffer reflection streaks on wet vinyl.
 - **Leak:** `testScene=leak&view=final`, dark-room luma < 0.02 (WP14 imageStats).
+
+**Texture realism v2 conventions (TEX2).** The shader side of the WP8 conventions above.
+- **Channel decode** (`chunks/surface.ts` FRAG_MAP_GLSL, main scope after the base sampling and the alpha test; hex
+  blended and rotated like the other channels): `int brAuxK` (`BR_AUX_KIND[brL]`), `float brAux` (ormh.a on
+  `detailMask` / `wear` / `mask` layers, 0 on `lean` layers), `float brAux2` (albedo.a on `aux2` layers, else 0),
+  `vec2 brLean` (the lean vector in the continuous uv frame, counter-rotated by transpose(M) on rotated-tile layers),
+  `mat2 brRotM` (the rotated-tile transform M, identity elsewhere), `vec2 brRotC` (the rotated cell's centre in the
+  continuous uv, 0 elsewhere), `brMuH` (the 1 × 1-mip mean height; the puddle block reads it too) and
+  `brRel = (brNrm.w − brMuH) · heightScale` (metres above the layer's mean plane). brMuH and brRel are read-only
+  expressions (#defines), not variables: each use is a fetch, so read them behind a quad-uniform gate (one
+  unconditional fetch per pixel at main scope cost ~0.3 ms per ultra frame). `brMetal` is 0 on `lean`
+  layers. `float brAm` (the detail albedo multiplier over its mean, 1 where no detail layer was fetched) is main-scope
+  under BR_DETAIL_MAPS.
+- **Family hooks** (`chunks/family/index.ts`): `chunks/family/{textile, walls, ceiling, concrete, masonry, tile,
+  props}.ts` each export `{ pars, postSample, postDetail, grime, postWet, rough, normal, matPost, postLight, preFog }`,
+  concatenated in that family order at fixed points: pars at the end of the fragment common block; postSample after the
+  decode, before the detail fetch (may change brA, brOrmh, brNrm, brDetUv, brDetDx, brDetDy); postDetail inside the
+  detail block after the fetch, before it is applied (may rescale brAm, brDetSl, brDetVar); grime inside
+  `if ( brGrime != 0 )` after the shared lookups, one `else if ( brGrime == BR_G_<PROFILE> )` clause per profile (one
+  exclusive chain: separate ifs compiled to different rounding); postWet
+  after the wetness and puddle block; rough after the LEAN term; normal after the detail slope; matPost after three
+  fills `material` (wet F0 and glaze coverage applied; `bool brCoat` declared), before the specular AA; postLight after
+  FRAG_AO_REFL_GLSL; preFog in the fog replacement outside the debug views, before the submerged optics. The grime
+  branches moved verbatim: carpet (1) to textile, wallpaper (2) and paint (7, a copy of 2) to walls, ceilingTile (3)
+  to ceiling, concrete (4) to concrete, masonry (8, a copy of 4) to masonry, tile (5) to tile, metal (6) to props.
+  The textile sheen moved to textile.matPost, the clearcoat fields to props.matPost and the Level 0 pile trap from
+  `haze.ts` to textile.preFog. Hooks gate on brL or brGrime (quad-uniform), respect BR_DECAL, BR_LITE and
+  BR_DETAIL_MAPS, and skip expensive work when uBrReflPass > 0.5.
+- **Debug views** 24 `aux` (r brAux, g brAux2; lean layers show rg = lean · 0.5 + 0.5, b = 1), 25 `textile` (the
+  textile family's; black until it shows something) and 26 `relief` (r / b the relief above / below the mean in units
+  of `BR_L_RELIEF`, g the cavity 1 − ormh.r). They leave main early where their values exist, through
+  `if ( uDebugView == BR_DV_<VIEW> ) BR_DEBUG_EXIT( v )` (`chunks/debug.ts` DEBUG_PARS_GLSL: the fog stage's decal
+  premultiply, HDR clamp and empty specular G-buffer), instead of going through the fog-stage view list: a value read
+  there stays live through the whole shader, and six of them cost ~0.3 ms per ultra frame (register pressure).
 
 **Must NOT touch:** lightmap encoding (WP7) and post (WP11). All tuning constants live in `materials/chunks/*.ts`.
 

@@ -1,8 +1,8 @@
-// src/textures/layers/concrete.ts — mineral surfaces: CONCRETE_FLOOR, CONCRETE_WALL, CONCRETE_CEIL, CMU_PAINTED,
-// FLOOR_PAINT, TERRAZZO (WP8).
+// src/textures/layers/concrete.ts — mineral surfaces: CONCRETE_FLOOR, CONCRETE_WALL, CONCRETE_CEIL, FLOOR_PAINT,
+// TERRAZZO (WP8). CMU lives in layers/masonry.ts.
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 // CONCRETE_FLOOR / CONCRETE_CEIL are authored over a 4.8 x 3.0 frame (vertical faces: v = y / 3.0) but are mostly
 // seen on horizontal faces, where v spans 4.8 m. Noise periods use a compromise frame of 4.8 x 3.8 so features are
@@ -147,48 +147,6 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Painted CMU, frame 2.4 x 1.0 m: 0.4 x 0.2 m blocks (6 x 5 courses) with 10 mm concave recessed joints; paint
- * over porous block faces, paint-bridged voids, paint pooled glossier and darker in the joints; each block face is
- * laid slightly out of plane (+-0.35 deg), so the sheen changes block by block along a wall. 15 courses fit a 3 m
- * storey, so a true half bond cannot be periodic; courses use a third bond (offset sequence 0, 1/3, 2/3, 1/3, 2/3 of
- * a block), so every head joint is overlapped by >= 1/3. */
-const CMU_HS = 0.014; // heightScale (m per height unit): 5.6 mm tooled joints below the face
-const CMU_PAINTED = /* glsl */ `
-#define SS 4
-void gen(vec2 uv, inout Surf s) {
-  vec2 m = uv * FRAME;
-  float course = floor(m.y / 0.2);
-  float cw = mod(course, 5.0);
-  float off = cw < 0.5 ? 0.0 : cw < 1.5 ? 1.0 / 3.0 : cw < 2.5 ? 2.0 / 3.0 : cw < 3.5 ? 1.0 / 3.0 : 2.0 / 3.0;
-  float bx = m.x + off * 0.4;
-  float blk = floor(bx / 0.4);
-  vec2 lp = vec2(bx - (blk + 0.5) * 0.4, m.y - (course + 0.5) * 0.2);
-  vec2 bid = vec2(mod(blk, 6.0), cw);
-  float e = min(0.2 - abs(lp.x), 0.1 - abs(lp.y));
-  float w = 0.7 * aaM();
-  float joint = 1.0 - smoothstep(0.005 - w, 0.005 + w, e);
-  float jprof = 1.0 - (1.0 - sat(e / 0.005)) * (1.0 - sat(e / 0.005));
-  float coarse = fbm(uv, PM(60.0), 3, 3);
-  Cell po = worley(uv, PM(200.0), 0.95, 4);
-  float pore = step(hashf(po.id, 5), 0.45) * (1.0 - smoothstep(0.1, 0.3, po.f1));
-  float edgeRound = smoothstep(0.005, 0.013, e);
-  // voids in the block face that the paint bridged over: shallow dimples
-  Cell vo = worley(uv, PM(90.0), 0.9, 12);
-  float vd = step(hashf(vo.id, 13), 0.3) * (1.0 - smoothstep(0.12, 0.3, vo.f1));
-  float face = 0.72 + 0.05 * coarse - 0.1 * pore - 0.12 * vd;
-  vec2 bt = (hash2f(bid, 7) - 0.5) * 0.012; // face tilt (slope), metres per metre
-  face += dot(lp, bt) / ${CMU_HS};
-  face = mix(face - 0.1, face, edgeRound);
-  s.height = mix(face, 0.3 + 0.12 * jprof, joint);
-  vec3 col = TABLE_ALBEDO * (1.0 + 0.03 * (tileRand(bid, 6) - 0.5) + 0.02 * coarse);
-  col *= 1.0 - 0.1 * pore;
-  col *= 1.0 - 0.08 * vd;
-  col *= mix(1.0, 0.82, joint);
-  s.albedo = col;
-  s.rough = mix(0.46 + 0.12 * pore + 0.03 * coarse, 0.52, joint);
-}
-`;
-
 /** Worn floor paint (safety yellow): alpha from thresholded warped noise, slightly raised glossy film. */
 const FLOOR_PAINT = /* glsl */ `
 void gen(vec2 uv, inout Surf s) {
@@ -245,13 +203,28 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const CONCRETE_RECIPES: RecipeTable = {
   // normalStrength (as the wall coverings, textures/layers/wallpaper.ts): the trowelled slab, the formwork face and the
   // board-formed soffit had mip-0 slopes of 0.006 / 0.015 / 0.024 (0.3-1.4 degrees) and shaded flat
-  [Mat.CONCRETE_FLOOR]: { glsl: CONCRETE_FLOOR, normalStrength: 6.0, heightScale: 0.004 },
-  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 5.0, heightScale: CONCRETE_WALL_HS },
-  [Mat.CONCRETE_CEIL]: { glsl: CONCRETE_CEIL, normalStrength: 3.0, heightScale: 0.005 },
-  [Mat.CMU_PAINTED]: { glsl: CMU_PAINTED, normalStrength: 1.0, heightScale: CMU_HS },
-  [Mat.FLOOR_PAINT]: { glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0003 },
-  [Mat.TERRAZZO]: { glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.001 },
+  [Mat.CONCRETE_FLOOR]: {
+    glsl: CONCRETE_FLOOR, normalStrength: 6.0, heightScale: 0.004, trim: [1.023, 1.02, 1.016],
+    phys: phys(0.6, { det: 4, detS: 1 }),
+  },
+  [Mat.CONCRETE_WALL]: {
+    glsl: CONCRETE_WALL, normalStrength: 5.0, heightScale: CONCRETE_WALL_HS, trim: [1.005, 1.014, 1.028],
+    phys: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8 }),
+  },
+  [Mat.CONCRETE_CEIL]: {
+    glsl: CONCRETE_CEIL, normalStrength: 3.0, heightScale: 0.005, trim: [1.017, 1.017, 1.017],
+    phys: phys(0.6, { det: 4, detS: 0.8 }),
+  },
+  [Mat.FLOOR_PAINT]: {
+    glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0003, trim: [1.052, 1.052, 1.052],
+    phys: phys(0.15),
+  },
+  [Mat.TERRAZZO]: {
+    glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.001, trim: [1.043, 1.064, 1.088],
+    phys: phys(0.1, { det: 4, detS: 0.4, glaze: 0.13, roughComp: 0.5 }),
+  },
 };

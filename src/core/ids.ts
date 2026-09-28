@@ -67,9 +67,11 @@ export const Mat = {
   CMU_PAINTED: 12, POOL_TILE: 13, POOL_MOSAIC: 14, METAL_PAINTED: 15, METAL_RUST: 16, METAL_GRATE: 17,
   WOOD: 18, PLASTIC: 19, FABRIC_PARTITION: 20, PLENUM: 21, RUBBER: 22, SIGNAGE: 23, DECAL_ATLAS: 24,
   FLOOR_PAINT: 25, TERRAZZO: 26, METAL_DECK: 27, // 27 was SPARE_27: corrugated roof deck (WAREHOUSE TRUSS ceilings)
+  // texture realism v2 reserved layers (placeholder recipes; nothing places them in the world until their lanes do)
+  CMU_RAW: 28, METAL_BARE: 29,
 } as const;
 export type MatId = ValueOf<typeof Mat>;
-export const MAT_COUNT = 28;
+export const MAT_COUNT = 30;
 
 // DECAL_ATLAS / SIGNAGE layers are 4x4 atlases; slot s occupies uv [(s%4)/4, floor(s/4)/4] .. +1/4
 export const DecalKind = {
@@ -205,15 +207,17 @@ export const DROP_LENS_H = 0.004;
 
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)
 // 16-23 belong to the graphics-realism packages (B wetness/height, F volumetric/bounce, E water, D probe/specw,
-// A ssao); a view whose package has not landed renders black.
+// A ssao), 24-26 to texture realism v2 (aux channels, textile lane, relief); a view whose package has not landed
+// renders black.
 export const DebugView = {
   FINAL: 0, ALBEDO: 1, NORMAL: 2, ROUGHNESS: 3, LIGHTMAP: 4, DIRECTIONALITY: 5, AO: 6, FLICKER: 7,
   MASK: 8, LAYER: 9, TEXEL: 10, ZONE: 11, ROOM: 12, UV: 13, EMISSION: 14, LIGHT_VOLUME: 15,
   WETNESS: 16, HEIGHT: 17, VOLUMETRIC: 18, BOUNCE: 19, WATER: 20, PROBE: 21, SPECW: 22, SSAO: 23,
+  AUX: 24, TEXTILE: 25, RELIEF: 26,
 } as const;
 export type DebugViewId = ValueOf<typeof DebugView>;
 export const DEBUG_VIEW_NAMES: readonly string[] = [
   'final', 'albedo', 'normal', 'roughness', 'lightmap', 'directionality', 'ao', 'flicker', 'mask', 'layer',
   'texel', 'zone', 'room', 'uv', 'emission', 'lv', 'wetness', 'height', 'volumetric', 'bounce', 'water', 'probe',
-  'specw', 'ssao',
+  'specw', 'ssao', 'aux', 'textile', 'relief',
 ];

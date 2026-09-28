@@ -2,13 +2,39 @@
 // Each view writes a display value v in [0, 1] as v * BR_DEBUG_NITS nits, so it reads as v at the L0 reference
 // exposure (EV100 9.4) of the post stack. Runs instead of haze. Index 63 (not in DEBUG_VIEW_NAMES) is a
 // WP9-private view: the anti-tiling rotation class, used by the materials dev harness.
-// Views 16-23 belong to the graphics-realism packages; each owner replaces its stub line (black until then).
+// Views 16-23 belong to the graphics-realism packages; each owner replaces its stub line (black until then). Views
+// 24-26 are texture realism v2's (aux, textile, relief): they leave main early through BR_DEBUG_EXIT at the point
+// where their values exist (chunks/surface.ts after the channel decode; the textile family in its own hooks), so none
+// of those values has to stay live until this stage (keeping six of them live cost ~0.3 ms per ultra frame). Here they
+// fall through to black.
 // The shell's LIGHT_VOLUME view shows the light-volume coordinate instead of sampling uVolA: non-props programs must
 // not reference that sampler (surface sampler budget, tests/materials/samplerBudget.test.ts).
 
 import { DebugView } from '../../core/ids.ts';
 
 export const DEBUG_VIEW_ROTATION = 63;
+
+/** Appended to the fragment common block: BR_DEBUG_EXIT( v ) ends main with debug value v (vec3, read as v at the
+ * reference exposure), with the output conventions of the fog stage (decal premultiply, HDR clamp, empty specular
+ * G-buffer). Only under a uniform condition on uDebugView (derivatives stay valid). */
+export const DEBUG_PARS_GLSL = /* glsl */ `
+#define BR_DV_AUX ${DebugView.AUX}
+#define BR_DV_TEXTILE ${DebugView.TEXTILE}
+#define BR_DV_RELIEF ${DebugView.RELIEF}
+#ifdef BR_DECAL
+#define BR_DBG_ALPHA brAlpha
+#define BR_DBG_ATT1_A brAlpha
+#else
+#define BR_DBG_ALPHA 1.0
+#define BR_DBG_ATT1_A 0.0
+#endif
+#ifdef BR_SSR
+#define BR_DBG_MRT brOut1 = vec4( 0.0, 0.0, 0.0, BR_DBG_ATT1_A ); brOut2 = vec4( 0.0 );
+#else
+#define BR_DBG_MRT
+#endif
+#define BR_DEBUG_EXIT( v ) { gl_FragColor = vec4( min( max( ( v ) * ( BR_DEBUG_NITS * BR_DBG_ALPHA ), vec3( 0.0 ) ), vec3( BR_HDR_CLAMP ) ), BR_DBG_ALPHA ); BR_DBG_MRT return; }
+`;
 
 /** Inline block inside the fog_fragment replacement; sets `vec3 brDbg`. */
 export const FRAG_DEBUG_GLSL = /* glsl */ `

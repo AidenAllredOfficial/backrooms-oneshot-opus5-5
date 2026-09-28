@@ -1,7 +1,7 @@
 // src/textures/layers/carpet.ts — textiles: CARPET_L0, CARPET_OFFICE, FABRIC_PARTITION (WP8).
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 /** Level 0 carpet: damp mustard pile. Three scales of structure, each representable at the texel grid:
  *  - pile clusters (~2.6 cm): neighbouring tufts lean together and part along irregular creases (warped Worley
@@ -127,8 +127,18 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const TEXTILE_RECIPES: RecipeTable = {
-  [Mat.CARPET_L0]: { glsl: CARPET_L0, normalStrength: 1.0, heightScale: 0.0035 },
-  [Mat.CARPET_OFFICE]: { glsl: CARPET_OFFICE, normalStrength: 0.9, heightScale: 0.003 },
-  [Mat.FABRIC_PARTITION]: { glsl: FABRIC_PARTITION, normalStrength: 0.6, heightScale: 0.0008 },
+  [Mat.CARPET_L0]: {
+    glsl: CARPET_L0, normalStrength: 1.0, heightScale: 0.0035, trim: [1.073, 1.088, 1.122],
+    phys: phys(1, { det: 0, detS: 1, sheen: 0.55, sheenR: 0.5 }),
+  },
+  [Mat.CARPET_OFFICE]: {
+    glsl: CARPET_OFFICE, normalStrength: 0.9, heightScale: 0.003, trim: [1.462, 1.363, 1.204],
+    phys: phys(1, { det: 1, detS: 0.7, sheen: 0.4, sheenR: 0.6 }),
+  },
+  [Mat.FABRIC_PARTITION]: {
+    glsl: FABRIC_PARTITION, normalStrength: 0.6, heightScale: 0.0008, trim: [1.106, 1.105, 1.097],
+    phys: phys(1, { det: 7, detS: 1, sheen: 0.6, sheenR: 0.7 }),
+  },
 };

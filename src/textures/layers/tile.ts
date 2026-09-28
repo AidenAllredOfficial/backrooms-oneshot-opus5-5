@@ -2,7 +2,7 @@
 // All three are physical tiles that WP9 rotates/flips per tile (tileSize), so every tile's content is self-contained.
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 /** Vinyl composition tile, 0.3 m: +-4 % tint per tile, directional marbling and flecks, dirty hairline joints,
  * chipped edges, wax sheen (roughness 0.3-0.45) with scuffs. */
@@ -103,8 +103,18 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const TILE_RECIPES: RecipeTable = {
-  [Mat.VINYL_VCT]: { glsl: VINYL_VCT, normalStrength: 1.0, heightScale: 0.0015 },
-  [Mat.POOL_TILE]: { glsl: POOL_TILE, normalStrength: 1.0, heightScale: 0.008 },
-  [Mat.POOL_MOSAIC]: { glsl: POOL_MOSAIC, normalStrength: 1.0, heightScale: 0.004 },
+  [Mat.VINYL_VCT]: {
+    glsl: VINYL_VCT, normalStrength: 1.0, heightScale: 0.0015, trim: [0.994, 1.004, 1.02],
+    phys: phys(0.05, { tok: 0.5, det: 6, detS: 0.5, glaze: 0.34, roughComp: 0.75 }),
+  },
+  [Mat.POOL_TILE]: {
+    glsl: POOL_TILE, normalStrength: 1.0, heightScale: 0.008, trim: [1.013, 1.012, 1.013],
+    phys: phys(0.08, { pomTop: 0.75, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
+  },
+  [Mat.POOL_MOSAIC]: {
+    glsl: POOL_MOSAIC, normalStrength: 1.0, heightScale: 0.004, trim: [0.946, 1.025, 1.041],
+    phys: phys(0.05, { pomTop: 0.7, tok: 0.3, det: 6, detS: 0.7, glaze: 0.1, roughComp: 0.7 }),
+  },
 };

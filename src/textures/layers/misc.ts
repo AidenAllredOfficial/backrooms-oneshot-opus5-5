@@ -1,7 +1,7 @@
 // src/textures/layers/misc.ts — WOOD, PLASTIC, RUBBER (WP8).
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
 /** Varnished flat-sawn wood (doors, desks, pallets): warped growth rings along u, open pores, fibre streaks. */
 const WOOD = /* glsl */ `
@@ -51,8 +51,18 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const MISC_RECIPES: RecipeTable = {
-  [Mat.WOOD]: { glsl: WOOD, normalStrength: 1.0, heightScale: 0.0006 },
-  [Mat.PLASTIC]: { glsl: PLASTIC, normalStrength: 1.0, heightScale: 0.0003 },
-  [Mat.RUBBER]: { glsl: RUBBER, normalStrength: 1.0, heightScale: 0.0004 },
+  [Mat.WOOD]: {
+    glsl: WOOD, normalStrength: 1.0, heightScale: 0.0006, trim: [0.997, 1.039, 1.103],
+    phys: phys(0.25, { det: 9, detS: 1 }),
+  },
+  [Mat.PLASTIC]: {
+    glsl: PLASTIC, normalStrength: 1.0, heightScale: 0.0003, trim: [0.999, 0.997, 0.998],
+    phys: phys(0.02, { det: 10, detS: 1 }),
+  },
+  [Mat.RUBBER]: {
+    glsl: RUBBER, normalStrength: 1.0, heightScale: 0.0004, trim: [0.811, 0.82, 0.828],
+    phys: phys(0.02, { det: 10, detS: 0.5 }),
+  },
 };

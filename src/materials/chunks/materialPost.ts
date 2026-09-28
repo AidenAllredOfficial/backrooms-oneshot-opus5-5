@@ -1,10 +1,13 @@
 // src/materials/chunks/materialPost.ts — package B: material edits after three's lights_physical_fragment (which
 // fills `material`) and before lights_fragment_begin computes material.dfg, so every light path (baked direct,
-// flashlight, ambient, reflections, the MRT fallback) sees them. Fixed order: wet F0 -> glaze coverage -> sheen
-// (USE_SHEEN) -> clearcoat fields (USE_CLEARCOAT, props) -> spec AA (BR_SPEC_AA, on roughness and
-// clearcoatRoughness) -> the punctual lights' diffuse albedo (brPunctAlb, chunks/surface.ts FRAG_EMISSIVE). Inputs
-// are the main-scope values of chunks/surface.ts (brFilm, brPuddle, brCov, brAbs, brWear, brPileLean, brDust); brCoat
-// is declared here for package D (coat radiance, G-buffer routing).
+// flashlight, ambient, reflections, the MRT fallback) sees them. Fixed order: wet F0 -> glaze coverage -> the family
+// matPost hooks (chunks/family/index.ts: the textile sheen (USE_SHEEN), then the props clearcoat fields
+// (USE_CLEARCOAT)) -> spec AA (BR_SPEC_AA, on roughness and clearcoatRoughness) -> the punctual lights' diffuse albedo
+// (brPunctAlb, chunks/surface.ts FRAG_EMISSIVE). Inputs are the main-scope values of chunks/surface.ts (brFilm,
+// brPuddle, brCov, brAbs, brWear, brPileLean, brDust); brCoat is declared here for package D (coat radiance, G-buffer
+// routing) and set by the props family.
+
+import { familyHook } from './family/index.ts';
 
 /** Injected after `#include <lights_physical_fragment>`. */
 export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `
@@ -23,25 +26,9 @@ export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `
 	material.specularColorBlended *= brGk;
 	material.specularF90 *= brGk;
 }
-// 3. textile sheen (Charlie lobe): fibre-tinted, lost where the pile is wet or crushed (and under standing water); the
-// pile lean seen from the camera narrows / widens it
-#ifdef USE_SHEEN
-{
-	vec4 brLD = uBrLayerD[ brL ];
-	material.sheenColor = brLD.z * sqrt( max( diffuseColor.rgb, vec3( 0.0 ) ) ) * ( 1.0 - 0.85 * max( brFilm, brAbs ) ) * ( 1.0 - 0.4 * brWear ) * ( 1.0 - brPuddle );
-	material.sheenRoughness = clamp( brLD.w + BR_SHEEN_LEAN_ROUGH * brPileLean, 0.07, 1.0 );
-}
-#endif
-// 4. clearcoat (props with the coat bit: car paint, locker enamel): a lacquer lobe that dust dulls
+// 3-4. family hooks (textile sheen, props clearcoat); brCoat: a clearcoat pixel (props)
 bool brCoat = false;
-#ifdef USE_CLEARCOAT
-brCoat = ( brF & BR_F_PROP_AUX ) != 0 && vBrEmit <= 0.0 && ( int( brAuxB.z ) & 2 ) != 0;
-material.clearcoat = brCoat ? 1.0 - brDust : 0.0;
-material.clearcoatRoughness = min( max( BR_COAT_ROUGH, 0.0525 ) + geometryRoughness, 1.0 );
-material.clearcoatF0 = vec3( 0.04 );
-material.clearcoatF90 = 1.0;
-#endif
-// 5. specular AA (projected-space NDF filtering, Tokuyoshi & Kaplanyan 2019): the screen-space variance of the
+${familyHook('matPost')}// 5. specular AA (projected-space NDF filtering, Tokuyoshi & Kaplanyan 2019): the screen-space variance of the
 // shading normal widens the lobe, alpha^2 += min( 2 sigma^2 ( |dn/dx|^2 + |dn/dy|^2 ), kappa ), so normal-mapped
 // glints, grout bevels and puddle shores do not sparkle. Weighted like the Toksvig term by the layer's share of
 // normal variance that is lobe broadening (tiles: the bevels cover little area, the glaze must stay glossy far away)
