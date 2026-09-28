@@ -32,7 +32,7 @@ import type {
   AtmosphereState, LightingRuntime, MaterialGlobals, TextureSet, TileRuntime, WorldQuery,
 } from '../core/runtime.ts';
 import { copyParams, createAtmosphereBlender, newAtmosphereState } from './atmosphereBlend.ts';
-import { LANDMARK_EV_MIN } from './atmospheres.ts';
+import { LANDMARK_EV_MIN, TORCH_EV } from './atmospheres.ts';
 import { createFlashlight } from './Flashlight.ts';
 import type { FlashlightRig } from './Flashlight.ts';
 import { createFlashlightBounce } from './FlashlightBounce.ts';
@@ -366,6 +366,10 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
       const zone = world.zoneAt(ex, ez);
       const mood = world.moodAt(ex, ez);
       copyParams(atm, blender.update(zone, mood, dt, snap));
+      // torch on: the camcorder may open up below the mood's floor to expose the beam (atmospheres.ts TORCH_EV)
+      if (flashlight.on && atm.ev100Range[0] > TORCH_EV.MIN) {
+        atm.ev100Range[0] = Math.max(TORCH_EV.MIN, atm.ev100Range[0] - TORCH_EV.DROP);
+      }
       const lmEv = landmarkEvMin(world, gi, gj, pcx, pcz);
       if (lmEv > atm.ev100Range[0]) {
         atm.ev100Range[0] = lmEv;

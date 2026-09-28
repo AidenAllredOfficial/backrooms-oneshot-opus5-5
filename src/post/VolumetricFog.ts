@@ -38,7 +38,8 @@ import type { FrameContext } from './ScenePass.ts';
 
 export const VOL = {
   /** VOL_GAIN: calibration of the baked in-scatter against the analytic haze it replaces (lit zones keep their
-   * brightness; the final grade retune follows) */
+   * brightness). Kept by the C.7b grade retune, which thinned the zones' haze / dust densities instead: 0.6 changed
+   * the lit Level 0 views by < 0.005 luma, while the densities decide how smoky the air reads. */
   GAIN: 0.75,
   /** calibration of the torch in-scatter (1 = physical) */
   TORCH_GAIN: 1.0,
