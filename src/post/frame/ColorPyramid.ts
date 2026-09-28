@@ -75,8 +75,7 @@ interface FramebufferProps { __webglFramebuffer?: WebGLFramebuffer | WebGLFrameb
  * level, which cost 0.1-0.2 ms at ultra. */
 export class LowPassMips {
   readonly material: THREE.ShaderMaterial;
-  private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private readonly quad = new FullscreenQuad();
   private readonly srcInv = new THREE.Vector2(1, 1);
   private readonly dstSize = new THREE.Vector2(1, 1);
   private readonly scratch: THREE.WebGLRenderTarget[] = [];
@@ -88,12 +87,6 @@ export class LowPassMips {
       tSrc: { value: null }, uLod: { value: 0 }, uSrcInv: { value: this.srcInv }, uDstSize: { value: this.dstSize },
       uMax: { value: max },
     });
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
-    const mesh = new THREE.Mesh(g, this.material);
-    mesh.frustumCulled = false;
-    this.scene.add(mesh);
-    this.scene.matrixWorldAutoUpdate = false;
   }
 
   /** The scratch target of level k, sized w x h. */
@@ -132,8 +125,7 @@ export class LowPassMips {
       this.srcInv.set(1 / sw, 1 / sh);
       this.dstSize.set(w, h);
       const scratch = this.level(k, w, h);
-      renderer.setRenderTarget(scratch);
-      renderer.render(this.scene, this.camera);
+      this.quad.render(renderer, this.material, scratch);
       const src = (renderer.properties.get(scratch) as FramebufferProps).__webglFramebuffer as WebGLFramebuffer;
       state.bindFramebuffer(gl.READ_FRAMEBUFFER, src);
       state.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fbs[k]);
@@ -156,7 +148,6 @@ export class LowPassMips {
   dispose(): void {
     this.release();
     this.material.dispose();
-    (this.scene.children[0] as THREE.Mesh).geometry.dispose();
   }
 }
 
