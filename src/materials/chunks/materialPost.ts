@@ -2,8 +2,9 @@
 // fills `material`) and before lights_fragment_begin computes material.dfg, so every light path (baked direct,
 // flashlight, ambient, reflections, the MRT fallback) sees them. Fixed order: wet F0 -> glaze coverage -> sheen
 // (USE_SHEEN) -> clearcoat fields (USE_CLEARCOAT, props) -> spec AA (BR_SPEC_AA, on roughness and
-// clearcoatRoughness) -> the punctual lights' diffuse albedo (brPunctAlb, chunks/surface.ts FRAG_EMISSIVE). Inputs are the main-scope values of chunks/surface.ts (brFilm, brPuddle, brCov, brAbs,
-// brWear, brPileLean, brDust); brCoat is declared here for package D (coat radiance, G-buffer routing).
+// clearcoatRoughness) -> the punctual lights' diffuse albedo (brPunctAlb, chunks/surface.ts FRAG_EMISSIVE). Inputs
+// are the main-scope values of chunks/surface.ts (brFilm, brPuddle, brCov, brAbs, brWear, brPileLean, brDust); brCoat
+// is declared here for package D (coat radiance, G-buffer routing).
 
 /** Injected after `#include <lights_physical_fragment>`. */
 export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `

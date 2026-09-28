@@ -69,6 +69,13 @@ export const SSR = {
   /** the trace follows the macro (depth) normal instead of the block's mean normal as 1 - |mean| grows over this range
    * (a normal map finer than the trace grid) */
   NVAR: [0.002, 0.02] as const,
+  /** ...where the depth is a surface: the macro normal is the mean of the depth normals at the texel and one texel
+   * left / right / below / above, used as far as their mean length lies over this range (a ceiling grid's T-bars
+   * narrower than a pixel, depth noise at the horizon and creases are no surface) */
+  NCOH: [0.85, 0.95] as const,
+  /** ...and as far as it agrees with the block's mean (cosine over this range: a corrugation's partial-period mean
+   * lies within ~35 deg of its plane; a depth normal further off is not the block's surface) */
+  NAGREE: [0.7, 0.8] as const,
   /** a block pixel joins the representative's lobe only within this roughness of it (another surface / lobe: its
    * own texels carry it through the upsample's roughness weight) */
   BLOCK_DR: 0.15,
@@ -301,6 +308,10 @@ layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_UP ${f(SSR.UP_FADE)}
 #define BR_SSR_NVAR0 ${f(SSR.NVAR[0])}
 #define BR_SSR_NVAR1 ${f(SSR.NVAR[1])}
+#define BR_SSR_NCOH0 ${f(SSR.NCOH[0])}
+#define BR_SSR_NCOH1 ${f(SSR.NCOH[1])}
+#define BR_SSR_NAGREE0 ${f(SSR.NAGREE[0])}
+#define BR_SSR_NAGREE1 ${f(SSR.NAGREE[1])}
 #define BR_SSR_BLOCK_DR ${f(SSR.BLOCK_DR)}
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
 ${SSR_OCT_GLSL}
@@ -369,9 +380,20 @@ void main() {
 	// the macro surface: the depth's own normal. A block whose normals disagree (a normal map finer than the trace
 	// grid: a corrugated deck's ribs) is traced along it, the spread kept as the Toksvig cone: the mean of a partial rib
 	// period changes from block to block and beat against the grid into dashed glints beside every high-bay, crawling
-	// as the camera moved. The per-pixel weight Ws still draws the ribs in the composite.
+	// as the camera moved. The per-pixel weight Ws still draws the ribs in the composite. Nm: the mean depth normal of
+	// the texel and its four neighbours, where they agree with each other (a surface) and with the block's mean; one
+	// pixel's depth slope at geometry finer than a pixel (a ceiling grid's far T-bars) is noise, and rays reflected
+	// about it caught the lamps as sparkles along every far grid line.
 	vec3 Ng = brDepthNormal( p );
-	vec3 Nt = normalize( mix( N, Ng, smoothstep( BR_SSR_NVAR0, BR_SSR_NVAR1, 1.0 - nLen ) ) );
+	for ( int k = 0; k < 4; k ++ ) {
+		ivec2 o = ( k < 2 ? ivec2( 1, 0 ) : ivec2( 0, 1 ) ) * ( ( k & 1 ) == 0 ? - uStep : uStep );
+		Ng += brDepthNormal( clamp( p + o, ivec2( 0 ), lim ) );
+	}
+	float coh = 0.2 * length( Ng );
+	if ( coh > 1e-3 ) Ng /= 5.0 * coh; // (also false for a non-finite normal: the block's then)
+	else { Ng = N; coh = 0.0; }
+	vec3 Nm = normalize( mix( N, Ng, smoothstep( BR_SSR_NCOH0, BR_SSR_NCOH1, coh ) * smoothstep( BR_SSR_NAGREE0, BR_SSR_NAGREE1, dot( N, Ng ) ) ) );
+	vec3 Nt = normalize( mix( N, Nm, smoothstep( BR_SSR_NVAR0, BR_SSR_NVAR1, 1.0 - nLen ) ) );
 	vec3 V = - normalize( P );
 	float nv = dot( Nt, V );
 	if ( nv < 0.01 ) return;
@@ -380,7 +402,7 @@ void main() {
 	// a normal map can tilt the reflected ray below the macro surface: the ray would meet that surface a cell on and
 	// copy it. What a groove reflects there is its own neighbouring flank: leave it to the fallback, whose horizon term
 	// already weighs those directions down
-	float up = dot( R, Ng );
+	float up = dot( R, Nm );
 	if ( up <= 0.0 ) return;
 	vec2 hitUv;
 	float hitZ, hitGap, rayT;
