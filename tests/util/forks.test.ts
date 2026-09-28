@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { browserRunning, forksThatFit, parseVitestArgv, planForks, weightOf, type Ledger, type PlanInput } from './forks.ts';
+import {
+  browserRunning, createForkRegistry, forksThatFit, parseVitestArgv, planForks, weightOf, type ForkRegistry, type Ledger, type PlanInput,
+} from './forks.ts';
 
 const base = (o: Partial<PlanInput>): PlanInput => ({
   want: 4, watch: false, minFreeMb: 4500, ledger: null, label: 'vitest test', memAvailableMb: () => 16000,
@@ -100,6 +102,36 @@ describe('fork sizing', () => {
     rmSync(path.join(tmp, 'slot-0'), { recursive: true });
     const ledger: Ledger = { acquire: () => null, status: () => ({ holders: [{ pid: process.pid, label: 'rsd browser', weightMb: 700 }] }) };
     expect(await browserRunning(ledger, tmp)).toBe(true);
+  });
+
+  it('concurrent runs share the machine-wide fork total: 4, then 2, then wait; dead runs do not count', () => {
+    tmp = mkdtempSync(path.join(tmpdir(), 'test-forks-'));
+    const a = createForkRegistry(tmp, process.pid), b = createForkRegistry(tmp, process.ppid), c = createForkRegistry(tmp, 1);
+    expect(a.reserve(4, 6)).toBe(4);
+    expect(b.reserve(4, 6)).toBe(2);
+    expect(c.reserve(4, 6)).toBe(0);
+    expect(c.others()).toBe(6);
+    a.set(3); // the ledger admitted fewer than reserved
+    expect(c.reserve(4, 6)).toBe(1);
+    a.release();
+    expect(b.others()).toBe(1);
+    writeFileSync(path.join(tmp, '999999999.json'), JSON.stringify({ forks: 4 })); // a dead run
+    expect(createForkRegistry(tmp, process.pid).reserve(4, 6)).toBe(3);
+  });
+
+  it('a run waits for a registry reservation, then sizes by memory within it; release frees both', async () => {
+    const free = [0, 0, 2];
+    const reg: ForkRegistry & { set: (n: number) => void; sets: number[]; released: number } = {
+      sets: [], released: 0,
+      reserve: (want) => Math.min(want, free.shift() ?? 2), set(n) { reg.sets.push(n); }, release() { reg.released++; }, others: () => 4,
+    };
+    const logs: string[] = [];
+    const p = await planForks(base({ registry: reg, log: (m) => logs.push(m), memAvailableMb: () => 6000 }));
+    expect([p.forks, p.waited]).toEqual([1, true]); // reserved 2, MemAvailable 6000 fits 1
+    expect(reg.sets).toEqual([1]);
+    expect(logs.join('\n')).toMatch(/other test runs hold 4 of the 6 forks/);
+    p.release(); p.release();
+    expect(reg.released).toBe(1);
   });
 
   it('reads watch mode and --maxWorkers from the vitest command line', () => {

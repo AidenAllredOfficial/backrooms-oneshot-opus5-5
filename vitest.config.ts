@@ -5,8 +5,9 @@
 //   way the game runs in the browser. Vite's module runner turned every cross-module reference in the hot world /
 //   bake code into a getter call (43% of the suite's CPU). Needs erasable TS only (tsconfig enforces it), no vi.mock,
 //   and `import.meta.env` guarded (it is undefined under Node).
-// - Forks are sized from the memory budget at startup (tests/util/forks.ts): 1-4, fewer while a tool browser runs,
-//   and admitted through the machine-wide ledger (tools/lib/budget.mjs) when it exists. Each fork's heap is capped.
+// - Forks are sized from the memory budget at startup (tests/util/forks.ts): 1-4, fewer while a tool browser runs or
+//   other test runs hold forks (6 machine-wide), admitted through the machine-wide ledger (tools/lib/budget.mjs) when
+//   it exists. Each fork's heap is capped.
 // - Two projects: 'heavy' (world generation, baking, meshing, audio synthesis: one fresh process per file) and
 //   'unit' (everything else: files share workers, no per-file process spawn and re-import).
 // - The 'sweep' tag marks statistical / acceptance sweeps and real full-bake gates. `npm test` runs everything (the
@@ -16,7 +17,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import {
-  browserRunning, MAX_FORKS, parseVitestArgv, planForks, readMemAvailableMb, weightOf, type ForkWeights, type Ledger, type Plan,
+  browserRunning, createForkRegistry, FORK_REGISTRY_DIR, MAX_FORKS, parseVitestArgv, planForks, readMemAvailableMb, TOTAL_FORKS, weightOf,
+  type ForkWeights, type Ledger, type Plan,
 } from './tests/util/forks.ts';
 
 const ROOT = import.meta.dirname;
@@ -62,6 +64,8 @@ async function sizeForks(): Promise<Plan> {
     const minFreeMb = Number(process.env.BACKROOMS_MIN_FREE_MB ?? 4500);
     const plan = await planForks({
       want, watch: argv.watch, minFreeMb, ledger, weights: budget?.weights, label: `vitest ${path.basename(ROOT)}`,
+      registry: argv.watch ? null : createForkRegistry(process.env.BACKROOMS_TEST_FORK_DIR ?? FORK_REGISTRY_DIR),
+      totalForks: Number(process.env.BACKROOMS_TEST_FORKS_TOTAL ?? TOTAL_FORKS),
       memAvailableMb: readMemAvailableMb, browserRunning: () => browserRunning(ledger),
       log: (msg) => process.stderr.write(msg + '\n'),
     });
