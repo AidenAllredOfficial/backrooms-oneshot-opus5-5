@@ -3,7 +3,9 @@
 //
 // Bilinear interpolation of the 4 neighbouring cells' probes (probe = cell centre), weight 0 across an edge that
 // occludes at the probe height, across different rooms (room ids are chunk-local, so across a chunk line the edge
-// test decides alone), across floor steps > 0.5 m, and for invalid probes; renormalised. Diagonal neighbours need
+// test decides alone), across floor steps > 0.5 m below STEP_CLEAR m above the higher floor (above it the air over
+// both cells is one: the ceiling over a pool took the pool's probes alone and drew its outline as a hard-edged
+// rectangle), and for invalid probes; renormalised. Diagonal neighbours need
 // one open L-shaped path. Linear interpolation between the height layers (tower cells: periodic in y with the
 // fundamental-period layers). Irradiance from the probes' ambient cube at the texel normal (SH-L1 rings for
 // strongly directional fields; the light volume keeps SH-L1 for its direction), then multi-bounce per colour
@@ -40,11 +42,15 @@ const ezOcc = (g: VisGrid, Z: number, col: number, t: number, y: number): boolea
   return k !== 0 && EDGE_OCCLUDES[k] && edgeOccludesAt(k, g.ezA[e], g.ezB[e], t, y, g.ezSill[e]);
 };
 
+/** A floor step > 0.5 m separates the probes of its two cells only below this height (m) over the higher floor. */
+export const STEP_CLEAR = 1;
+
 /** Can probe interpolation connect cell a to its 4-neighbour b at height y (t = metres along the edge)? */
 function link4(g: VisGrid, a: number, b: number, y: number, t: number): boolean {
   const n = g.n;
   if ((g.flags[b] & CellFlag.SOLID) !== 0) return false;
-  if (Math.abs(g.floor[a] - g.floor[b]) > 0.5) return false;
+  const fa = g.floor[a], fb = g.floor[b];
+  if (Math.abs(fa - fb) > 0.5 && y < (fa > fb ? fa : fb) + STEP_CLEAR) return false;
   if (g.room[a] !== g.room[b] && g.slot[a] === g.slot[b]) return false;
   if (g.group[a] !== g.group[b]) return false;
   const ai = a % n, aj = (a - ai) / n, bi = b % n, bj = (b - bi) / n;
@@ -65,7 +71,8 @@ function linked(g: VisGrid, a: number, b: number, y: number, tEx: number, tEz: n
 }
 
 /** Can a smooth field at (x, y, z) (halo cells / m) of owner cell a be interpolated with cell b's (probe links:
- * same room / group, no occluding edge between at y, floor steps <= 0.5 m, diagonals through an open L-path)? */
+ * same room / group, no occluding edge between at y, floor steps <= 0.5 m or y STEP_CLEAR above the higher floor,
+ * diagonals through an open L-path)? */
 export function cellsLinked(g: VisGrid, a: number, b: number, x: number, y: number, z: number): boolean {
   const hi = a % g.n, hj = (a - hi) / g.n;
   return linked(g, a, b, y, clampT((z - hj) * CELL), clampT((x - hi) * CELL));

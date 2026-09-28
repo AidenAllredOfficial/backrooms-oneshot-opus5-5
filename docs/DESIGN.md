@@ -3955,7 +3955,7 @@ export function createBakeCache(): BakeCache;
      - **Misses** (no hit within 8 m) use a tile-independent ambient term: `ρ̄_probe·Ē_cell/π`, where `Ē_cell` is the mean direct irradiance of the probe's own cell floor and `ρ̄_probe` the probe's own hit-weighted albedo.
      - Project to **SH-L1 RGB** (4 coefficients × 3).
    - **Texel indirect.**
-     - Bilinear interpolation of the neighbouring cells' probes, with weight 0 across edges occluding at the probe height, across different `room`, or across floor steps > 0.5 m; renormalise.
+     - Bilinear interpolation of the neighbouring cells' probes, with weight 0 across edges occluding at the probe height, across different `room`, or across floor steps > 0.5 m at heights below 1 m over the higher floor (`STEP_CLEAR`: above it both cells share the air, so the ceiling over a pool blends across the rim); renormalise.
      - Linear interpolation between the height layers.
      - Evaluate SH irradiance at the texel normal.
      - Multi-bounce **per colour channel**: `E_ind,c /= (1 − min(0.6, 0.55·ρ̄_probe,c))`, where `ρ̄_probe` is the mean **RGB** albedo over **that probe's own ray hits** (interpolated with the probe weights), never a per-tile mean. Every extra bounce is tinted again, so enclosed coloured rooms keep their colour in the shadows. The flicker (luminance) channels use the luma of ρ̄.
