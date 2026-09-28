@@ -290,6 +290,11 @@ The last resort stays outside the repository: an ad-hoc OOM guard script run by 
 | `BACKROOMS_TILE_CACHE`, `_DIR`, `_MB` | on, `~/.cache/backrooms-tilecache`, 8192 | Tile cache per client (the daemon serves each setting separately). |
 | `CHROMIUM`, `BACKROOMS_GPU`, `BACKROOMS_UNCAPPED` | | Browser settings. The daemon refuses a request whose settings differ from its browser's; use `--direct`. |
 
+The daemon inherits the environment of the client that started it. Per request it takes the tile-cache settings,
+`BACKROOMS_HC` and the eval timeout, and it checks the browser settings. Everything else is daemon-wide until it
+exits: the budget variables, `BACKROOMS_RSD_LANES`, the idle timers, `BACKROOMS_NOPRIME`, `BACKROOMS_MEMO_MB` and
+`BACKROOMS_RECYCLE_PSS_MB`. To change them, `stop` the daemon and start it again with the new values.
+
 **Troubleshooting.**
 - `node tools/rsd/client.mjs log` shows the last daemon log lines.
 - `stop` ends the daemon; the next call starts a fresh one.
@@ -345,5 +350,22 @@ The fresh-page shot on the daemon breaks down as: new page 0.05 s, page load 0.3
 the page (0.02 s). Against Lane 2's in-progress contract-v2 tree, shots taken in place cost 1.1-1.7 s against
 2.0-2.5 s on fresh pages, with no wall-clock wait.
 
+Review re-measurements (Lane 2 at 26c4689 merged with this branch, review fixes applied; same conditions):
+
+| Run | Wall | Peak daemon tree RSS / PSS |
+|---|---|---|
+| D2 at 5c3ea7d: `shoot.mjs` / daemon 2 lanes warm / memo | 32.9 s / 14.1-14.2 s / 0.32 s | 2.97 / 2.29 (old tool), 3.24 / 2.36 GB |
+| 14-shot iteration at 5c3ea7d: `shoot.mjs` / daemon | 39.1 s / 17.8 s | |
+| D2 contract v2: in place warm / `--fresh-pages` / `--direct` | 11.5-13.1 s / 13.7 s / 15.7 s | 3.50 / 2.65 GB |
+| D2 contract v2, cold cache after a warm build (lane 1 stays closed) | 71.4 s | 3.81 / 3.23 GB |
+| 14-shot iteration, contract v2, warm / memo | 7.9-8.0 s / 0.32 s | 2.98 / 2.33 GB |
+| 4 clients x 3 shots: 5c3ea7d / contract v2 | 14.2 s / 13.3 s | 3.44 / 2.56 GB |
+| QA zones, contract v2: cold (cap guard) / warm | 243 s / 49.4 s | 4.14 / 3.30, 3.52 / 2.65 GB |
+
+D2 with contract v2 was 0 px different, 12 of 12, between cold and warm cache, in place and fresh pages, daemon build
+and `--direct`, and memo and re-render. At 5c3ea7d the daemon matched the old tool on 11 of 12 (ultra PARKING
+differs by 500-900 px between any two runs, the old tool's included).
+
 Scripts and raw data are in `/tmp/gfx/lane1` (`d2.sh`, `daemonrun.sh`, `multi.sh`, `measure.sh`, `runs/*.mem`).
-They are not part of the repository.
+The review's are in `/tmp/gfx/rev1` (`d2.sh`, `loop14.sh`, `multi.sh`, `qa.sh`, `run.sh`, `runs/`). They are not
+part of the repository.
