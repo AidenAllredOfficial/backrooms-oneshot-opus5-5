@@ -4,8 +4,12 @@
 // 2 x 0.6 m bands per wall face) for probe hits closer than 5 m, 1.2 m patches beyond (the level is chosen from
 // the hit distance, so a patch value never depends on which tile asks). Heights are quantized into bands, so the
 // periodic tower stack and multi-level spaces get distinct patches. A patch's direct irradiance uses the K_MAX
-// strongest lights of its cell, point (2-point) form factors (exact polygon very close to an emitter) and the
-// bitset visibility of its owner cell at the nearest layer height (tower cells: one DDA ray per light).
+// strongest lights of its cell and the bitset visibility of its owner cell at the nearest layer height (tower cells:
+// one DDA ray per light). RECT emitters use the centre's point (2-point) form factor (exact polygon very close to the
+// emitter). SPHERE and DISK emitters use the patch MEAN I * Omega / A (Omega: the solid angle the patch rectangle
+// subtends at the source, pointOverRect): a cage bulb hanging 6.5 cm under a coarse ceiling patch's centre gave the
+// centre's cos / d^2 (237 m^-2, about 60x the patch mean) to every probe ray landing anywhere on the 1.2 m patch --
+// firefly probes, which the bilinear probe interpolation spread into round 2.4 m blotches.
 // Irradiance (not radiance) is cached per world chunk, so albedo (and the wet x0.7 tint) is applied by the caller
 // from the surface actually hit. Values are pure functions of world position (exact halo arithmetic).
 // Each patch also stores the direct irradiance LUMINANCE of the dynamic (flicker-channel) lights, per channel
@@ -14,11 +18,12 @@
 
 import { CELL } from '../core/constants.ts';
 import { CellFlag } from '../core/ids.ts';
-import { formFactor } from './areaLight.ts';
+import { formFactor, pointOverRect } from './areaLight.ts';
 import { FILTER_CELL, FILTER_NONE, isTowerCell, selectDynamic, selectLights, tail, tailSum } from './classify.ts';
 import { occluded } from './dda.ts';
 import { sunAt, sunOut } from './direct.ts';
 import { nearestBit, type BakeJob } from './job.ts';
+import { SHAPE_DISK, SHAPE_RECT, type LightSet } from './lights.ts';
 import { growF32, windowDist2, windowW } from './util.ts';
 import { visBits } from './visbits.ts';
 
@@ -38,6 +43,43 @@ export const PATCH_DYN = 3;
 export const pref: { e: Float32Array<ArrayBuffer>; o: number } = { e: new Float32Array(3), o: 0 };
 
 const WALL_NX = [1, -1, 0, 0], WALL_NZ = [0, 0, 1, -1];
+
+// The patch rectangle of the patch being evaluated (set by patchE): normal axis (0 x, 1 y, 2 z) and its sign, the
+// plane (halo cells for x / z, m for y) and the in-plane ranges: U along x (floors, ceilings, walls facing z) or z
+// (walls facing x), halo cells; V along z (floors, ceilings; halo cells) or y (walls; m).
+let rAx = 1, rS = 1, rP = 0, rU0 = 0, rU1 = 0, rV0 = 0, rV1 = 0;
+
+/**
+ * Mean geometric factor of a SPHERE or DISK light l over the current patch rectangle: I * mean(cos / d^2) =
+ * I * Omega / A (pointOverRect), 0 when the source is behind the patch plane. The source's height above the plane is
+ * clamped to its radius (the soft core of formFactor). DISK emitters (one-sided) also get their emitter cosine
+ * toward the patch centre. Differences are taken in halo units before scaling (exact in every halo frame).
+ */
+function meanFactor(L: LightSet, l: number): number {
+  const o = l * 3;
+  const lx = L.pos[o], ly = L.pos[o + 1], lz = L.pos[o + 2];
+  let h: number, u0: number, u1: number, v0: number, v1: number;
+  if (rAx === 1) {
+    h = (ly - rP) * rS;
+    u0 = (rU0 - lx) * CELL; u1 = (rU1 - lx) * CELL; v0 = (rV0 - lz) * CELL; v1 = (rV1 - lz) * CELL;
+  } else {
+    h = (rAx === 0 ? lx - rP : lz - rP) * CELL * rS;
+    const lu = rAx === 0 ? lz : lx;
+    u0 = (rU0 - lu) * CELL; u1 = (rU1 - lu) * CELL; v0 = rV0 - ly; v1 = rV1 - ly;
+  }
+  if (h <= 0) return 0;
+  const r = L.w[l] * 0.5;
+  const f = pointOverRect(h > r ? h : r, u0, u1, v0, v1);
+  if (L.shape[l] !== SHAPE_DISK) return f;
+  // emitter cosine toward the rectangle centre (world axes, m)
+  const cu = -0.5 * (u0 + u1), cv = -0.5 * (v0 + v1);
+  const wx = rAx === 1 ? cu : rAx === 0 ? h * rS : cu;
+  const wy = rAx === 1 ? h * rS : cv;
+  const wz = rAx === 1 ? cv : rAx === 0 ? cu : h * rS;
+  const wl = Math.sqrt(wx * wx + wy * wy + wz * wz);
+  const ce = wl > 1e-9 ? -(L.nrm[o] * wx + L.nrm[o + 1] * wy + L.nrm[o + 2] * wz) / wl : 0;
+  return ce > 0 ? f * ce : 0;
+}
 
 /**
  * Irradiance of the patch of `kind` containing (x, y, z) in cell c (wall: face normal `dir`).
@@ -75,13 +117,32 @@ export function patchE(job: BakeJob, kind: number, c: number, x: number, y: numb
     if (dir === 0) { px = hi + 0.078125; pz = hj + a; } else if (dir === 1) { px = hi + 0.921875; pz = hj + a; }
     else if (dir === 2) { px = hi + a; pz = hj + 0.078125; } else { px = hi + a; pz = hj + 0.921875; }
     nx = WALL_NX[dir]; nz = WALL_NZ[dir];
+    // patch rectangle: the band's wall strip, clipped to the cell's open height (at least 0.1 m around the centre)
+    let v0 = band * bandH - 12, v1 = v0 + bandH;
     if (!tower) {
-      const lo = (g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c]) + 0.05, hiY = g.ceil[c] - 0.05;
+      const fl = g.blockTop[c] > g.floor[c] ? g.blockTop[c] : g.floor[c];
+      const lo = fl + 0.05, hiY = g.ceil[c] - 0.05;
       py = py < lo ? lo : py > hiY ? hiY : py;
+      if (v0 < fl) v0 = fl;
+      if (v1 > g.ceil[c]) v1 = g.ceil[c];
+      if (v1 - v0 < 0.1) { v0 = py - 0.05; v1 = py + 0.05; }
     }
+    const ha = fine ? 0.25 : 0.5; // half-extent along the wall (cells)
+    rAx = dir <= 1 ? 0 : 2; rS = dir <= 1 ? nx : nz; rP = dir <= 1 ? px : pz;
+    rU0 = (dir <= 1 ? pz : px) - ha; rU1 = rU0 + 2 * ha; rV0 = v0; rV1 = v1;
   } else {
     if (fine) { px = hi + 0.25 + 0.5 * (sub & 1); pz = hj + 0.25 + 0.5 * (sub >> 1); } else { px = hi + 0.5; pz = hj + 0.5; }
     ny = kind === PK_FLOOR ? 1 : -1;
+    // patch rectangle: the real floor (or blocker top) / ceiling when it lies in the band, else the band centre
+    const b0 = band * bandH - 12, b1 = b0 + bandH;
+    let yP = py;
+    if (kind === PK_FLOOR) {
+      if (g.floor[c] >= b0 && g.floor[c] < b1) yP = g.floor[c];
+      else if (g.blockTop[c] >= b0 && g.blockTop[c] < b1) yP = g.blockTop[c];
+    } else if (g.ceil[c] >= b0 && g.ceil[c] < b1) yP = g.ceil[c];
+    const ha = fine ? 0.25 : 0.5;
+    rAx = 1; rS = ny; rP = yP;
+    rU0 = px - ha; rU1 = px + ha; rV0 = pz - ha; rV1 = pz + ha;
   }
   // ---- direct irradiance
   const L = job.L;
@@ -95,7 +156,7 @@ export function patchE(job: BakeJob, kind: number, c: number, x: number, y: numb
     const md = selectDynamic(job, px, py, pz, group, dsel);
     for (let i = 0; i < md; i++) {
       const l = dsel[i];
-      const f = formFactor(L, l, px, py, pz, nx, ny, nz, PATCH_EXACT);
+      const f = L.shape[l] === SHAPE_RECT ? formFactor(L, l, px, py, pz, nx, ny, nz, PATCH_EXACT) : meanFactor(L, l);
       if (f <= 0) continue;
       const o = l * 3;
       if (tower) {
@@ -112,7 +173,7 @@ export function patchE(job: BakeJob, kind: number, c: number, x: number, y: numb
     }
     for (let i = 0; i < m; i++) {
       const l = sel[i];
-      const f = formFactor(L, l, px, py, pz, nx, ny, nz, PATCH_EXACT);
+      const f = L.shape[l] === SHAPE_RECT ? formFactor(L, l, px, py, pz, nx, ny, nz, PATCH_EXACT) : meanFactor(L, l);
       if (f <= 0) continue;
       const o = l * 3;
       if (tower) {
