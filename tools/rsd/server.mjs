@@ -38,6 +38,9 @@ import { memoAllowed, memoKey, laneEligible, pickJob, qualityOf, isExclusive } f
 import { RUN_DIR, DAEMON_JSON, daemonVersion } from './client.mjs';
 
 const VERSION = daemonVersion();
+// capture-memo code key: the capture core AND the daemon code that drives it (every tools/rsd and tools/lib module),
+// so no code change can serve a capture made by other code
+const MEMO_CODE = `${CAPTURE_CODE_HASH}:${VERSION}`;
 const MEMO_DIR = path.join(RENDER_DIR, 'memo');
 const MEMO_CAP = Number(process.env.BACKROOMS_MEMO_MB ?? 2048) * 1048576;
 const MAX_LANES = Math.max(1, Math.min(2, Number(process.env.BACKROOMS_RSD_LANES ?? 2)));
@@ -71,6 +74,15 @@ if (!takeLock()) { log('another capture daemon is running; exiting'); process.ex
 
 // ---------------------------------------------------------------- state
 let retiring = false;
+// A daemon accepts renders for this long after it starts even when asked to retire: the client that started it
+// always gets its request in, so two clients running different tool code cannot retire each other's daemons forever.
+const RETIRE_GRACE_MS = 3000;
+const inGrace = () => Date.now() - T_START < RETIRE_GRACE_MS;
+function maybeRetire() {
+  if (!retiring || stopping || requests.size > 0) return;
+  if (inGrace()) { setTimeout(maybeRetire, RETIRE_GRACE_MS - (Date.now() - T_START) + 20); return; }
+  void shutdown('retired');
+}
 let stopping = false;
 let lastActivity = Date.now();
 const requests = new Map(); // id -> request
@@ -155,22 +167,35 @@ async function serveTileCache(req, res, cfg) {
   if (!hit) { res.statusCode = 404; res.end(); return; }
   const [p, fn] = hit;
   req.url = req.url.slice(p.replace(/\/$/, '').length) || '/'; // connect strips the mount path
-  if (req.method === 'GET') res.once('finish', () => noteCacheGet(res.statusCode === 200));
+  if (req.method === 'GET' && ref) res.once('finish', () => noteCacheGet(cacheKeyOf(cfg.dir, ref[1]), res.statusCode === 200));
   fn(req, res, () => { res.statusCode = 404; res.end(); });
 }
 
-// recent tile-cache GETs: a mostly-missing cache means cold locations, where a second page only splits the
-// memory-bandwidth-bound bake between 8 workers instead of 4 (no gain, +0.6 GB), so lane 1 stays closed
-const cacheWindow = [];
+// Recent tile-cache GETs per (cache directory, build): a mostly-missing cache means cold locations, where a second
+// page only splits the memory-bandwidth-bound bake between 8 workers instead of 4 (no gain, +0.6 GB; two cold pages
+// took the tree to 3.44 GB PSS), so lane 1 stays closed for that build. Per build, not global: a tree whose worker
+// code changed misses every tile however warm the previous tree's cache was.
+const cacheWindows = new Map(); // cacheKeyOf(dir, distHash) -> recent GETs (1 hit, 0 miss)
 let warmPump = null;
-function noteCacheGet(hit) {
-  cacheWindow.push(hit ? 1 : 0);
-  if (cacheWindow.length > 60) cacheWindow.shift();
-  // the cache just proved warm while work is queued: let lane 1 start
-  if (!coldCache() && queue.length && !warmPump) warmPump = setTimeout(() => { warmPump = null; pump(); }, 100);
+function cacheKeyOf(dir, distHash) { return `${dir}\0${distHash}`; }
+function noteCacheGet(key, hit) {
+  let w = cacheWindows.get(key);
+  if (!w) {
+    w = [];
+    cacheWindows.set(key, w);
+    if (cacheWindows.size > 32) cacheWindows.delete(cacheWindows.keys().next().value);
+  }
+  w.push(hit ? 1 : 0);
+  if (w.length > 60) w.shift();
+  // the cache just proved warm for queued work: let lane 1 start
+  if (!coldFor(key) && queue.some((j) => j.cacheKey === key) && !warmPump) warmPump = setTimeout(() => { warmPump = null; pump(); }, 100);
 }
-/** Not known to be warm: fewer than 20 recent GETs, or under 75 % hits. */
-function coldCache() { return cacheWindow.length < 20 || cacheWindow.reduce((a, x) => a + x, 0) / cacheWindow.length < 0.75; }
+/** Not known to be warm: fewer than 20 recent GETs of that build and cache, or under 75 % hits. */
+function coldFor(key) {
+  const w = cacheWindows.get(key);
+  return !w || w.length < 20 || w.reduce((a, x) => a + x, 0) / w.length < 0.75;
+}
+const coldJob = (j) => coldFor(j.cacheKey);
 
 // one origin per tile-cache setting (the worker addresses /__tilecache/ on its own origin)
 const origins = new Map(); // `${dir}\0${mb}` -> { url, server }
@@ -206,7 +231,7 @@ function ensureBrowser() {
     try {
       const b = await launchBrowser();
       const w = await warmGpu(b);
-      browserInfo = { version: b.version(), renderer: w.renderer, lost: w.lost, exe: exeStamp() };
+      browserInfo = { version: b.version(), renderer: w.renderer, lost: w.lost, exe: exeStamp(), env: MY_BROWSER_ENV };
       try { writeFileSync(path.join(RUN_DIR, 'browser.json'), JSON.stringify(browserInfo)); } catch { /* ignore */ }
       b.on('disconnected', () => { if (browser === b) { log('browser disconnected'); browser = null; browserP = null; releaseBrowserLease(); for (const l of lanes) l.lane.setBrowser(null); } });
       browser = b;
@@ -253,13 +278,20 @@ function exeStamp() {
   try { const st = statSync(exe); return `${exe}:${st.size}:${Math.round(st.mtimeMs)}`; } catch { return exe; }
 }
 
-/** Chromium version + GPU renderer for memo keys, without launching when a previous launch recorded them. */
+/**
+ * Chromium version + GPU renderer (+ the browser environment: CHROMIUM, BACKROOMS_GPU, BACKROOMS_UNCAPPED) for memo
+ * keys, without launching when a previous launch with the same executable and environment recorded them. (A record
+ * of a BACKROOMS_GPU=amd daemon must never key the captures of an NVIDIA one.)
+ */
 async function browserKey() {
   if (!browserInfo) {
-    try { const b = JSON.parse(readFileSync(path.join(RUN_DIR, 'browser.json'), 'utf8')); if (b.exe === exeStamp()) browserInfo = b; } catch { /* none */ }
+    try {
+      const b = JSON.parse(readFileSync(path.join(RUN_DIR, 'browser.json'), 'utf8'));
+      if (b.exe === exeStamp() && b.env === MY_BROWSER_ENV) browserInfo = b;
+    } catch { /* none */ }
   }
   if (!browserInfo) await ensureBrowser();
-  return `${browserInfo.version}\0${browserInfo.renderer}`;
+  return `${browserInfo.version}\0${browserInfo.renderer}\0${MY_BROWSER_ENV}`;
 }
 
 // ---------------------------------------------------------------- memo
@@ -355,7 +387,9 @@ function memoPut(key, distHash, entry, qa) {
 /** Next job for a lane (policy.mjs pickJob), removed from the queue. */
 function takeJob(l) {
   if (!queue.length) return null;
-  const r = pickJob(queue, l.id, { warmKey: l.lane.warmKey, avoidKey: l.id > 0 ? lane0InPlaceKey() : null, exclusiveRunning: exclusiveRunning > 0, othersBusy: lanes.some((x) => x && x !== l && x.job), last: lastClient });
+  // lane 1 takes only jobs whose build is known to hit the tile cache
+  const q = l.id > 0 ? queue.filter((j) => !coldJob(j)) : queue;
+  const r = pickJob(q, l.id, { warmKey: l.lane.warmKey, avoidKey: l.id > 0 ? lane0InPlaceKey() : null, exclusiveRunning: exclusiveRunning > 0, othersBusy: lanes.some((x) => x && x !== l && x.job), last: lastClient });
   lastClient = r.last;
   if (r.job) queue.splice(queue.indexOf(r.job), 1);
   return r.job;
@@ -381,7 +415,7 @@ function pump() {
   if (!lanes[0]) newLaneSlot(0);
   if (!lanes[0].busy && queue.length) void runLane(lanes[0]);
   const k0 = lane0InPlaceKey();
-  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !coldCache() && !heavyLane0() && queue.some((j) => laneEligible(1, j) && !(k0 && j.warmKey === k0))) {
+  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !heavyLane0() && queue.some((j) => laneEligible(1, j) && !coldJob(j) && !(k0 && j.warmKey === k0))) {
     const l1 = lanes[1] ?? newLaneSlot(1);
     // a refused second page is retried at most every 2 s
     if (!l1.busy && (lanes[0].busy || queue.length > 1) && Date.now() - (l1.refusedAt ?? 0) > 2000) void runLane(l1);
@@ -399,13 +433,16 @@ function lane0InPlaceKey() {
   return l0.lane.warmKey ?? (l0.job?.inPlace ? l0.job.warmKey : null);
 }
 
-/** Lane 0 holds a heavy page (ultra, >= 1440p): a second page would take the tree past the 3.2 GB PSS cap. */
+/** Lane 0 holds a heavy page (ultra, >= 1440p, or baking a cold location): a second page would take the tree past
+ * the 3.2 GB PSS cap. */
 function heavyLane0() { return (lanes[0]?.lease?.weightMb ?? 0) > WEIGHTS.page; }
 
 async function ensurePageLease(l, job) {
-  const w = pageWeight({ quality: qualityOf(job.shot), ...parseSize(job.shot.size ?? job.req.size) });
-  // a lighter job that will boot its own page: give back the heavy weight (lane 1 waits on it)
-  if (l.lease && l.lease.weightMb > w && l.lane.warmKey !== job.warmKey) await l.lease.resize(w);
+  // a build not yet known to hit the tile cache counts as a cold page (4 bake workers busy: 1600 MB)
+  const w = pageWeight({ quality: qualityOf(job.shot), ...parseSize(job.shot.size ?? job.req.size), cold: coldJob(job) });
+  // a lighter job (another key, or the same page once its tiles hit the cache): give back the heavy weight (lane 1
+  // waits on it)
+  if (l.lease && l.lease.weightMb > w) await l.lease.resize(w);
   if (l.lease && l.lease.weightMb >= w) return true;
   const label = `capture daemon page lane ${l.id} (pid ${process.pid})`;
   if (l.id === 0) {
@@ -425,14 +462,20 @@ async function runLane(l) {
   try {
     for (;;) {
       if (stopping) break;
-      if (l.id > 0 && (gov.state !== 'ok' || coldCache() || heavyLane0())) break;
+      if (l.id > 0 && (gov.state !== 'ok' || heavyLane0())) break;
       const job = takeJob(l);
       if (!job) break;
       if (job.req.cancelled) { finishJob(job, null); continue; }
       if (!(await ensurePageLease(l, job))) { queue.unshift(job); l.refusedAt = Date.now(); break; } // lane 1 not admitted: lane 0 takes it
       l.job = job;
       ran++;
-      if (job.exclusive) exclusiveRunning++;
+      if (job.exclusive) {
+        exclusiveRunning++;
+        // alone in the browser means no other page at all: an idle warm page keeps rendering frames
+        for (const x of lanes) if (x && x !== l && !x.busy && x.lane.page) await closeLanePage(x);
+      }
+      // the second lane may fit now (lane 0's page weight shrinks once its build's tiles hit the cache)
+      else if (l.id === 0 && queue.length) pump();
       try { await runJob(l, job); } finally { if (job.exclusive) exclusiveRunning--; l.job = null; }
       // between jobs: a fresh PSS sample (the 5 s sampler misses short peaks); over the cap, this lane's warm page goes,
       // and the browser too if that is not enough and nothing else runs
@@ -476,8 +519,10 @@ async function runJob(l, job) {
       streamCapture: !!req.streamCapture, draft: !!req.draft, root: job.root, features: job.features, hc: req.hc, evalTimeoutMs: req.evalTimeoutMs,
       fresh: req.freshPages || undefined,
     }), timeout, 'capture job').catch(async (e) => {
-      log(`lane ${l.id}: ${e.message}; closing its page`);
-      await withTimeout(l.lane.closePage(), 15000, 'page.close').catch(async () => { killBrowser(); await closeBrowser('wedged page'); });
+      // the run itself goes on in the background: abort() closes its page (not only the warm one) and turns it into
+      // a no-op, so it neither leaks a page nor installs one as this lane's warm page later
+      log(`lane ${l.id}: ${e.message}; closing its pages`);
+      if (!(await l.lane.abort())) { killBrowser(); await closeBrowser('wedged page'); }
       return { entry: failEntry(shot, `SHOT ERROR: ${e.message}`), qa: null };
     });
     if (gov.state === 'closed' || closedBy === 'memory guard') r.entry.errors.push('memory guard: the capture browser was closed at low MemAvailable');
@@ -516,7 +561,7 @@ function endRequest(req, extra = {}) {
   try { req.res.end(); } catch { /* gone */ }
   requests.delete(req.id);
   lastActivity = Date.now();
-  if (retiring && requests.size === 0) void shutdown('retired');
+  maybeRetire();
 }
 
 // ---------------------------------------------------------------- /render
@@ -536,7 +581,7 @@ async function handleRender(body, res) {
     for (let i = queue.length - 1; i >= 0; i--) if (queue[i].req === req) { queue.splice(i, 1); req.pending--; }
     requests.delete(req.id);
     log(`client ${req.client} went away; dropped its queued shots`);
-    if (retiring && requests.size === 0) void shutdown('retired');
+    maybeRetire();
   });
   res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store' });
   res.flushHeaders?.();
@@ -580,8 +625,9 @@ async function handleRender(body, res) {
         inPlace: !!side.features.bootKeys && streamsCaptureSet(search) && !needsFreshPage(shot) && !req.freshPages,
         warmKey: isGameShot(shot) ? `${side.root}\n${probe.keyOf(shot, search, { size: req.size, hc: req.hc, features: side.features })}` : null,
         memoKey: null,
+        cacheKey: cacheKeyOf(tc.dir, side.build.distHash),
       };
-      if (bkey && memoAllowed(shot, req)) job.memoKey = memoKey({ distHash: side.build.distHash, shot, search, r: req, browserKey: bkey, codeHash: CAPTURE_CODE_HASH });
+      if (bkey && memoAllowed(shot, req)) job.memoKey = memoKey({ distHash: side.build.distHash, shot, search, r: req, browserKey: bkey, codeHash: MEMO_CODE });
       jobs.push(job);
     });
   }
@@ -612,7 +658,7 @@ function statusObj(quick) {
     mem: { ...gov.last, state: gov.state, peak: gov.peak },
     builds: builds.size,
     memo: { ...memoStats },
-    tileCache: { recentGets: cacheWindow.length, recentHitRate: cacheWindow.length ? +(cacheWindow.reduce((a, x) => a + x, 0) / cacheWindow.length).toFixed(2) : null, cold: coldCache() },
+    tileCache: [...cacheWindows].slice(-4).map(([k, w]) => ({ dir: k.split('\0')[0], build: k.split('\0')[1].slice(0, 12), recentGets: w.length, recentHitRate: w.length ? +(w.reduce((a, x) => a + x, 0) / w.length).toFixed(2) : null, cold: coldFor(k) })),
   };
   if (!quick) s.budget = budgetStatus();
   return s;
@@ -629,12 +675,12 @@ const control = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/retire') {
       if (!retiring) { retiring = true; log('retiring: a client runs other tool code'); }
       json(200, { ok: true });
-      if (requests.size === 0) void shutdown('retired');
+      maybeRetire();
       return;
     }
     if (req.method === 'POST' && req.url === '/stop') { json(200, { ok: true }); void shutdown('stop requested'); return; }
     if (req.method === 'POST' && req.url === '/render') {
-      if (retiring || stopping) return json(409, { error: 'retiring' });
+      if (stopping || (retiring && !inGrace())) return json(409, { error: 'retiring' });
       const body = JSON.parse(await new Promise((r, j) => { let s = ''; req.on('data', (d) => (s += d)); req.on('end', () => r(s)); req.on('error', j); }));
       if (body.browserEnv && browserEnvKey(body.browserEnv) !== MY_BROWSER_ENV) return json(409, { error: 'browser-env', mine: MY_BROWSER_ENV });
       return void handleRender(body, res).catch((e) => { log(`render failed: ${e.stack ?? e.message}`); try { res.write(JSON.stringify({ type: 'error', message: e.message }) + '\n'); res.end(); } catch { /* gone */ } });
@@ -663,21 +709,27 @@ process.on('uncaughtException', (e) => { log(`uncaught: ${e.stack ?? e.message}`
 process.on('unhandledRejection', (e) => { log(`unhandled rejection: ${e?.stack ?? e}`); });
 
 // ---------------------------------------------------------------- idle policy
+let ticking = false;
 setInterval(async () => {
-  const now = Date.now();
-  const busy = lanes.some((l) => l?.busy) || queue.length > 0;
-  for (const l of lanes) if (l && !l.busy && l.lane.page && now - l.lane.lastUsed > IDLE_PAGE_MS) { log(`lane ${l.id}: closing its idle warm page`); await closeLanePage(l); }
-  // at most one idle warm page
-  const warm = lanes.filter((l) => l && !l.busy && l.lane.page);
-  if (warm.length > 1) for (const l of warm.slice(1)) await closeLanePage(l);
-  if (browser && !busy) {
-    let foreignWaiter = false;
-    try { foreignWaiter = budgetStatus().waiters.some((w) => w.kind === 'browser' && w.pid !== process.pid); } catch { /* ignore */ }
-    const idle = Math.min(...lanes.filter(Boolean).map((l) => now - l.lane.lastUsed), now - lastActivity);
-    if (foreignWaiter) await closeBrowser('another tool waits for the browser slot');
-    else if (idle > IDLE_BROWSER_MS) await closeBrowser('idle');
-  }
-  if (!busy && requests.size === 0 && now - lastActivity > IDLE_EXIT_MS) await shutdown('idle');
+  if (ticking) return; // a tick that closes a browser can take longer than the interval
+  ticking = true;
+  try {
+    for (const l of lanes) if (l && !l.busy && l.lane.page && Date.now() - l.lane.lastUsed > IDLE_PAGE_MS) { log(`lane ${l.id}: closing its idle warm page`); await closeLanePage(l); }
+    // at most one idle warm page
+    const warm = lanes.filter((l) => l && !l.busy && l.lane.page);
+    if (warm.length > 1) for (const l of warm.slice(1)) await closeLanePage(l);
+    // judged after the awaits above: a job may have started meanwhile, and its browser must not close under it
+    const busy = () => lanes.some((l) => l?.busy) || queue.length > 0;
+    if (browser && !busy()) {
+      let foreignWaiter = false;
+      try { foreignWaiter = budgetStatus().waiters.some((w) => w.kind === 'browser' && w.pid !== process.pid); } catch { /* ignore */ }
+      const now = Date.now();
+      const idle = Math.min(...lanes.filter(Boolean).map((l) => now - l.lane.lastUsed), now - lastActivity);
+      if (!busy() && foreignWaiter) await closeBrowser('another tool waits for the browser slot');
+      else if (!busy() && idle > IDLE_BROWSER_MS) await closeBrowser('idle');
+    }
+    if (!busy() && requests.size === 0 && Date.now() - lastActivity > IDLE_EXIT_MS) await shutdown('idle');
+  } finally { ticking = false; }
 }, 2000).unref();
 
 control.listen(Number(process.env.BACKROOMS_RSD_PORT ?? 0), '127.0.0.1', () => {

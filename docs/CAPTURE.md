@@ -68,16 +68,20 @@ is recycled after 200 shots, at 1.2 GB GPU-process RSS, or when the process tree
 available. Lane 1, a second page in the same browser, opens only when all of these hold:
 - the budget admits another 1000 MB page;
 - the shot is at quality high or lower and at most 1920x1080;
-- lane 0 does not hold a heavy page (ultra or 1440p and up); together they reached 3.33 GB PSS;
-- recent tile-cache requests show a warm cache (20 or more GETs, 75 % or more hits). Two cold pages would split the
-  memory-bandwidth-bound bake between 8 workers for no gain;
+- lane 0 does not hold a heavy page (ultra, 1440p and up, or a build not yet known to hit the tile cache, all
+  weighted 1600 MB); together they reached 3.33 GB PSS;
+- recent tile-cache requests of the shot's own build and cache directory show a warm cache (20 or more GETs, 75 % or
+  more hits). The window is kept per build: after a worker edit the new build misses every tile, however warm the
+  previous build's window was (a global window opened lane 1 on a cold build and the tree reached 3.44 GB PSS). Two
+  cold pages would split the memory-bandwidth-bound bake between 8 workers for no gain;
 - while a single client has work queued, the shot's boot key differs from the one lane 0 moves through in place.
   A second page of the same key only competes for tile uploads (D2: 13.5 s at 3.21 GB PSS against 14.0 s at
   1.92 GB on one lane). With several clients, lane 0 switches keys between them and lane 1 does help (4 clients x
   3 shots: 16.9 s against 20.6 s).
 
 Shots with evals, and the long presets (`soak`, `stress`, `perf`, `edge`), run alone in the browser. They start only
-when no other lane is busy, and nothing starts beside them. Their checks measure frame times and behaviour, and a
+when no other lane is busy, the other lane's idle warm page is closed first (it keeps rendering frames), and nothing
+starts beside them. Their checks measure frame times and behaviour, and a
 second page booting next to the tower walk pushed its longest frame from 50 ms to 66-83 ms.
 
 **In-place shots.** When a page reports capture contract v2 (`__backrooms.captureGate >= 2` and `load()`) and
@@ -105,16 +109,19 @@ idle warm page is kept.
 - the canonical shot (final launch params sorted, minus `autostart` and `noprime`, plus page, size, wait, evals,
   captures, expect and diff);
 - page HC;
-- the Chromium version and GPU renderer string;
-- a hash of the capture code (`tools/lib/capture.mjs`, `png.mjs`).
+- the Chromium version, the GPU renderer string and the browser settings (`CHROMIUM`, `BACKROOMS_GPU`,
+  `BACKROOMS_UNCAPPED`);
+- a hash of the capture code (`tools/lib/capture.mjs`, `png.mjs`) and the daemon version (every `tools/rsd` and
+  `tools/lib` module).
 
-A new build, browser or capture code therefore never hits an old entry. The memo is capped at 2 GB and evicts the
+A new build, browser, GPU or tool code therefore never hits an old entry. The memo is capped at 2 GB and evicts the
 least recently used entries first. It is never used for `fresh: true` shots, the `perf`, `soak`, `stress`, `edge`
 and `ui` presets, or shots with evals, which may measure time. QA only reads it with `--memo`, and readiness-time
 checks never apply to a memo hit. `--fresh` re-renders and stores the result. `--no-memo` neither reads nor stores.
 
-**Failures.** Every job has a timeout. A crashed page or a lost GPU context retries once on a fresh page. A page
-that does not close within 15 s gets its browser killed. Only the Chromium this daemon launched is ever killed.
+**Failures.** Every job has a timeout; a timed-out job's pages are closed and the abandoned run can neither retry
+nor keep its page. Screenshots time out after 30 s. A crashed page or a lost GPU context retries once on a fresh
+page. A page that does not close within 15 s gets its browser killed. Only the Chromium this daemon launched is ever killed.
 
 **Idle.** Warm pages close after 90 s idle and the browser after 3 minutes. If another tool is waiting for the
 browser slot, the idle browser closes within 2 s. The daemon exits after 10 idle minutes. Status polls do not count
@@ -122,7 +129,9 @@ as activity.
 
 **Versions.** The daemon's version is a hash of `tools/rsd/*.mjs` and `tools/lib/*.mjs`. A client from a tree with
 different tool code asks the running daemon to retire. It finishes its queued jobs and exits, and the client starts
-its own daemon.
+its own daemon. Clients of the retiring daemon's own code wait for it to exit and then start a new one (they do not
+fail). A daemon accepts renders for 3 s after it starts even when asked to retire, so the client that started it
+always gets its request in and two tool versions cannot retire each other's daemons forever.
 
 **Priming.** A fresh headless browser loses its first WebGL context about 0.5 s after creating it. The daemon
 absorbs that loss once per browser. Game pages without evals then get `noprime=1`, which saves 0.45 s per boot.

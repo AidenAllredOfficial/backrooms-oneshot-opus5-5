@@ -8,7 +8,7 @@ import path from 'node:path';
 // the tools are untyped .mjs: imported through a non-literal specifier (typed any)
 const TOOLS = path.resolve(import.meta.dirname, '../../tools');
 const load = (rel: string): Promise<any> => import(path.join(TOOLS, rel)); // eslint-disable-line @typescript-eslint/no-explicit-any
-const { gameSearch, bootKey, planOrder, needsFreshPage, isGameShot, treeFeatures, shotFileName, BOOT_PARAM_KEYS, pageUrl } = await load('lib/capture.mjs');
+const { gameSearch, bootKey, planOrder, needsFreshPage, isGameShot, treeFeatures, shotFileName, BOOT_PARAM_KEYS, pageUrl, Lane } = await load('lib/capture.mjs');
 const { decodePNG, encodePNG, pixelDiff, mad } = await load('lib/png.mjs');
 const { decodePlan, checkShot } = await load('qa.mjs');
 
@@ -137,5 +137,49 @@ describe('qa decode planning and memo hits', () => {
     const shot = { params: 'seed=1', expect: { class: 'none' } };
     expect(checkShot(shot, entry, qa).fails).toEqual(['readyMs 30000 > 20000']);
     expect(checkShot(shot, { ...entry, memo: true }, qa).fails).toEqual([]);
+  });
+});
+
+describe('Lane.abort (a daemon job timeout)', () => {
+  /** A fake browser whose pages hang in every evaluate() until closed, then reject like Playwright does. */
+  function hangingBrowser() {
+    const pages: Array<{ closed: boolean }> = [];
+    const browser = {
+      async newPage() {
+        const waiters: Array<(e: Error) => void> = [];
+        const page = {
+          closed: false,
+          async addInitScript() {},
+          on() {},
+          async goto() {},
+          async waitForTimeout() {},
+          async waitForLoadState() {},
+          evaluate() {
+            return new Promise((_, rej) => { if (page.closed) rej(new Error('Target page, context or browser has been closed')); else waiters.push(rej); });
+          },
+          async close() { page.closed = true; for (const r of waiters.splice(0)) r(new Error('Target page, context or browser has been closed')); },
+        };
+        pages.push(page);
+        return page;
+      },
+    };
+    return { browser, pages };
+  }
+
+  it('closes the page of the run in progress, which then neither retries nor becomes the warm page', async () => {
+    const { browser, pages } = hangingBrowser();
+    const lane = new Lane({ browser, root: 'http://x/', warmed: true, features: { bootKeys: null, streamCapture: false } });
+    const run = lane.run({ params: 'seed=1' }, { index: 0, noPng: true, wait: 0 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(pages).toHaveLength(1);
+    expect(pages[0].closed).toBe(false);
+    expect(await lane.abort()).toBe(true);
+    expect(pages[0].closed).toBe(true);
+    const r = await run;
+    expect(r.entry.errors.length).toBeGreaterThan(0);
+    expect(r.entry.retried).toBeUndefined(); // an abandoned run is not retried on a new page
+    expect(pages).toHaveLength(1);
+    expect(lane.page).toBeNull();
+    expect(lane.inflight.size).toBe(0);
   });
 });

@@ -288,11 +288,12 @@ function readyPromise(ms) {
 
 const cdpSessions = new WeakMap();
 
-/** PNG of the viewport via CDP with optimizeForSpeed (fast zlib; decodes to the same pixels as page.screenshot). */
-export async function fastScreenshot(page) {
+/** PNG of the viewport via CDP with optimizeForSpeed (fast zlib; decodes to the same pixels as page.screenshot).
+ * Times out like page.screenshot's default (30 s): a wedged GPU process must fail the shot, not hang it. */
+export async function fastScreenshot(page, timeoutMs = 30000) {
   let s = cdpSessions.get(page);
   if (!s) { s = await page.context().newCDPSession(page); cdpSessions.set(page, s); }
-  const { data } = await s.send('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true });
+  const { data } = await withTimeout(s.send('Page.captureScreenshot', { format: 'png', optimizeForSpeed: true }), timeoutMs, 'screenshot');
   return Buffer.from(data, 'base64');
 }
 
@@ -397,6 +398,10 @@ export class Lane {
     this.lastUsed = Date.now();
     this.recycleWanted = false;
     this.sink = null;
+    // pages of runs in progress, and a generation counter: abort() closes them and turns the runs into no-ops (no
+    // retry, no warm page), so a timed-out job cannot leak its page or interfere with the next job
+    this.inflight = new Set();
+    this.gen = 0;
   }
 
   searchOf(shot, o = {}) {
@@ -429,6 +434,23 @@ export class Lane {
     if (p) await withTimeout(p.close(), 15000, 'page.close').catch(() => {});
   }
 
+  /**
+   * Abandons the runs in progress (a job timeout): closes their pages and the warm page. The abandoned runs finish
+   * as no-ops (no retry, their page never becomes the warm page). Resolves false when a page did not close within
+   * 15 s (the caller should then recycle the browser).
+   */
+  async abort() {
+    this.gen++;
+    const pages = [...this.inflight];
+    this.inflight.clear();
+    if (this.page && !pages.includes(this.page)) pages.push(this.page);
+    this.page = null;
+    this.pageKey = null;
+    this.pageShots = 0;
+    const ok = await Promise.all(pages.map((p) => withTimeout(p.close(), 15000, 'page.close').then(() => true, () => false)));
+    return ok.every(Boolean);
+  }
+
   async #newPage(width, height, hc) {
     const page = await this.browser.newPage({ viewport: { width, height } });
     await page.addInitScript((n) => { try { Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', { get: () => n }); } catch { /* ignore */ } }, hc);
@@ -454,8 +476,9 @@ export class Lane {
    * Returns { entry, png, qa, inPlace }.
    */
   async run(shot, o = {}) {
+    const gen = this.gen;
     let r = await this.#runOnce(shot, o);
-    if (r.retry) {
+    if (r.retry && gen === this.gen) {
       this.log(`retrying shot ${o.index} on a fresh page: ${r.entry.errors.slice(-1)[0] ?? ''}`.slice(0, 300));
       await this.closePage();
       r = await this.#runOnce(shot, { ...o, fresh: true });
@@ -490,6 +513,7 @@ export class Lane {
     const sink = { page: null, errors: entry.errors, warnings, crashed: false };
     this.sink = sink;
     this.lastUsed = Date.now();
+    const gen = this.gen;
     try {
       // ---- in place: same boot key, the page implements load(), and the shot does not need a boot
       const canInPlace = this.page && this.pageKey === key && this.pageRoot === root && !o.fresh && !needsFreshPage(shot) && this.pageShots < this.maxPageShots && !this.recycleWanted;
@@ -497,6 +521,7 @@ export class Lane {
       let info = null;
       if (canInPlace) {
         page = this.page;
+        this.inflight.add(page);
         sink.page = page;
         const navs0 = page.__navs;
         const r = await withTimeout(page.evaluate((s) => window.__backrooms.load(s), '?' + search), READY_TIMEOUT_MS, 'load()').catch((e) => ({ ok: false, reason: e.message }));
@@ -513,7 +538,10 @@ export class Lane {
         }
       }
       if (!page) {
+        if (gen !== this.gen) throw new Error('aborted');
         page = await this.#newPage(width, height, hc);
+        this.inflight.add(page);
+        if (gen !== this.gen) throw new Error('aborted'); // abort() ran while the page was being created
         sink.page = page;
         mark('page');
         await page.goto(pageUrl(root, shot, search), { waitUntil: 'load' });
@@ -561,8 +589,10 @@ export class Lane {
     } catch (err) {
       entry.errors.push('SHOT ERROR: ' + (err?.message ?? String(err)));
     } finally {
-      this.sink = null;
+      if (this.sink === sink) this.sink = null; // an abandoned run must not unhook the next job's console capture
       entry.warnings = warnings.slice(0, 20);
+      if (page) this.inflight.delete(page);
+      if (gen !== this.gen) keep = false; // abandoned by abort(): never install its page as the warm page
       if (page) {
         if (keep) {
           if (page !== this.page) { this.page = page; this.pageKey = key; this.pageShots = 0; this.pageRoot = root; }

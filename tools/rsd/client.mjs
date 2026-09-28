@@ -112,7 +112,20 @@ export async function render(req) {
       cwd: process.cwd(), ...rest,
     };
     const res = await fetch(`${d.url}/render`, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
-    if (res.status === 409 && attempt < 3) { await sleep(300); continue; } // retiring: the next ensureDaemon replaces it
+    if (res.status === 409) {
+      let why = {};
+      try { why = await res.json(); } catch { /* not JSON */ }
+      if (why.error === 'browser-env') {
+        throw new Error(`capture daemon: its browser runs with other settings (CHROMIUM / BACKROOMS_GPU / BACKROOMS_UNCAPPED: ${why.mine}); ` +
+          'use --direct, or stop it (node tools/rsd/client.mjs stop) once it is idle');
+      }
+      // retiring (a client with other tool code asked it to): it finishes its queued jobs, then exits and the next
+      // ensureDaemon() starts one of this code. Wait for that instead of failing.
+      if (attempt === 0) onLog(`[rsd] the capture daemon (pid ${d.pid}) is retiring; waiting for its queued jobs to finish`);
+      for (let i = 0; i < 36000 && pidAlive(d.pid); i++) await sleep(100);
+      if (pidAlive(d.pid)) throw new Error(`capture daemon: pid ${d.pid} is still retiring after an hour (see ${LOG_FILE}; --direct captures without it)`);
+      continue;
+    }
     if (!res.ok) throw new Error(`capture daemon: HTTP ${res.status} ${await res.text()}`);
     const builds = [];
     let done = null;
