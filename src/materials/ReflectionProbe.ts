@@ -9,11 +9,13 @@
 //   event; a storey switch), when the eye moves more than PROBE.ANCHOR_MOVE from it, or leaves its box. A new anchor
 //   captures its six faces PROBE.BURST per frame, keeping the previous probe published meanwhile (after an invalidate
 //   none: probeOn 0), then prefilters every face and switches the published anchor and box at once.
-// - Refresh: a streamed tile arriving or leaving within PROBE.FAR of the anchor marks every face stale (a new anchor
+// - Refresh: a streamed tile arriving or leaving within the capture cube (PROBE.FAR on each axis from the anchor: the
+//   six faces' far planes bound a cube, not a sphere) marks every face stale (a new anchor
 //   starts over); stale faces are re-captured PROBE.BURST per frame and, once none is left, every face is re-filtered
 //   (the rough mips gather from all six). Otherwise one face is re-captured every PROBE.STEADY_EVERY frames round-robin and its mips re-filtered,
 //   so flicker and moving props are at most 6 x STEADY_EVERY frames old. The box is re-estimated every
-//   PROBE.BOX_REFRESH frames (chunks keep streaming in).
+//   PROBE.BOX_REFRESH frames, and on the next update after a chunk's layout arrives or leaves (the box rays read
+//   layouts: a still capture must not change once the stream has settled).
 // - Capture: each face is ONE render of the scene (no depth prepass: at 128-256 px the overdraw costs the GPU next
 //   to nothing, while the prepass doubled the main-thread submission; no frame-graph hooks) with the reflection-pass
 //   flag set (uBrReflPass: props beyond 20 m and water discard; SSAO, contact shadows, POM, detail maps, the probe
@@ -50,6 +52,9 @@ export interface ReflectionProbeInfo {
   cpuMeanMs: number;
   /** draw calls of the last captured face */
   calls: number;
+  /** nothing left to capture or filter: the anchor's six faces are captured and prefiltered and none is stale (or
+   * the probe is off). The automation ready gate waits for it (loop.ts settle). */
+  settled: boolean;
 }
 
 export interface ReflectionProbe {
@@ -59,6 +64,9 @@ export interface ReflectionProbe {
   setQuality(q: QualityConfig): void;
   /** Drop the anchor: the next update re-anchors at the eye (probeOn 0 until its six faces exist). */
   invalidate(): void;
+  /** Keep the anchor but re-capture every face (and re-filter) from the next update on: something the capture sees
+   * changed without a tile event (the automation gate's launch toggles: the clock, the view). */
+  refresh(): void;
   /** The prefilter program (compiled ahead by boot). */
   readonly materials: readonly THREE.ShaderMaterial[];
   readonly info: ReflectionProbeInfo;
@@ -147,13 +155,15 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
   let invalid = true;
   let lastStorey = -1;
   let boxAge = 0;
+  let boxStale = false;
   let rr = 0;
   let tick = 0;
-  const info: ReflectionProbeInfo = { faces: 0, anchor: live, box: liveBox, valid: false, cpuMs: 0, cpuMeanMs: 0, calls: 0 };
+  const info: ReflectionProbeInfo = { faces: 0, anchor: live, box: liveBox, valid: false, cpuMs: 0, cpuMeanMs: 0, calls: 0, settled: false };
 
   const offTeleport = bus ? bus.on('teleport', () => api.invalidate()) : null;
   const offStorey = bus ? bus.on('storeyChanged', () => api.invalidate()) : null;
-  // a tile arriving or leaving within the capture's reach (key 's:cx:cz:q') makes every face of the anchor stale
+  // a tile arriving or leaving within the capture's reach (key 's:cx:cz:q') makes every face of the anchor stale: the
+  // cube [-FAR, FAR]^3 around the anchor (Chebyshev distance), which is what the six faces render
   const stale = (e: { key: string }): void => {
     if (!pending && !liveValid) return;
     const k = e.key.split(':');
@@ -162,10 +172,13 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
     const x0 = Number(k[1]) * CHUNK_SIZE + (q & 1) * TILE_SIZE, z0 = Number(k[2]) * CHUNK_SIZE + (q >> 1) * TILE_SIZE;
     const a = pending ? next : live;
     const dx = Math.max(x0 - a[0], 0, a[0] - x0 - TILE_SIZE), dz = Math.max(z0 - a[2], 0, a[2] - z0 - TILE_SIZE);
-    if (dx * dx + dz * dz <= PROBE.FAR * PROBE.FAR) dirty = ALL_FACES;
+    if (Math.max(dx, dz) <= PROBE.FAR) dirty = ALL_FACES;
   };
   const offLoad = bus ? bus.on('tileLoaded', stale) : null;
   const offUnload = bus ? bus.on('tileUnloaded', stale) : null;
+  const layoutsChanged = (): void => { boxStale = true; };
+  const offChunkLoad = bus ? bus.on('chunkLoaded', layoutsChanged) : null;
+  const offChunkUnload = bus ? bus.on('chunkUnloaded', layoutsChanged) : null;
 
   function ensureTargets(renderer: THREE.WebGLRenderer): void {
     if (captureRT && captureRT.width === size) return;
@@ -300,6 +313,7 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
       if (size <= 0 || !enabled) {
         globals.probeOn.value = 0;
         info.valid = false;
+        info.settled = true;
         return;
       }
       const t0 = performance.now();
@@ -313,9 +327,10 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
         const a = pending ? next : live, box = pending ? nextBox : liveBox;
         const moved = Math.hypot(p.eyeX - a[0], p.eyeY - a[1], p.eyeZ - a[2]) > PROBE.ANCHOR_MOVE;
         const outside = p.eyeX < box[0] || p.eyeX > box[3] || p.eyeZ < box[2] || p.eyeZ > box[5] || p.eyeY < box[1] || p.eyeY > box[4];
-        if (invalid || (!pending && !liveValid) || moved || outside) startAnchor(world, p);
-        else if (!pending && ++boxAge >= PROBE.BOX_REFRESH) {
+        if (invalid || (!pending && !liveValid) || moved || outside) { startAnchor(world, p); boxStale = false; }
+        else if (!pending && (++boxAge >= PROBE.BOX_REFRESH || boxStale)) {
           boxAge = 0;
+          boxStale = false;
           probeBox(world, live[0], live[1], live[2], live[1] - (p.eyeY - p.y), liveBox);
         }
       }
@@ -378,6 +393,7 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
         info.cpuMs = performance.now() - t0;
       }
       info.cpuMeanMs += ((faces !== 0 ? info.cpuMs : performance.now() - t0) - info.cpuMeanMs) * 0.02;
+      info.settled = liveValid && !pending && !invalid && dirty === 0 && !boxStale;
       publish(camera);
     },
     setQuality(nq) {
@@ -392,6 +408,13 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
       pending = false;
       globals.probeOn.value = 0;
       info.valid = false;
+      info.settled = false;
+    },
+    refresh() {
+      if (!pending && !liveValid) return;
+      dirty = ALL_FACES;
+      boxStale = true;
+      info.settled = false;
     },
     faceMeans(renderer) {
       if (!captureRT || !filteredRT || !liveValid) return null;
@@ -446,6 +469,8 @@ void main() {
       offStorey?.();
       offLoad?.();
       offUnload?.();
+      offChunkLoad?.();
+      offChunkUnload?.();
       releaseTargets();
       filter.dispose();
       quad.geometry.dispose();

@@ -29,6 +29,16 @@ describe('parseLaunchParams: defaults', () => {
     expect(parse('bake=full').bake).toBe('full');
     expect(parse('autostart=1&bake=interactive').bake).toBe('interactive');
   });
+  it('stream: capture only with bake=full (automation), full otherwise', () => {
+    expect(parse('autostart=1').stream).toBe('full');
+    expect(parse('autostart=1&stream=capture').stream).toBe('capture');
+    expect(parse('autostart=1&stream=capture').warnings).toEqual([]);
+    expect(parse('bake=full&stream=capture').stream).toBe('capture');
+    const player = parse('stream=capture');
+    expect(player.stream).toBe('full');
+    expect(player.warnings.join(' ')).toMatch(/stream/);
+    expect(parse('autostart=1&stream=bogus').warnings.join(' ')).toMatch(/stream/);
+  });
   it('accepts a leading "?" or none', () => {
     expect(parse('?seed=abc').seedText).toBe('abc');
     expect(parse('seed=abc').seedText).toBe('abc');

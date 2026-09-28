@@ -1,6 +1,7 @@
-// src/app/debugApi.ts (WP14) — window.__backrooms: the full §7.2 BackroomsDebugAPI surface.
+// src/app/debugApi.ts (WP14) — window.__backrooms: the full §7.2 BackroomsDebugAPI surface, plus the capture
+// contract v2 (captureGate 2, whenReady, load, frames: core/debug.ts).
 
-import type { BackroomsDebugAPI, DebugStats, ImageStats, LayerAlbedoReport, MemoryStats } from '../core/debug.ts';
+import type { BackroomsDebugAPI, DebugStats, ImageStats, LayerAlbedoReport, LoadResult, MemoryStats } from '../core/debug.ts';
 import type { GameEvents } from '../core/events.ts';
 import { DEBUG_VIEW_NAMES, MOOD_NAMES, SURFACE_NAMES, ZONE_NAMES } from '../core/ids.ts';
 import { worldToCell, worldToChunk } from '../core/grid.ts';
@@ -9,7 +10,7 @@ import { QUALITY_NAMES } from '../core/quality.ts';
 import type { FlickerMode } from '../core/settings.ts';
 import type { WorldGen } from '../core/world.ts';
 import { createWorldGen } from '../world/worldgen.ts';
-import { getStreamTiming } from '../stream/ChunkStreamer.ts';
+import { getCaptureControl, getStreamTiming } from '../stream/ChunkStreamer.ts';
 import { flicker, flickerEvents, type FlickerEvent, type FlickerSample } from '../core/flicker.ts';
 import { LightState } from '../core/ids.ts';
 import type { AppCore } from './appState.ts';
@@ -24,6 +25,8 @@ import type { WaterRippleStats } from '../materials/water/WaterRipples.ts';
 import { gotoStoreyOrder } from './urlParams.ts';
 
 export const APP_VERSION = '1.0.0';
+/** Capture contract version (core/debug.ts BackroomsDebugAPI.captureGate). */
+export const CAPTURE_GATE_VERSION = 2;
 export const CAPTURE_W = 160;
 export const CAPTURE_H = 90;
 const EVENT_LOG_SIZE = 200;
@@ -33,6 +36,8 @@ export interface DebugHost {
   setQuality(q: QualityName): Promise<void>;
   setFlicker(mode: FlickerMode): void;
   newSeed(seed: string): Promise<void>;
+  /** a whole shot in place (App.ts) */
+  load(search: string): Promise<LoadResult>;
 }
 
 const EVENT_NAMES: readonly (keyof GameEvents)[] = [
@@ -59,6 +64,8 @@ export interface DebugApiHandle {
   api: BackroomsDebugAPI;
   /** records a line into the events() log (worker errors, app notes) */
   log(line: string): void;
+  /** empties the events() log (a new shot in place starts with a fresh page's log) */
+  resetLog(): void;
 }
 
 export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
@@ -104,6 +111,8 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
     // each tile's own dynamic light is slot 0 (DYN_SLOT_OFFSETS[0] = [0, 0]); slots 1-8 are neighbours' copies
     if (s) for (const t of s.streamer.tiles()) if (t.dynLights[0]) dyn++;
     const q = s?.streamer.query;
+    const cap = s ? getCaptureControl(s.streamer) : null;
+    const gate = cap && core.params.bake === 'full' ? cap.stats() : null;
     const loaded = !!(st && q && q.isLoaded(st.x, st.z));
     const a = s && core.params.audio ? s.audio.stats() : null;
     return {
@@ -121,6 +130,7 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
         resident: ss?.tilesResident ?? 0, preview: ss?.tilesPreview ?? 0, full: ss?.tilesFull ?? 0, queued: ss?.queued ?? 0,
         inFlight: ss?.inFlight ?? 0, uploadsPending: ss?.uploadsPending ?? 0, fadingIn: ss?.fadingIn ?? 0,
         otherStoreys: ss?.tilesOtherStoreys ?? 0,
+        ...(gate ? { gate: gate.gateTiles, gateReady: gate.gateReady, scope: gate.scope } : {}),
       },
       workers: { count: ss?.workers ?? 0, busy: ss?.workersBusy ?? 0 },
       bake: { lastMs: round(ss?.bakeLastMs ?? 0, 1), avgMs: round(ss?.bakeAvgMs ?? 0, 1), buildAvgMs: round(ss?.buildAvgMs ?? 0, 1) },
@@ -149,6 +159,26 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
   const api: BackroomsDebugAPI = {
     ready: false,
     isReady: () => api.ready,
+    captureGate: CAPTURE_GATE_VERSION,
+    whenReady() {
+      if (api.ready) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const off = core.bus.on('ready', () => { off(); resolve(); });
+      });
+    },
+    load: (search) => host.load(String(search ?? '')),
+    frames(n) {
+      const k = Math.max(0, Math.floor(Number.isFinite(n) ? n : 0));
+      if (k === 0 || !core.sys) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        let left = k;
+        core.hooks.push(() => {
+          if (--left > 0) return false;
+          resolve();
+          return true;
+        });
+      });
+    },
     readyPhase: 'boot',
     version: APP_VERSION,
     get seed() { return core.params.seedText; },
@@ -443,7 +473,7 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
     },
   };
   (api as BackroomsDebugAPI & { probe: ProbeDebugApi }).probe = probe;
-  return { api, log: push };
+  return { api, log: push, resetLog: () => { log.length = 0; } };
 }
 
 /** __backrooms.probe: stats() = the published anchor and room box (world metres; box = xmin, ymin, zmin, xmax, ymax,

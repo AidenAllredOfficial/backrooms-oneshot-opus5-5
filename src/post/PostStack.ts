@@ -92,10 +92,33 @@ export interface PostInternals {
   finalPass: EffectPass;
   targetEv(): number;
   measurements(): number;
+  /** see settleExposure / exposureSettled */
+  settleExposure(): void;
+  exposureSettled(): boolean;
+  /** a copy of the setEnabled() state (boot snapshots it: __backrooms.load restores it) */
+  enabled(): Partial<Record<Toggle, boolean>>;
 }
 const internals = new WeakMap<PostStack, PostInternals>();
 export function postInternals(p: PostStack): PostInternals | null {
   return internals.get(p) ?? null;
+}
+
+/** EV100 the automation settle starts metering from: the meter's per-pixel clamp follows the current EV, so a fixed
+ * start makes the snapped readings independent of what the spring did before (cache state, earlier shots). */
+export const SETTLE_START_EV = PHOTOMETRY.EV100_L0;
+
+/**
+ * Automation ready gate (loop.ts settle phase), once the scene is quiet: snapExposure() in settle mode. The spring
+ * restarts from SETTLE_START_EV, a reading in flight is dropped, and the meter reads every frame until
+ * SNAP_MEASUREMENTS readings of frames rendered from now on are applied; then it returns to its normal cadence.
+ * A locked or disabled exposure is settled at once. The result depends on the pixels only, never on timing.
+ */
+export function settleExposure(p: PostStack): void {
+  internals.get(p)?.settleExposure();
+}
+/** The settle's readings are applied (true when not settling). */
+export function exposureSettled(p: PostStack): boolean {
+  return internals.get(p)?.exposureSettled() ?? true;
 }
 
 // ssr: read by ScenePass's MRT decision (package A frame graph); URL ssr=0 turns it off for A/B checks
@@ -175,6 +198,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
   const spring: ExposureState = { ev: PHOTOMETRY.EV100_L0, vel: 0 };
   let lockedEv: number | null = null;
   let snapLeft = 0;
+  let settling = false;
   let lastMeasure = 0;
   let targetEv: number = PHOTOMETRY.EV100_L0;
   let paused = false;
@@ -217,6 +241,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
       lastMeasure = ae.measurements;
       targetEv = Math.min(range1, Math.max(range0, ev100FromLog2(ae.measuredLog2)));
       if (snapLeft > 0) { snapLeft--; spring.ev = targetEv; spring.vel = 0; }
+      if (settling && snapLeft === 0) { settling = false; ae.settle(false); }
     } else {
       targetEv = Math.min(range1, Math.max(range0, targetEv));
     }
@@ -407,6 +432,24 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
     get passes() { return composer.passes; },
     targetEv: () => targetEv,
     measurements: () => ae.measurements,
+    settleExposure() {
+      motionBlur.cut();
+      if (lockedEv !== null || !enabled.exposure) {
+        // nothing to meter: the spring is pinned (updateExposure)
+        snapLeft = 0;
+        settling = false;
+        ae.settle(false);
+        return;
+      }
+      spring.ev = SETTLE_START_EV;
+      spring.vel = 0;
+      lastMeasure = ae.measurements; // readings before this call are not applied
+      snapLeft = P.SNAP_MEASUREMENTS;
+      settling = true;
+      ae.settle(true);
+    },
+    exposureSettled: () => !settling,
+    enabled: () => ({ ...enabled }),
   });
   void frames;
   return post;

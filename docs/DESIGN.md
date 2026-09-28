@@ -5044,8 +5044,8 @@ export function computeImageStats(rgba: Uint8Array, w: number, h: number): Image
    5. `anomalyDirector = createAnomalyDirector(bus, lighting, scene)` (adds its spark mesh to the scene permanently, so warmup covers its program).
    6. `await materials.warmup(renderer, camera, scene)` (compile **and draw** every variant into a HalfFloat target with the flashlight and its shadow present; see WP9).
 5. **[spawn]**
-   1. `pool = await createWorkerPool(size, init)`. `init = { opts: {seed, seedText, forceZone, forceMood, forceLandmark, testScene, lights}, bake: bakeQualityOf(q), bakeTerm, validate: import.meta.env.DEV }`.
-   2. `streamer = createChunkStreamer({...})`; add `streamer.scene` to the scene.
+   1. `pool = await createWorkerPool(size, init)`. `init = { opts: {seed, seedText, forceZone, forceMood, forceLandmark, testScene, lights}, bake: bakeQualityOf(q), bakeTerm, validate: import.meta.env ? import.meta.env.DEV : true }` (Node, which has no `import.meta.env`, validates).
+   2. `streamer = createChunkStreamer({...})`; add `streamer.scene` to the scene. With `bake=full` it gets `capture: { gateClosed: () => gate.active, scope: params.stream }` (the automation capture gate, §7.5).
    3. Resolve the spawn:
       - explicit `x`/`z` → use them (y = floor via the layout once loaded; `s` from the param);
       - `goto`/`zone` → `await streamer.findNearest(...)` (fallback: spawn);
@@ -5053,25 +5053,24 @@ export function computeImageStats(rgba: Uint8Array, w: number, h: number): Image
 
       A spawn inside a wall snaps to the nearest walkable cell.
    4. `player = createPlayerSystem(spawn, settings, bus, host)`; `audio = createAudioSystem(bus, settings, q)`.
-6. **[chunks] → [bake]** The frame loop starts (rendering behind the loading overlay). It waits until `streamer.isReady(1, params.bake === 'full')`.
-7. **[frames]**
-   1. `post.snapExposure()`.
-   2. If `time` is set, freeze the simulation clock at `time`; if `freeze`, freeze at the current value.
-   3. If `exposure` is a number, call `setExposureLock`.
-   4. Apply `view`/`flashlight`/`post` toggles.
-   5. Render 10 frames.
-   6. **[ready]** `__backrooms.ready = true`; emit `ready`.
-   7. With autostart, `audio.start()` (unless `noaudio`).
+6. **[chunks] → [bake]** The frame loop starts (rendering behind the loading overlay). Players (`bake` interactive / preview) wait until `streamer.isReadyNear(20, 40, false)`. Automation (`bake=full`) freezes the clock at `time` as the gate OPENS, then waits for the capture set (§7.5: `getCaptureControl(streamer).isCaptureReady()`).
+7. **[frames]** (players) / **[settle]** (automation)
+   1. If `time` is set, freeze the simulation clock at `time`; if `freeze`, freeze at the current value.
+   2. If `exposure` is a number, call `setExposureLock`.
+   3. Apply `view`/`flashlight`/`post` toggles.
+   4. Players: `post.snapExposure()`, then render 10 frames. Automation: the probe re-captures its faces, then the settle of §7.5 (quiet frames, exposure metered every frame from a fixed start) and the `br:settled` mark.
+   5. **[ready]** `__backrooms.ready = true`; emit `ready`.
+   6. With autostart, `audio.start()` (unless `noaudio`).
 
    Title flow: the attract mode runs from step 6 onward. On Enter: `audio.start()` → hum fade-in → picture fade-in 1 s later → pointer lock.
 
 **Teleport and goto after ready:**
 1. `ready = false`, `readyPhase = 'chunks'`.
 2. `player.teleport`.
-3. `streamer.update` until `isReady(1, needFull)`.
-4. `snapExposure`, 10 frames, `ready = true`.
+3. `streamer.update` until the stream condition of step 6 holds.
+4. Players: `snapExposure`, 10 frames. Automation: the settle. Then `ready = true`.
 
-The promise resolves at that point.
+The promise resolves at that point. `__backrooms.load(search)` (§7.5) is the automation's whole-shot version: it also resets every toggle and re-resolves the pose from the seed's base spawn.
 
 ### 6.2 Frame loop order (WP14 `loop.ts`, `renderer.setAnimationLoop`)
 
@@ -5225,11 +5224,15 @@ decal program.
 | `reflView` | off, ssr, conf | SSR debug output: the reflection alone, or its confidence |
 | `flicker` | standard, reduced, off | Photosensitivity mode |
 | `lights` | default, on, dead | Fixture-state override |
-| `bake` | preview, full | Bake level required for ready (default full) |
+| `bake` | preview, full, interactive | Ready gate: `full` (default with `autostart=1`) = the automation capture contract v2 (§7.5); `interactive` (default without) and `preview` = the player gate |
+| `stream` | capture, full | With `bake=full` only: `capture` streams the capture set alone, before and after ready (shoot / ab); `full` (default) streams the whole radius once ready (players, QA) |
 | `bakeTerm` | all, direct, indirect | Debug bake (leak and cornell QA) |
 | `camcorder` | 1 | Camcorder look (VHS extras, REC overlay) |
 | `hud` | 0 | Hide all overlays |
 | `debug` | 1 | F3 overlay on |
+| `noprime` | 1 | Skip the wait for Chromium's first-context loss (a browser that already absorbed it: the play launcher, tools after `warmGpu`) |
+
+`BOOT_PARAM_KEYS` (`quality`, `scale`, `radius`, `bake`, `camcorder`, `hud`, `debug`, `noaudio`, `autostart`, `noprime`) shape a page at boot: `__backrooms.load()` refuses a search whose values differ, and tools group shots by them. Every other key applies in place.
 
 ### 7.2 `window.__backrooms` (`BackroomsDebugAPI` in `core/debug.ts`)
 
@@ -5237,13 +5240,13 @@ decal program.
   1. textures generated;
   2. `compileAsync` warmup done;
   3. spawn resolved;
-  4. every tile of the chunks within Chebyshev 1 of the player resident, faded in, and **full-baked** (or preview if `bake=preview`);
-  5. exposure snapped;
-  6. 10 frames rendered.
+  4. the stream condition: with `bake=full`, the whole capture set (§7.5) resident, full-baked and uploaded, with its chunks' layouts; for players, the preview-lit tiles within 20 m and in view within 40 m;
+  5. with `bake=full`, the settle of §7.5 (quiet frames, probe settled, exposure metered and applied); for players, the exposure snapped and 10 frames rendered.
 
-  It goes `false` during teleport/goto until those hold again.
-- **`readyPhase`**: one of `boot`, `textures`, `shaders`, `spawn`, `chunks`, `bake`, `frames`, `ready`.
-- **`stats()` → `DebugStats`**: fps; frameMs {avg, p95, max, max5s}; cpuMs; gpuMs (null when timer queries are unavailable); render {drawCalls, triangles, programs, textures, geometries}; chunks; tiles {resident, preview, full, queued, inFlight, uploadsPending, fadingIn}; workers; bake timings; player {s, x, y, z, yaw, pitch, zone, mood, surface, cell, chunk, onGround, fly}; exposure; lights; audio; timeFrozen; warnings; errors.
+  It goes `false` during teleport/goto/load until those hold again.
+- **`readyPhase`**: one of `boot`, `textures`, `shaders`, `spawn`, `chunks`, `bake`, `settle` (automation), `frames` (players), `ready`.
+- **Capture contract v2** (`captureGate === 2`; absent on older builds): `whenReady()` resolves at the next ready (at once when ready); `load(search)` applies a whole shot in place (§7.5); `frames(n)` resolves after n more rendered frames.
+- **`stats()` → `DebugStats`**: fps; frameMs {avg, p95, max, max5s}; cpuMs; gpuMs (null when timer queries are unavailable); render {drawCalls, triangles, programs, textures, geometries}; chunks; tiles {resident, preview, full, queued, inFlight, uploadsPending, fadingIn, and with `bake=full` gate, gateReady, scope}; workers; bake timings; player {s, x, y, z, yaw, pitch, zone, mood, surface, cell, chunk, onGround, fly}; exposure; lights; audio; timeFrozen; warnings; errors.
 - **Control:**
   - `teleport({x, z, y?, s?, yaw?, pitch?})`: Promise, resolves when ready again;
   - `goto(target)`, `look(yaw, pitch)`;
@@ -5296,6 +5299,31 @@ All shots use `time=10&noaudio=1` unless noted.
 15. **`edge`.** `forceZone=LOW_EXPANSE`, `quality=low` and `high`: an eval sprint (3.2 m/s) along an artery for 120 s; sampled `imageStats` of the horizon band never shows the clear colour as a hard edge (fog-end check) and `tiles.fadingIn` never exceeds 8.
 16. **`decals`.** `forceZone=PARKING` and `forceMood=DYING` at L0: decals render soft-edged, no z-fighting at 40 m (two captures at slightly different yaw have no flickering stripe pixels).
 
+### 7.5 Capture contract v2 and the tool-run result cache
+
+**Why.** Automation captures used to depend on timing: the old gate waited for chunk ring 1 only, so tiles 38-61 m away kept arriving after ready, each one within the probe's reach re-captured the reflection probe, the exposure was still snapping, and simulation time ran until the gate froze it. The same shot differed by up to 771k px between ready and ready + 250 ms, 15.7k px between a cold and a warm cache, and 12k px between a fresh page and one reused in place; tools slept 250 ms after ready to hide part of it. Gate v2 defines readiness by position and view, and measures it in frames.
+
+**Capture set** (`stream/priorities.ts inCaptureSet`, per tile, recomputed every frame while the gate is closed): chunk ring ≤ 1 always; beyond it only tiles within the edge-fog end (a fogged tile's group is hidden from every pass); within it every tile whose axis-aligned distance from the eye is ≤ `CAPTURE_NEAR_M` = 60 m + 1 m (the reflection probe renders the cube [−60, 60]³ around its anchor: 60 m along each axis, up to 85 m on the diagonals; the light atlas is sampled within 56 m), plus every tile intersecting the view frustum (tested against y −20…20 m, which also covers the planar mirror's reflected frustum). About 44-52 tiles at high and 62-68 at ultra, against 36 before.
+
+**Streaming** (`ChunkStreamer`, `StreamerOptions.capture`): capture tiles are built with full lighting at `GATE_FIRST` priority, and the layouts of their chunks too. While the gate is closed nothing else is submitted, and a gate that closes (a teleport, a `load()`) drops the queued work outside its set, so a shot never waits behind the last one's far ring. `stream=capture` keeps it so after ready: the desired set is the capture chunks, and sweep evicts the rest with no hysteresis ring. `getCaptureControl(streamer)` exposes `isCaptureReady()` (every capture tile resident with its full bake, none rebuilding or queued for upload, every chunk holding one with its layout; failed tiles count as ready, as before), the upload steps of the last frame, `setScope()` and `stats()`.
+
+**Settle** (`app/loop.ts`, pure `settleStep`): a launch gate (boot, seed, load) freezes the clock at `time` when it opens. Once the capture set is complete the launch toggles apply and the probe re-captures all faces (`ReflectionProbe.refresh`). Then `QUIET_FRAMES` = 3 consecutive frames with no residency step, no light-atlas slot left to upload (`atlasPending`) and the probe settled (`info.settled`: anchor captured and prefiltered, no stale face, box re-estimated since the last layout change). Then `settleExposure(post)`: the spring restarts from EV100 9.4, a meter reading in flight is dropped, and the meter reads every frame until `SNAP_MEASUREMENTS` = 3 readings of quiet frames are applied; anything that breaks the calm meanwhile restarts the settle. Ready follows with the `br:settled` performance mark. After 180 frames it warns (QA fails on warnings) and goes ready anyway. Players keep their gate unchanged.
+
+Result on the D2 list (docs/PERFORMANCE_AUDIT.md): the capture at ready equals the one after full idle + 60 frames, with an empty cache, in place after other shots, with `noprime=1` and with `stream=capture`, to the pixel.
+
+**In place: `__backrooms.load(search)`** (`App.ts`) → `{ ok: true, ms }`, or `{ ok: false, reason: 'boot-param', keys }` when a `BOOT_PARAM_KEYS` value differs from the page's (or the preset was changed with `setQuality` since boot), or `{ ok: false, reason: 'busy' | 'lost' }`. It waits for boot and pending quality changes, stops the loop, then:
+- resets what the debug API and evals can change: `resetLaunchToggles` (clock running, no exposure lock, view final, flashlight off, the post enable set boot recorded, default feature toggles, reflection debug off, contact shadows and volumetrics on, the flicker mode from the launch or the settings, fly off), the anomaly director, lighting, audio, glitch, drivers and frame hooks, a new dynamic-resolution controller at the preset scale, frame statistics, `stats().warnings` / `errors` and the `events()` log;
+- resets the world (`streamer.reset`) only when a world parameter changed (seed, forceZone, forceMood, forceLandmark, testScene, lights, bakeTerm), and switches the stream scope to the shot's `stream`;
+- resolves the pose with `resolveSpawn` from the seed's base spawn exactly as a boot does (searching from the current position finds other instances), and makes the streamer forget its last position (`getCaptureControl(streamer).forgetPosition()`: `switchStorey` would otherwise start the new storey around the previous shot's x/z);
+- teleports (y re-snapped for an explicit position without `y`), emits `teleport` (probe, ripples, motion blur and bounce reset), restarts the clock and the loop, replaces the history entry, and opens a `load` gate, which behaves like a boot gate;
+- shows no curtain, loading screen or title: the DOM stays that of a fresh autostart page at ready.
+
+**Tool-run result cache** (`workers/tileCache.ts`, `tools/viteTileCache.ts`; tool runs only). Layout, build, bake, spawn and find results are pure functions of the worker code, the init and the request, so tool runs share them through the dev server.
+- Keys: SHA-1 of canonical JSON (sorted keys) of a code hash, the init and the request without its job id. Layout / spawn / find use the world hash (a tree-shaken, minified rolldown bundle of `workers/worldStage.ts`, which re-exports exactly what those branches run, plus the verbatim source of `handler.ts` and `validatePayload.ts`, whose own code around those calls is not in that bundle) and the world options only, so they survive baker edits and quality changes. Build / bake use the tile hash (the bundle of `chunk.worker.ts`) and the bake settings. Comments, types and render-only code reached through the `core/index.ts` barrel do not change the bundles. Both hashes include the entry codec, the package, rolldown and vite versions and `CACHE_SALT`, and are memoised on a stamp of the worker graph (paths, mtimes, sizes) in memory and in `<cache dir>/.hashmemo.json`. `handler.ts` must import the world-stage symbols only through `worldStage.ts` (tests/workers/worldStage.test.ts).
+- A `bake` miss is answered from the `build lighting:'full'` entry of the same tile (the same lightmap; the streamer's chartHash check still guards it).
+- Writes: each bake worker transfers the encoded result to its own writer worker (`workers/cacheWriter.worker.ts`), which gzips and PUTs it, so no bake thread waits on compression or uploads (at most 8 entries in flight per writer; beyond that a result is not stored). The writers still share the machine with the memory-bandwidth-bound bakes: on a cold location they cost about 0.6 s against no cache at all, and the reads (key digests, GET misses) about 0.3 s (docs/PERFORMANCE_AUDIT.md). The server also accepts raw PUTs (`X-BR-Raw: 1`) and gzips them at zlib level 1 on the libuv pool behind a queue of 8 (503 when full), but raw uploads from the browser measured slower than gzipping there (`WRITER_RAW` in tileCache.ts).
+- Store: `<dir>/<ns>/<key>`, ns = the first 12 hex digits of the code hash in the key; flat legacy keys are still served. All I/O is asynchronous, mtime updates are batched every 5 s, and an in-memory size index drives eviction in batches above cap × 1.05, down to cap × 0.9: legacy files first, then whole namespaces unused for 24 h beyond the 3 most recently used, then least recently used entries. `GET /__tilecache/status` reports the hashes, entries, bytes and PUTs in flight.
+- `tileCachePlugin(enabled)` stays a Vite plugin: `config()` injects `__BR_TILE_CACHE__`, `__BR_TILE_CACHE_WORLD__` and `__BR_TILE_CACHE_FEATURES__`, and `configureServer(server)` only calls `server.middlewares.use('/__tilecache/', fn)`, so a plain http server can mount the same store.
 
 ---
 

@@ -6,6 +6,8 @@
 //  3. readRenderTargetPixelsAsync (RGBA8/UnsignedByte), at most one read in flight, every MEASURE_EVERY frames
 //     (each read is a PBO readPixels + fence that can cost a pipelined frame on some drivers; the exposure spring
 //     adapts over seconds, so ~20 reads/s at 165 Hz or ~8/s at 60 Hz are plenty).
+//     settle(true) (the automation ready gate, PostStack settleExposure): a read every frame, and a read already in
+//     flight is dropped, so every reading from then on meters a frame rendered after the call.
 //  4. CPU (PostStack): EV100 = avgLog2 + log2(100/12.5), clamped to the atmosphere range, spring-adapted.
 
 import * as THREE from 'three';
@@ -68,6 +70,10 @@ export class AutoExposurePass extends Pass {
   /** 0 = normal centre-weighted average, 1 = near-spot metering (the flashlight beam). */
   centerFocus = 0;
   paused = false;
+  /** measure every frame (automation settle) instead of every MEASURE_EVERY frames */
+  private settling = false;
+  /** readings of an older generation are dropped (settle() starts a new one) */
+  private gen = 0;
   private readonly logRT: THREE.WebGLRenderTarget;
   private readonly packRT: THREE.WebGLRenderTarget;
   private readonly logMat: THREE.ShaderMaterial;
@@ -103,10 +109,17 @@ export class AutoExposurePass extends Pass {
     this.fullscreenMaterial = this.logMat;
   }
 
+  /** Settle mode on: a new generation (the reading in flight, if any, is dropped) and a reading per frame. Off:
+   * back to one every MEASURE_EVERY frames. */
+  settle(on: boolean): void {
+    this.settling = on;
+    if (on) this.gen++;
+  }
+
   override render(renderer: THREE.WebGLRenderer, inputBuffer: THREE.WebGLRenderTarget | null): void {
     if (!inputBuffer || this.disposed) return;
     this.frame++;
-    if (this.paused || this.inFlight || this.frame % MEASURE_EVERY !== 1) return;
+    if (this.paused || this.inFlight || (!this.settling && this.frame % MEASURE_EVERY !== 1)) return;
     this.logMat.uniforms.tInput.value = inputBuffer.texture;
     this.logMat.uniforms.uMaxLum.value = this.maxLum;
     this.logMat.uniforms.uFocus.value = Math.min(1, Math.max(0, this.centerFocus));
@@ -118,10 +131,11 @@ export class AutoExposurePass extends Pass {
     renderer.render(this.scene, this.camera);
     this.fullscreenMaterial = this.logMat;
     this.inFlight = true;
+    const gen = this.gen;
     renderer.readRenderTargetPixelsAsync(this.packRT, 0, 0, 1, 1, this.px).then(
       () => {
         this.inFlight = false;
-        if (this.disposed) return;
+        if (this.disposed || gen !== this.gen) return;
         const v = unpackLog2(this.px[0], this.px[1]);
         if (Number.isFinite(v)) { this.measuredLog2 = v; this.measurements++; }
       },

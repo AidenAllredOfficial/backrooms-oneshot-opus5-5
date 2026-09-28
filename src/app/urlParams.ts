@@ -17,8 +17,45 @@ export const LAUNCH_PARAM_KEYS: readonly string[] = [
   'seed', 'autostart', 's', 'x', 'y', 'z', 'yaw', 'pitch', 'yawDeg', 'pitchDeg', 'fov', 'goto', 'zone', 'forceZone',
   'forceMood', 'forceLandmark', 'testScene', 'quality', 'scale', 'radius', 'view', 'time', 'freeze', 'exposure',
   'flashlight', 'fly', 'noaudio', 'nopost', 'ao', 'bloom', 'grain', 'lens', 'flicker', 'lights', 'bake', 'bakeTerm',
-  'camcorder', 'hud', 'debug', 'noprime', 'ssr', 'probe', 'cs', 'bounce', 'vol', 'reflView',
+  'camcorder', 'hud', 'debug', 'noprime', 'ssr', 'probe', 'cs', 'bounce', 'vol', 'reflView', 'stream',
 ];
+
+/** Keys that shape a page at boot (renderer, preset, pool, bake mode, DOM): __backrooms.load() refuses a search
+ * whose values for these differ from the page's, and tools group shots by them. Everything else (seed, pose,
+ * world overrides, time, view, feature and post toggles, stream) is applied in place. */
+export const BOOT_PARAM_KEYS: readonly string[] = [
+  'quality', 'scale', 'radius', 'bake', 'camcorder', 'hud', 'debug', 'noaudio', 'autostart', 'noprime',
+];
+
+/** The parsed value of every BOOT_PARAM_KEYS entry (what load() compares; a key's absence is its default). */
+export function bootParamValues(p: LaunchParams): Record<string, unknown> {
+  return {
+    quality: p.quality, scale: p.scale, radius: p.radius, bake: p.bake, camcorder: p.camcorder, hud: p.hud, debug: p.debug,
+    noaudio: !p.audio, autostart: p.autostart, noprime: !p.prime,
+  };
+}
+
+/** The BOOT_PARAM_KEYS whose values differ between two launches. */
+export function bootParamDiff(a: LaunchParams, b: LaunchParams): string[] {
+  const va = bootParamValues(a), vb = bootParamValues(b);
+  return BOOT_PARAM_KEYS.filter((k) => va[k] !== vb[k]);
+}
+
+/** The boot keys that stop __backrooms.load(next) on a page launched with `live`: every BOOT_PARAM_KEYS value that
+ * differs, plus 'quality' when the running preset is no longer the one boot resolved (setQuality in place). */
+export function loadRefusal(live: LaunchParams, next: LaunchParams, bootQuality: string | null, runningQuality: string | null): string[] {
+  const keys = bootParamDiff(live, next);
+  if (bootQuality !== null && runningQuality !== null && runningQuality !== bootQuality && !keys.includes('quality')) keys.push('quality');
+  return keys;
+}
+
+/** Launch keys that change the worker's world (WorkerInit.opts / bakeTerm): a change needs a streamer reset. */
+export const WORLD_PARAM_KEYS: readonly (keyof LaunchParams)[] = [
+  'seedText', 'forceZone', 'forceMood', 'forceLandmark', 'testScene', 'lights', 'bakeTerm',
+];
+
+/** Whether two launches generate different worlds. */
+export const worldChanged = (a: LaunchParams, b: LaunchParams): boolean => WORLD_PARAM_KEYS.some((k) => a[k] !== b[k]);
 
 /** Simple goto targets (no NAME part). */
 export const GOTO_SIMPLE: readonly string[] = ['tower', 'elevator', 'dark', 'water', 'flicker', 'spawn'];
@@ -87,7 +124,7 @@ function defaults(seedText: string): LaunchParams {
     view: 'final', time: null, freeze: false, exposure: 'auto', flashlight: false, fly: false, audio: true, post: true,
     ao: true, bloom: true, grain: true, lens: true, flicker: null, lights: 'default', bake: 'full', bakeTerm: 'all',
     camcorder: false, hud: true, debug: false, prime: true, ssr: true, probe: true, cs: true, bounce: true, vol: true,
-    reflView: 'off', warnings: [],
+    reflView: 'off', stream: 'full', warnings: [],
   };
 }
 
@@ -282,6 +319,10 @@ export function parseLaunchParams(search: string, settings: Settings, randomSeed
   out.bounce = bool('bounce', true);
   out.vol = bool('vol', true);
   out.reflView = oneOf('reflView', REFL_VIEWS) ?? 'off';
+  // capture-only streaming is an automation mode: honoured with bake=full only
+  const stream = oneOf('stream', ['capture', 'full'] as const);
+  if (stream === 'capture' && out.bake !== 'full') w.push("stream: 'capture' needs bake=full; ignored");
+  out.stream = stream === 'capture' && out.bake === 'full' ? 'capture' : 'full';
   return out;
 }
 

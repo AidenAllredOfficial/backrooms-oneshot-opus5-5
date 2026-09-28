@@ -18,6 +18,16 @@
 //   resident + full bake -> texture step only: in-place texture swap, bake = 'full'
 //   evict: resident -> evicting (removed from the scene) -> next frame: dispose -> disposed
 // A full bake that arrives before the texture step is uploaded directly (the preview is skipped).
+//
+// Automation capture gate (gate v2, StreamerOptions.capture: bake=full launches). Every tile carries a gate flag,
+// recomputed with the priorities (every frame while the gate is closed): priorities.ts inCaptureSet, the tiles that
+// can change a still capture (ring 1, the probe cube / light-atlas reach, whatever is in view within the fog end).
+// Gate tiles are built with full lighting at GATE_FIRST priority, and their chunks' layouts too. While the ready
+// gate is closed (capture.gateClosed()) nothing else is submitted: other tiles and chunks wait (their queued jobs
+// are cancelled when a gate closes) and follow once it opens. Scope 'capture' (URL stream=capture) keeps it that way
+// after ready: the desired set is the chunks holding capture tiles, and sweep evicts the rest without hysteresis.
+// getCaptureControl(streamer).isCaptureReady(): every gate tile resident with its full bake (failed ones count), no
+// gate tile rebuilding or waiting in the upload queue, every chunk holding one with its layout (or failed).
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, TILE_SIZE, UPLOAD } from '../core/constants.ts';
@@ -33,8 +43,8 @@ import type {
 } from '../core/runtime.ts';
 import type { WorkerInit, WorkerRequest, WorkerResponse } from '../core/worker.ts';
 import {
-  QUERY_PRIORITY, basePriority, createMotion, desiredChunks, fogHidden, jobPriority, keepResident, lookahead,
-  rectDistance, resetMotion, updateMotion,
+  CAPTURE_VIEW_Y, QUERY_PRIORITY, basePriority, createMotion, desiredChunks, fogHidden, inCaptureSet, jobPriority,
+  keepResident, lookahead, rectChebyshev, rectDistance, resetMotion, updateMotion,
 } from './priorities.ts';
 import type { JobType } from './priorities.ts';
 import { createTileUploader, type TileGpu, type TileUploader, type UploaderMemory } from './TileObject.ts';
@@ -46,16 +56,47 @@ export interface StreamerOptions {
   /** optional debug hook (chunk harness atlas stats): called when a build or bake payload arrives */
   onTileData?: (key: string, kind: 'build' | 'bake', mesh: TileMesh | null, lm: LightmapData, ms: number) => void;
   /** Full bakes of the tiles in chunk rings <= this run at build priority (ahead of farther builds and previews).
-   * The automation ready gate (bake 'full') waits for ring 1 fully baked; players' gates need previews only, so
-   * they keep the default (-1: full bakes queue behind nearby builds, priorities.ts). */
+   * Superseded by `capture` (the automation gate v2); players' gates need previews only, so they keep the default
+   * (-1: full bakes queue behind nearby builds, priorities.ts). */
   fullBakeRing?: number;
+  /** Automation capture gate (bake=full launches): see the header. */
+  capture?: CaptureOptions;
 }
+
+/** Scope of the desired set: 'full' = the stream radius (players, QA); 'capture' = the capture set only. */
+export type StreamScope = 'capture' | 'full';
+
+export interface CaptureOptions {
+  /** true while the ready gate is closed (App: core.gate.active); nothing but capture-set work is submitted */
+  gateClosed(): boolean;
+  scope: StreamScope;
+}
+
+/** The capture-gate side of a streamer (createStreamerCore with `capture`; also for fullBakeRing streamers). */
+export interface CaptureControl {
+  /** the capture set is complete (see the header); false before the first update */
+  isCaptureReady(): boolean;
+  /** residency steps (texture / geometry / swap units of work) done by the last processUploads */
+  readonly stepsLastFrame: number;
+  readonly scope: StreamScope;
+  /** switch the desired set ('capture' after 'full' evicts the rest progressively) */
+  setScope(s: StreamScope): void;
+  /** Forget the player's last position: nothing is re-targeted until the next update, which starts from its own
+   * x/z. __backrooms.load() calls it before it moves the player: switchStorey re-targets the new storey at once at
+   * the LAST x/z (right for stairs and lifts), which for a shot in place meant layouts and full builds for the
+   * previous shot's place (the first in-view jobs reach the workers before the next update can cancel them). */
+  forgetPosition(): void;
+  stats(): { gateTiles: number; gateReady: number; gateChunks: number; scope: StreamScope };
+}
+const captureControls = new WeakMap<WorldStreamer, CaptureControl>();
+/** The capture control of a streamer made by createStreamerCore / createChunkStreamer (null for other objects). */
+export const getCaptureControl = (st: WorldStreamer): CaptureControl | null => captureControls.get(st) ?? null;
 
 export function createChunkStreamer(o: StreamerOptions): WorldStreamer {
   const uploader = createTileUploader(o.renderer, o.materials);
   return createStreamerCore({
     quality: o.quality, init: o.init, bus: o.bus, pool: o.pool, startStorey: o.startStorey, uploader, onTileData: o.onTileData,
-    fullBakeRing: o.fullBakeRing,
+    fullBakeRing: o.fullBakeRing, capture: o.capture,
   });
 }
 
@@ -74,6 +115,7 @@ export interface StreamerCoreOptions {
   budgetClock?: () => number;
   onTileData?: StreamerOptions['onTileData'];
   fullBakeRing?: number;
+  capture?: CaptureOptions;
 }
 
 /** Prefetched data expires this long after the last prefetch() call covering it. */
@@ -123,6 +165,8 @@ interface ChunkRec {
   pfx: number; pfz: number; // prefetch centre (world m) for prefetch priorities
   prio: number; // base priority (chunk)
   ring: number; // chunk ring around the player (current storey, desired); Infinity for prefetch chunks
+  inRadius: boolean; // in the stream radius's desired set (scope 'capture' desires only its chunks with gate tiles)
+  gate: boolean; // holds a gate tile (its layout runs at GATE_FIRST and gates readiness)
   evicted: boolean;
   listIdx: number;
   retries: number;
@@ -148,6 +192,7 @@ interface TileRec {
   fadeStart: number;
   prio: number;
   inView: boolean; // in the camera frustum at the last priority refresh (bake priority bonus)
+  gate: boolean; // in the automation capture set (or the fullBakeRing ring): full lighting, GATE_FIRST, gates ready
   ox: number; oz: number;
   evicted: boolean;
   loaded: boolean; // tileLoaded emitted
@@ -250,15 +295,26 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   const isPrefetchChunk = (c: ChunkRec): boolean => c.s !== storey || !c.desired;
   const isOwnChunk = (c: ChunkRec): boolean => c.s === storey && c.key.cx === pcx && c.key.cz === pcz;
   const fullBakeRing = o.fullBakeRing ?? -1;
-  const inGateRing = (c: ChunkRec): boolean => c.ring <= fullBakeRing && !isPrefetchChunk(c);
-  /** job type whose offset a tile's full bake takes: 'build' inside o.fullBakeRing (automation gate), else 'bake' */
-  const bakeType = (c: ChunkRec): JobType => (inGateRing(c) ? 'build' : 'bake');
-  /** the gate ring's builds and bakes run before any other tile work (farther previews wait) */
+  const cap = o.capture ?? null;
+  /** automation streamer (bake 'full'): gate flags, GATE_FIRST, full-lit gate builds */
+  const automation = cap !== null || fullBakeRing >= 0;
+  let scope: StreamScope = cap ? cap.scope : 'full';
+  let gateClosed = false;
+  let stepsLastFrame = 0;
+  /** job type whose offset a tile's full bake takes: 'build' for gate tiles (automation gate), else 'bake' */
+  const bakeType = (t: TileRec): JobType => (t.gate ? 'build' : 'bake');
+  /** the gate set's layouts, builds and bakes run before any other tile work (farther previews wait) */
   const GATE_FIRST = -500;
   const tileJobPriority = (t: TileRec, type: JobType, viewBonus = true): number => {
     const c = t.chunk;
-    return jobPriority(t.prio, type, isPrefetchChunk(c), isOwnChunk(c), viewBonus && t.inView) + (inGateRing(c) ? GATE_FIRST : 0);
+    return jobPriority(t.prio, type, isPrefetchChunk(c), isOwnChunk(c), viewBonus && t.inView) + (t.gate ? GATE_FIRST : 0);
   };
+  const layoutPriority = (c: ChunkRec): number =>
+    jobPriority(c.prio, 'layout', isPrefetchChunk(c), isOwnChunk(c)) + (c.gate ? GATE_FIRST : 0);
+  /** Work on this chunk / tile waits: a closed automation gate submits capture-set work only, and scope 'capture'
+   * never streams the rest of the radius (prefetch groups are left to the traversal once the gate is open). */
+  const holdChunk = (c: ChunkRec): boolean => !c.gate && ((gateClosed && automation) || (scope === 'capture' && !isPrefetchChunk(c)));
+  const holdTile = (t: TileRec): boolean => !t.gate && ((gateClosed && automation) || (scope === 'capture' && !isPrefetchChunk(t.chunk)));
 
   function inView(x0: number, z0: number, size: number): boolean {
     if (haveFrustum) {
@@ -270,15 +326,34 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     return cx * viewX + cz * viewZ > -size;
   }
 
+  /** In view for the capture set: the frustum against a tall box (priorities.ts CAPTURE_VIEW_Y). */
+  function captureInView(x0: number, z0: number, size: number): boolean {
+    if (haveFrustum) {
+      box.min.set(x0, CAPTURE_VIEW_Y[0], z0);
+      box.max.set(x0 + size, CAPTURE_VIEW_Y[1], z0 + size);
+      return frustum.intersectsBox(box);
+    }
+    const cx = x0 + size / 2 - px, cz = z0 + size / 2 - pz;
+    return cx * viewX + cz * viewZ > -size;
+  }
+
   function computeChunkPrio(c: ChunkRec): void {
     const x0 = c.key.cx * CHUNK_SIZE, z0 = c.key.cz * CHUNK_SIZE;
-    if (!isPrefetchChunk(c) && !Number.isNaN(pcx)) {
+    let gate = false;
+    // radius chunks that scope 'capture' does not desire (yet) are measured like desired ones: turning the view can
+    // bring capture tiles into them
+    if ((!isPrefetchChunk(c) || (c.inRadius && c.s === storey)) && !Number.isNaN(pcx)) {
       const ring = chebyshev(c.key.cx, c.key.cz, pcx, pcz);
       c.ring = ring;
       c.prio = basePriority(ring, inView(x0, z0, CHUNK_SIZE), rectDistance(px, pz, x0, z0, x0 + CHUNK_SIZE, z0 + CHUNK_SIZE));
       for (const t of c.tiles) {
         t.inView = inView(t.ox, t.oz, TILE_SIZE);
-        t.prio = basePriority(ring, t.inView, rectDistance(px, pz, t.ox, t.oz, t.ox + TILE_SIZE, t.oz + TILE_SIZE));
+        const d = rectDistance(px, pz, t.ox, t.oz, t.ox + TILE_SIZE, t.oz + TILE_SIZE);
+        t.prio = basePriority(ring, t.inView, d);
+        t.gate = cap
+          ? inCaptureSet(ring, d, captureInView(t.ox, t.oz, TILE_SIZE), quality.streamRadius, rectChebyshev(px, pz, t.ox, t.oz, t.ox + TILE_SIZE, t.oz + TILE_SIZE))
+          : ring <= fullBakeRing;
+        if (t.gate) gate = true;
       }
     } else {
       const ring = chebyshev(c.key.cx, c.key.cz, worldToChunk(c.pfx), worldToChunk(c.pfz));
@@ -286,32 +361,77 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       c.prio = basePriority(ring, true, rectDistance(c.pfx, c.pfz, x0, z0, x0 + CHUNK_SIZE, z0 + CHUNK_SIZE));
       for (const t of c.tiles) {
         t.inView = false;
+        t.gate = false;
         t.prio = basePriority(ring, true, rectDistance(c.pfx, c.pfz, t.ox, t.oz, t.ox + TILE_SIZE, t.oz + TILE_SIZE));
       }
     }
+    c.gate = gate;
   }
 
   function applyJobPriorities(c: ChunkRec): void {
-    const pf = isPrefetchChunk(c), own = isOwnChunk(c);
-    if (c.layoutJob) c.layoutJob.priority = jobPriority(c.prio, 'layout', pf, own);
+    if (c.layoutJob) c.layoutJob.priority = layoutPriority(c);
     for (const t of c.tiles) {
       if (t.buildJob) t.buildJob.priority = tileJobPriority(t, 'build');
-      if (t.bakeJob) t.bakeJob.priority = tileJobPriority(t, bakeType(c));
+      if (t.bakeJob) t.bakeJob.priority = tileJobPriority(t, bakeType(t));
     }
+  }
+
+  /** Scope 'capture': a chunk of the radius is desired only while it holds a capture tile (the player's own chunk
+   * always does: ring 0). Returns true when a chunk became desired (its jobs are started by the caller). */
+  function applyScope(c: ChunkRec): boolean {
+    if (c.s !== storey || !c.inRadius) return false;
+    const want = scope === 'full' || c.gate;
+    if (want === c.desired) return false;
+    c.desired = want;
+    return want;
   }
 
   function reprioritize(): void {
     for (let i = 0; i < chunkList.length; i++) {
       const c = chunkList[i];
       computeChunkPrio(c);
+      if (applyScope(c)) computeChunkPrio(c);
       applyJobPriorities(c);
+      // capture-set membership moves with the view: start whatever a new gate tile (or chunk) still needs
+      if (automation && c.gate && !isPrefetchChunk(c)) startJobs(c);
+    }
+  }
+
+  /** A gate closed: drop the queued / running work it holds back (a new shot must not wait behind the last one's
+   * far ring). The tiles and chunks are re-submitted once they are wanted again. */
+  function cancelHeld(): void {
+    for (let i = 0; i < chunkList.length; i++) {
+      const c = chunkList[i];
+      if (c.layoutJob && holdChunk(c)) { c.layoutJob.cancel(); c.layoutJob = null; }
+      for (const t of c.tiles) {
+        if (!holdTile(t)) continue;
+        if (t.buildJob) {
+          t.buildJob.cancel();
+          t.buildJob = null;
+          // a resident tile's build is a rebuild (restartAllJobs: a quality change, whose gate closes right after):
+          // it must be requested again, or the tile keeps the old preset's atlas for good
+          if (t.gpu) t.needBuild = true;
+          else if (!t.staging && !t.mesh) t.state = 'queued';
+        }
+        if (t.bakeJob) { t.bakeJob.cancel(); t.bakeJob = null; t.needBake = true; }
+      }
+    }
+  }
+
+  /** A gate opened (or the scope widened): submit everything that was held back. */
+  function pumpAll(): void {
+    const now = clock();
+    for (let i = 0; i < chunkList.length; i++) {
+      const c = chunkList[i];
+      if (c.desired && c.s === storey) startJobs(c);
+      else if (c.keepUntil > now) startJobs(c);
     }
   }
 
   // ================================================================ jobs
 
   function submitLayout(c: ChunkRec): void {
-    const h = pool.submit({ t: 'layout', job: 0, key: c.key }, jobPriority(c.prio, 'layout', isPrefetchChunk(c), isOwnChunk(c)), c.ks);
+    const h = pool.submit({ t: 'layout', job: 0, key: c.key }, layoutPriority(c), c.ks);
     c.layoutJob = h;
     h.promise.then((r) => {
       if (c.evicted || c.layoutJob !== h) return;
@@ -331,9 +451,9 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
 
   function submitBuild(t: TileRec): void {
     const c = t.chunk;
-    // inside fullBakeRing the build bakes full lighting at once (the gate would replace a preview right away)
+    // gate tiles bake full lighting at once (the gate would replace a preview right away)
     const req: Extract<WorkerRequest, { t: 'build' }> = { t: 'build', job: 0, key: t.key };
-    if (bakeType(c) === 'build') req.lighting = 'full';
+    if (t.gate) req.lighting = 'full';
     const h = pool.submit(req, tileJobPriority(t, 'build'), c.ks);
     t.buildJob = h;
     t.needBuild = false;
@@ -357,7 +477,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   function submitBake(t: TileRec): void {
     const c = t.chunk;
     t.needBake = false;
-    const h = pool.submit({ t: 'bake', job: 0, key: t.key }, tileJobPriority(t, bakeType(c)), c.ks);
+    const h = pool.submit({ t: 'bake', job: 0, key: t.key }, tileJobPriority(t, bakeType(t)), c.ks);
     t.bakeJob = h;
     h.promise.then((r) => {
       if (t.evicted || t.bakeJob !== h) return;
@@ -440,7 +560,10 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     t.atlasHash = mesh.atlas.chartHash;
     if (!t.gpu) t.state = 'received';
     queueStep(t, STEP_TEX);
-    if (!t.bakeJob && !t.full) submitBake(t);
+    if (!t.bakeJob && !t.full) {
+      if (holdTile(t)) t.needBake = true; // follows when the gate opens (pumpAll)
+      else submitBake(t);
+    }
   }
 
   /** A full bake failed or came back unusable: retry once, then keep the preview (logged; never blocks readiness). */
@@ -471,8 +594,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     const key: ChunkKey = { s, cx, cz };
     c = {
       key, ks: chunkKeyStr(key), s, nk, layoutJob: null, data: null, tiles: [], desired: false, keepUntil: 0,
-      pfx: (cx + 0.5) * CHUNK_SIZE, pfz: (cz + 0.5) * CHUNK_SIZE, prio: 0, ring: Infinity, evicted: false, listIdx: chunkList.length, retries: 0,
-      failed: false,
+      pfx: (cx + 0.5) * CHUNK_SIZE, pfz: (cz + 0.5) * CHUNK_SIZE, prio: 0, ring: Infinity, inRadius: false, gate: false, evicted: false,
+      listIdx: chunkList.length, retries: 0, failed: false,
     };
     recs[s].set(nk, c);
     chunkList.push(c);
@@ -480,7 +603,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       const tk: TileKey = { s, cx, cz, q: q as 0 | 1 | 2 | 3 };
       const t: TileRec = {
         key: tk, ks: tileKeyStr(tk), chunk: c, state: 'queued', buildJob: null, bakeJob: null, mesh: null, lm: null, full: null,
-        atlasHash: NaN, step: STEP_NONE, partial: false, upLm: null, gpu: null, staging: null, stagingBake: 'preview', rt: null, fadeStart: 0, prio: 0, inView: false,
+        atlasHash: NaN, step: STEP_NONE, partial: false, upLm: null, gpu: null, staging: null, stagingBake: 'preview', rt: null, fadeStart: 0, prio: 0, inView: false, gate: false,
         ox: tileOriginX(tk), oz: tileOriginZ(tk), evicted: false, loaded: false, failed: false, retries: 0, bakeRetries: 0, bakeFailed: false, needBake: false,
         needBuild: false,
         upIdx: -1, fadeIdx: -1, liveIdx: -1,
@@ -491,12 +614,15 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     return c;
   }
 
-  /** Submit whatever jobs a freshly created (or re-initialised) chunk still needs. */
+  /** Submit whatever jobs a freshly created (or re-initialised) chunk still needs: its layout, builds, and the full
+   * bakes held back while a gate was closed. Held work (holdChunk / holdTile) waits. Idempotent. */
   function startJobs(c: ChunkRec): void {
     computeChunkPrio(c);
-    if (!c.data && !c.layoutJob && !c.failed) submitLayout(c);
+    if (!c.data && !c.layoutJob && !c.failed && !holdChunk(c)) submitLayout(c);
     for (const t of c.tiles) {
+      if (holdTile(t)) continue;
       if (!t.buildJob && !t.mesh && !t.staging && !t.failed && (!t.gpu || t.needBuild)) submitBuild(t);
+      else if (t.needBake && !t.bakeJob && !t.buildJob) submitBake(t);
     }
   }
 
@@ -567,16 +693,29 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     const R = quality.streamRadius;
     for (let i = 0; i < chunkList.length; i++) {
       const c = chunkList[i];
-      if (c.s === storey) c.desired = false;
+      if (c.s === storey) { c.desired = false; c.inRadius = false; }
     }
     const n = desiredChunks(lcx, lcz, pcx, pcz, R, desiredScratch);
     for (let i = 0; i < n; i++) {
       const c = ensureChunk(storey, desiredScratch[i * 2], desiredScratch[i * 2 + 1]);
       c.desired = true;
+      c.inRadius = true;
+    }
+    // scope 'capture': only the chunks holding capture tiles stay desired (gate flags need the final desired flags
+    // of every chunk first: computeChunkPrio treats undesired chunks as prefetch groups)
+    if (scope === 'capture') {
+      for (let i = 0; i < n; i++) {
+        const c = recs[storey].get(chunkNumKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec;
+        computeChunkPrio(c);
+        c.desired = c.gate;
+      }
     }
     chunksDesired = n;
     // jobs after every desired flag is final (priorities depend on it), nearest ring first
-    for (let i = 0; i < n; i++) startJobs(recs[storey].get(chunkNumKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec);
+    for (let i = 0; i < n; i++) {
+      const c = recs[storey].get(chunkNumKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec;
+      if (c.desired) startJobs(c);
+    }
     tStorey = storey;
     tRadius = R;
   }
@@ -595,14 +734,21 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     return Math.max(0, used - budget - disposeQ.length * perTile);
   }
 
+  const emptyChunk = (c: ChunkRec): boolean =>
+    !c.data && !c.layoutJob && c.tiles.every((t) => !t.gpu && !t.staging && !t.mesh && !t.buildJob && !t.bakeJob);
+
   function sweep(now: number): void {
     const R = quality.streamRadius;
     let n = 0;
     for (let i = 0; i < chunkList.length && n < MAX_EVICT_CHUNKS_PER_FRAME; i++) {
       const c = chunkList[i];
       const alive = c.keepUntil > now;
+      // scope 'capture' keeps no hysteresis ring: what the capture set does not hold goes (empty records of the
+      // radius stay: the view may bring capture tiles into them)
       const keep = c.s === storey
-        ? c.desired || alive || (!Number.isNaN(lcx) && keepResident(c.key.cx, c.key.cz, lcx, lcz, pcx, pcz, R))
+        ? c.desired || alive || (scope === 'full'
+          ? !Number.isNaN(lcx) && keepResident(c.key.cx, c.key.cz, lcx, lcz, pcx, pcz, R)
+          : c.inRadius && emptyChunk(c))
         : alive;
       if (!keep) evictScratch[n++] = c;
     }
@@ -628,7 +774,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   /** A started step always goes first in its slot (it holds half-uploaded GPU resources). */
   const PARTIAL_FIRST = 1e7;
   const effPrio = (t: TileRec): number =>
-    (t.partial ? -PARTIAL_FIRST : 0) + tileJobPriority(t, t.step === STEP_SWAP ? bakeType(t.chunk) : 'build', false) - (t.step === STEP_GEO ? 5 : 0);
+    (t.partial ? -PARTIAL_FIRST : 0) + tileJobPriority(t, t.step === STEP_SWAP ? bakeType(t) : 'build', false) - (t.step === STEP_GEO ? 5 : 0);
 
   function pick(current: boolean, now: number): TileRec | null {
     let best: TileRec | null = null, bp = Infinity;
@@ -813,6 +959,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
           dropStaging(t);
           queueStep(t, STEP_NONE);
           t.needBuild = true;
+          t.needBake = false; // the new build requests its own bake
           if (!t.gpu) { t.state = 'queued'; if (t.rt) t.rt = null; }
         } else {
           // same atlas: only a new full bake is needed (the displayed lightmap is from the old settings)
@@ -822,11 +969,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         }
       }
     }
-    for (let i = 0; i < chunkList.length; i++) {
-      const c = chunkList[i];
-      startJobs(c);
-      for (const t of c.tiles) if (t.needBake && !t.bakeJob) submitBake(t);
-    }
+    for (let i = 0; i < chunkList.length; i++) startJobs(chunkList[i]); // builds, then the bakes of same-atlas tiles
   }
 
   // ================================================================ the streamer
@@ -853,6 +996,14 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       } else haveFrustum = false;
       const ncx = worldToChunk(x), ncz = worldToChunk(z);
       const nlx = worldToChunk(la.x), nlz = worldToChunk(la.z);
+      // automation gate transitions: a closing gate holds everything outside the capture set (and drops its queued
+      // work), an opening one releases it
+      const closed = cap !== null && cap.gateClosed();
+      const closing = closed && !gateClosed, opening = !closed && gateClosed;
+      gateClosed = closed;
+      // scope 'capture': which radius chunks hold capture tiles moves with the view, and chunks it dropped were
+      // evicted, so every priority refresh re-targets (re-creating their records)
+      if (scope === 'capture' && (gateClosed || frame - lastPrioFrame >= PRIORITY_REFRESH_FRAMES || frame < lastPrioFrame)) dirty = true;
       let retargeted = false;
       if (dirty || ncx !== pcx || ncz !== pcz || nlx !== lcx || nlz !== lcz || tStorey !== storey || tRadius !== quality.streamRadius) {
         pcx = ncx; pcz = ncz; lcx = nlx; lcz = nlz;
@@ -860,10 +1011,13 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         retarget();
         retargeted = true;
       }
-      if (retargeted || frame - lastPrioFrame >= PRIORITY_REFRESH_FRAMES || frame < lastPrioFrame) {
+      // while the gate is closed the capture set follows the view every frame (it defines readiness)
+      if (retargeted || gateClosed || opening || frame - lastPrioFrame >= PRIORITY_REFRESH_FRAMES || frame < lastPrioFrame) {
         lastPrioFrame = frame;
         reprioritize();
       }
+      if (closing) cancelHeld();
+      if (opening) pumpAll();
       sweep(now);
       const live = liveList[storey];
       for (let i = 0; i < live.length; i++) applyVisibility(live[i]);
@@ -900,6 +1054,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       // resume next frame. No step work when deferred disposal already used the budget up.
       deadline = u0 + budgetMs;
       const canStep = perf() < deadline;
+      const steps0 = timing.steps;
       for (let k = 0; canStep && (k < UPLOAD.MAX_STEPS_PER_FRAME || (burst && perf() < deadline)); k++) {
         const t = pick(true, now);
         if (!t) break;
@@ -910,6 +1065,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
         if (!t) break;
         doStep(t, now);
       }
+      stepsLastFrame = timing.steps - steps0;
       timing.disposed += disposed;
       timing.uploadMs = perf() - u0;
       timing.uploadFrames++;
@@ -1132,6 +1288,51 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     },
   };
   timings.set(streamer, timing);
+  const gateTileReady = (t: TileRec): boolean =>
+    tileReady(t, true) && t.upIdx < 0 && (t.failed || (t.buildJob === null && !t.needBuild));
+  const control: CaptureControl = {
+    isCaptureReady() {
+      if (Number.isNaN(pcx)) return false;
+      let any = false;
+      for (let i = 0; i < chunkList.length; i++) {
+        const c = chunkList[i];
+        if (!c.gate || isPrefetchChunk(c)) continue;
+        if (!c.data && !c.failed) return false; // the probe box, water scan and collision read layouts
+        for (const t of c.tiles) {
+          if (!t.gate) continue;
+          any = true;
+          if (!gateTileReady(t)) return false;
+        }
+      }
+      return any;
+    },
+    get stepsLastFrame() { return stepsLastFrame; },
+    get scope() { return scope; },
+    setScope(sc) {
+      if (sc === scope) return;
+      scope = sc;
+      dirty = true; // the next update re-targets with the new scope (and starts what it wants)
+    },
+    forgetPosition() {
+      pcx = pcz = lcx = lcz = NaN;
+      dirty = true;
+    },
+    stats() {
+      let gateTiles = 0, gateReady = 0, gateChunks = 0;
+      for (let i = 0; i < chunkList.length; i++) {
+        const c = chunkList[i];
+        if (!c.gate || isPrefetchChunk(c)) continue;
+        gateChunks++;
+        for (const t of c.tiles) {
+          if (!t.gate) continue;
+          gateTiles++;
+          if (gateTileReady(t)) gateReady++;
+        }
+      }
+      return { gateTiles, gateReady, gateChunks, scope };
+    },
+  };
+  captureControls.set(streamer, control);
   // debug surface for headless soak probes (the app's __backrooms API does not expose the streamer itself)
   (globalThis as { __streamTiming?: StreamTiming }).__streamTiming = timing;
   return streamer;

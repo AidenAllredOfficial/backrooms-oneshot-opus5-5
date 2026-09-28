@@ -3,14 +3,18 @@
 // Responses always carry the request's job id (errors included), so the pool can settle the job.
 // Tool runs (CACHE_CODE non-empty) serve layouts / builds / bakes / spawn / find from the persistent result cache
 // (tileCache.ts). Messages are handled strictly in arrival order either way: the pool relies on FIFO replies (a
-// cancelled job's reply arrives before the next 'init' answers 'ready').
+// cancelled job's reply arrives before the next 'init' answers 'ready'). A computed result is posted first; its
+// encoded entry then goes to this worker's cache writer (cacheWriter.worker.ts, transferred), so the bake thread
+// never spends time on gzip or uploads.
 
 import type { WorkerInit, WorkerRequest, WorkerResponse } from '../core/worker.ts';
 import { createHandlerState, handleRequest } from './handler.ts';
-import { CACHE_CODE, buffersOf, cacheGet, cacheKey, cachePut, encodeEntry, isCacheable } from './tileCache.ts';
+import { CACHE_CODE, buffersOf, cacheAddr, cacheLookup, createCacheWriter, encodeEntry, isCacheable } from './tileCache.ts';
 
 const st = createHandlerState();
 let init: WorkerInit | null = null;
+const writer = createCacheWriter(() =>
+  typeof Worker === 'function' ? new Worker(new URL('./cacheWriter.worker.ts', import.meta.url), { type: 'module' }) : null);
 
 function post(res: WorkerResponse, transfer: Transferable[], job: number): void {
   try {
@@ -26,16 +30,16 @@ function post(res: WorkerResponse, transfer: Transferable[], job: number): void 
 async function handle(req: WorkerRequest): Promise<void> {
   if (req.t === 'init') init = req.init;
   const cached = CACHE_CODE !== '' && init !== null && isCacheable(req);
-  const key = cached ? await cacheKey(init as WorkerInit, req) : '';
-  if (cached) {
-    const hit = await cacheGet(key, req.job);
-    if (hit && hit.t === req.t) { post(hit, buffersOf(hit), req.job); return; }
+  const addr = cached && isCacheable(req) ? await cacheAddr(init as WorkerInit, req) : null;
+  if (addr && isCacheable(req)) {
+    const hit = await cacheLookup(init as WorkerInit, req, addr);
+    if (hit) { post(hit, buffersOf(hit), req.job); return; }
   }
   const { res, transfer } = handleRequest(req, st); // `init` also clears st.layouts and st.bakeCache
   // encode before the transfer detaches the payload's buffers
-  const entry = cached && res.t === req.t ? encodeEntry(res) : null;
+  const entry = addr && res.t === req.t ? encodeEntry(res) : null;
   post(res, transfer, req.job);
-  if (entry) void cachePut(key, entry);
+  if (addr && entry) writer.store(addr, entry);
 }
 
 let queue: Promise<void> = Promise.resolve();
