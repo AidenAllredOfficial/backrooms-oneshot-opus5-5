@@ -18,7 +18,7 @@
 //    taps one DESTINATION texel apart. Level i then blurs with sigma ~2 * 2^i full-res px (GLARE.SIGMA0_PX) and
 //    w_i (glareWeights: tinted, summing to 1 in luma) is the PSF energy of its angular band.
 //  - star (C.5, glareStreaks): one extract pass writes the hot part (exposed luma above FLARE.STAR_T) of D1 - D2 on a
-//    buffer taller than FLARE.HI_RES_H (ultra's 1.5x supersampled buffer), which keeps the arms the same width on
+//    buffer taller than FLARE.HI_RES_H (ultra's 1.4x supersampled buffer), which keeps the arms the same width on
 //    screen and the cost flat - weighted toward compact sources (starCompactWeight: a level three steps coarser tells
 //    a bulb or a distant highbay from a near tube strip, whose broad X would stain the ceiling); then 2 axes at +-45 deg x 3
 //    cascaded 7-tap passes (steps 1, 4, 16 x starStepScale texels: the same on-screen length at any buffer height and

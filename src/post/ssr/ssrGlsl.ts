@@ -256,7 +256,7 @@ void main() {
 `;
 
 /** The trace at half the display resolution (one ray per step x step block, from its top-left pixel like the SSAO;
- * step 2, or 3 on ultra's 1.5x supersampled buffer). MRT: location 0 =
+ * step 2, or 3 on ultra's 1.4x supersampled buffer). MRT: location 0 =
  * premultiplied reflected radiance x confidence (rgb), confidence (a); location 1 = the representative pixel's
  * metadata for the filter and the upsample: linear view depth, oct view normal, lobe roughness (0 where the pixel has
  * no G-buffer specular). */
@@ -276,7 +276,7 @@ uniform mat4 uProjInv;
 uniform vec2 uFull;               // full-resolution size (px)
 uniform vec2 uPyrSize;            // pyramid level-0 size (px)
 uniform float uMaxRough;
-uniform int uStep;                // full-resolution pixels per trace texel (2, 3 on ultra's 1.5x buffer)
+uniform int uStep;                // full-resolution pixels per trace texel (2, 3 on ultra's 1.4x buffer)
 layout( location = 0 ) out highp vec4 outSsr;
 layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_DEPTH_AT( px ) texelFetch( tDepth, clamp( px, ivec2( 0 ), ivec2( uFull ) - 1 ), 0 ).x

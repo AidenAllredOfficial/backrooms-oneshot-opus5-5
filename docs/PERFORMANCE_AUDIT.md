@@ -89,14 +89,14 @@ Before this pass medium cost 1.46 / 1.75 / 1.56 / 2.36 ms at 0.9 (+14-20 %).
 
 - **The water mirror waits for visible water** (`materials/water/waterVisibility.ts`). The loop mirrors the nearest
   water plane within 40 m ahead, and that scan does not see walls: in WAREHOUSE, PIPEWORKS and the DARK spawn a pool
-  or flooded room behind a wall cost a mirrored render of the scene every frame (0.3-0.45 ms at high here, 2-3 ms at
-  ultra). An `ANY_SAMPLES_PASSED_CONSERVATIVE` query now brackets every water draw, and where the water is the
-  mirror's only reader (high and ultra: SSR and the froxel presets compile the floors' planar path out) the mirror
-  renders only while a water draw passed the depth test within the last 0.5 s. Results arrive a frame or two late:
-  water coming into view shows its probe reflection for those frames; an unanswered query counts as visible. The
-  queries and the poll cost nothing measurable (within ±0.03 ms, in-page A/B). High captures of the ten scenes
-  matched the previous build except for scattered pixels (under 2 %, mostly 1-4 grey levels: the probe's refresh
-  phase).
+  or flooded room behind a wall cost a mirrored render of the scene every frame (about 0.3 ms at high and 0.5-0.8 ms at
+  ultra, paired in-page A/B with the loop's own plane scan). An `ANY_SAMPLES_PASSED_CONSERVATIVE` query now brackets
+  every water draw, and where the water is the mirror's only reader (high and ultra: SSR and the froxel presets
+  compile the floors' planar path out) the mirror renders only while a water draw passed the depth test within the
+  last 0.5 s. Results arrive a frame or two late: water coming into view shows its probe reflection for those
+  frames; an unanswered query counts as visible. The queries and the poll cost nothing measurable (within ±0.03 ms,
+  in-page A/B). High captures of the ten scenes matched the previous build except for scattered pixels (under 2 %,
+  mostly 1-4 grey levels: the probe's refresh phase).
 - **Reflection probe cadence:** one face every fourth frame instead of every second, halving the steady capture and
   filter (GPU and main thread); flicker reaches a face at most 24 frames late.
 - **Ultra: 1.4x supersampling instead of 1.5x** (1.96 instead of 2.25 samples per display pixel; 10-12 % of every

@@ -41,7 +41,7 @@ export const GLARE = {
 
 /** Aperture star + ghost constants (C.5). Gains multiply Settings.film.flare and the lens toggle. */
 export const FLARE = {
-  /** buffers taller than this (ultra's 1.5x supersampled one) run the star one chain level coarser, so its arms keep
+  /** buffers taller than this (ultra's 1.4x supersampled one) run the star one chain level coarser, so its arms keep
    * their on-screen width and its cost stays flat */
   HI_RES_H: 1500,
   /** only exposed luminance above this feeds the star and the ghosts: 'truly hot' sources (a bare bulb in PIPEWORKS

@@ -236,7 +236,7 @@ export const TUNE = {
   POM_MIN_PX: 0.5, // no POM below this much parallax (pixels)...
   POM_FULL_PX: 1.5, // ...full depth from here
   POM_PX_PER_STEP: 1.5, // linear-search step length (pixels), then one secant refinement
-  POM_PX_PER_STEP_2: 2.25, // BR_POM 2 (ultra renders at 1.5x: the same 1.5 display pixels)
+  POM_PX_PER_STEP_2: 2.25, // BR_POM 2 (ultra, 1.5 display pixels at the 1.5x it rendered at until the perf pass; 1.6 at 1.4x)
   POM_MIN_STEPS: 2, // fewest march steps (plus the start sample and the secant): the step length bounds the error
   POM_MAX_1: 12, // steps, BR_POM 1 (high)
   POM_MAX_2: 16, // steps, BR_POM 2 (ultra)

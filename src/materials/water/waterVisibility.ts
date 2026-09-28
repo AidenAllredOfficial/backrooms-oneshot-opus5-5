@@ -2,8 +2,9 @@
 // water mesh's draw in the view render (the late render on split frames, the main render otherwise; the planar
 // reflection and the probe hide water) runs inside an ANY_SAMPLES_PASSED_CONSERVATIVE occlusion query:
 // stream/TileObject.ts installs WATER_VIS.before / after as the water meshes' onBeforeRender / onAfterRender.
-// PlanarReflection polls the finished queries once per update and skips its mirrored view of the scene (~0.8 ms at
-// high 1080p, ~2.3 ms at ultra) while no water pixel has passed the depth test for HOLD_MS.
+// PlanarReflection polls the finished queries once per update and skips its mirrored view of the scene (about 0.3 ms
+// at high 1080p and 0.5-0.8 ms at ultra where water behind a wall is gated) while no water pixel has passed the
+// depth test for HOLD_MS.
 // - The water scan (app/loop.ts nearestWaterPlane) finds planes within 40 m ahead of the eye, not whether a wall hides
 //   them: a film or pool behind the wall of a warehouse, a pipe corridor or a dark office cost a mirror every frame.
 // - Only where the water is the mirror's sole reader (PlanarReflection.setQuality: the SSR / froxel presets compile

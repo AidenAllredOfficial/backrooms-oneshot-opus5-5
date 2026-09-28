@@ -15,7 +15,7 @@ export class UnsupportedError extends Error {
 }
 
 /** min(devicePixelRatio, maxDpr) x renderScale, the supersampling part capped so the ratio stays <= 2
- * (post/DynamicResolution.ts MAX_PIXEL_RATIO: ultra's 1.5x on a 2x display would otherwise ask for 3x buffers). */
+ * (post/DynamicResolution.ts MAX_PIXEL_RATIO: ultra's 1.4x on a 2x display would otherwise ask for 2.8x buffers). */
 export function pixelRatioFor(q: QualityConfig, dpr: number): number {
   return effectiveDpr(q, dpr) * maxScaleFor(q, dpr);
 }
