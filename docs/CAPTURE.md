@@ -17,12 +17,14 @@ never change between calls:
 - a queue position behind every other agent's whole run, because each call held the only browser slot from start
   to exit.
 
-The 12-shot D2 benchmark took 33.6 s warm, and 4 agents asking for 3 shots each finished after 38 s.
+A typical 14-shot iteration (4 locations, a few poses each) took 37 s warm. The 12-shot D2 benchmark took 33.6 s,
+and 4 agents asking for 3 shots each finished after 38 s.
 
 The capture daemon keeps one browser warm for the whole machine, renders content-addressed builds of any source
-tree, and queues shots from all clients fairly. The same 12 shots take 23 s on one lane and 14.9 s on two. An
-unchanged re-shoot comes from the capture memo in 0.04 s (0.3 s including Node start). The 4-agent case finishes
-in 13.9 s. Measurements are at the end of this page.
+tree, and queues shots from all clients fairly. On pages with capture contract v2 it moves one page from shot to
+shot instead of booting a new one. The 14-shot iteration then takes 7.5 s (15.6 s on trees without contract v2),
+and D2 13.2 s. An unchanged re-shoot comes from the capture memo in 0.03 s (0.3 s including Node start). The
+4-agent case finishes in 14-17 s. Measurements are at the end of this page.
 
 ## Commands
 
@@ -66,25 +68,37 @@ is recycled after 200 shots, at 1.2 GB GPU-process RSS, or when the process tree
 available. Lane 1, a second page in the same browser, opens only when all of these hold:
 - the budget admits another 1000 MB page;
 - the shot is at quality high or lower and at most 1920x1080;
-- recent tile-cache requests show a warm cache (20 or more GETs, 75 % or more hits).
-
-Two cold pages would split the memory-bandwidth-bound bake between 8 workers for no gain.
+- lane 0 does not hold a heavy page (ultra or 1440p and up); together they reached 3.33 GB PSS;
+- recent tile-cache requests show a warm cache (20 or more GETs, 75 % or more hits). Two cold pages would split the
+  memory-bandwidth-bound bake between 8 workers for no gain;
+- while a single client has work queued, the shot's boot key differs from the one lane 0 moves through in place.
+  A second page of the same key only competes for tile uploads (D2: 13.5 s at 3.21 GB PSS against 14.0 s at
+  1.92 GB on one lane). With several clients, lane 0 switches keys between them and lane 1 does help (4 clients x
+  3 shots: 16.9 s against 20.6 s).
 
 Shots with evals, and the long presets (`soak`, `stress`, `perf`, `edge`), run alone in the browser. They start only
 when no other lane is busy, and nothing starts beside them. Their checks measure frame times and behaviour, and a
 second page booting next to the tower walk pushed its longest frame from 50 ms to 66-83 ms.
 
-**In-place shots.** When a page reports capture contract v2 (`__backrooms.captureGate >= 2` and `load()`), the lane
-keeps it after a shot. The next shot with the same boot key (quality, scale, radius, bake, camcorder, hud, debug,
-noaudio, autostart, noprime, stream, page, size, HC) is applied with `__backrooms.load(search)` instead of a new
-boot. Within a request, shots are grouped by boot key and sorted by seed, storey, x and z. Files keep the original
-indices. These shots always boot their own page:
+**In-place shots.** When a page reports capture contract v2 (`__backrooms.captureGate >= 2` and `load()`) and
+streams only the capture set (`stream=capture`), the lane keeps it after a shot. The next shot with the same boot key
+(quality, scale, radius, bake, camcorder, hud, debug, noaudio, autostart, noprime, stream, page, size, HC) is applied
+with `__backrooms.load(search)` instead of a new boot. A move to a nearby pose costs 0.3-0.6 s and a move to a new
+location 1-2 s, against 2-2.5 s for a fresh page. Within a request, shots are grouped by boot key and sorted by seed,
+storey, x and z. Files keep the original indices, and a lane prefers queued shots that match its warm page.
+
+`shoot.mjs` and `ab.mjs` add `stream=capture` to game shots without evals. QA does not: its draw-call and tile checks
+must see full streaming. With full streaming a moved page re-streams its whole radius and grows to the 3.2 GB tree
+cap, so QA zones took 98 s in place against 86 s on fresh pages. QA therefore always boots fresh pages. These shots
+also always boot their own page:
 - harness pages and `autostart=0`;
 - the `soak`, `stress`, `perf`, `edge` and `ui` presets;
 - shots marked `fresh: true` (`spawn-determinism`, so QA still tests boot determinism);
-- the shot after an eval or capture error.
+- the shot after an eval or capture error;
+- every shot with `--fresh-pages`.
 
-A warm page is recycled after 40 shots, and at most one idle warm page is kept.
+A warm page is recycled after 40 shots, or when the tree PSS, sampled after each job, is over 3.2 GB. At most one
+idle warm page is kept.
 
 **Memo.** A finished shot is stored in `/var/tmp/backrooms-render/memo`, keyed by SHA-1 of:
 - the build's `distHash`;
@@ -133,6 +147,7 @@ contract v2, dev-server captures can differ from daemon captures by timing noise
 | `--wait <ms>` | shoot, qa | Wait after ready. Default 250 ms, or 0 on pages that report `captureGate >= 2`. An explicit value always wins. |
 | `--draft` | shoot, qa | `bake=preview`: approximate lighting, much faster on cold locations. Entries get `draft: true`; QA refuses `--baseline`. |
 | `--fresh` | shoot, ab | Re-render even if the memo has the shot. |
+| `--fresh-pages` | shoot, qa | Boot every shot on its own page (no in-place moves). |
 | `--no-memo` | shoot | Neither read nor store the memo. |
 | `--memo` | qa | Serve unchanged shots from the memo. |
 | `--stream full` | shoot | Do not add `stream=capture`. By default it is added to game shots without `--eval` when the tree accepts the parameter. QA never adds it. |
@@ -231,8 +246,9 @@ The last resort stays outside the repository: an ad-hoc OOM guard script run by 
   gave identical pass/fail results and fail messages through the daemon, through `--direct`, and through `qa.mjs`
   at 5c3ea7d, on a warm cache. The comparison ignores readyMs values and the tower's two 50 ms frame-time checks.
   Those checks are flaky under load in every version: the old tool failed them at 50.0-66.7 ms in 3 of 4 runs.
-- **After contract v2** (Lane 2 of the iteration plan), in-place vs fresh, daemon build vs dev server, and memo vs
-  re-render must all be 0 px on D2 at high and ultra.
+- **With contract v2** (Lane 2's branch merged with this one), D2 at high, ultra and medium was 0 px different
+  between in place and fresh pages, daemon build and `--direct` dev server, memo and re-render, and cold and warm
+  tile cache.
 
 ## Files and environment
 
@@ -284,6 +300,26 @@ warmed beforehand, a free browser slot at the start. Memory is the peak of the m
 | `qa.mjs --preset zones`, warm, 2 lanes (1.7 min before) | 73.6 s | | QA client 0.14 GB RSS |
 | `qa.mjs --preset zones`, cold, 1 lane | 357 s of shots (lane 3's vitest running alongside) | 9.1 s mean ready | 3.19 / 2.53 GB incl. daemon |
 | 76-shot QA parity list, warm: 5c3ea7d / `--direct` / daemon | 294 s / 283 s / 226 s | | 4.33 / 3.63, 3.86 / 3.23, 3.64 / 2.96 GB |
+| 14-shot iteration: `shoot.mjs` at 5c3ea7d / daemon (this branch) | 37.2 s / 15.6-17.2 s | | 3.03 / 2.34, 3.60 / 2.17 GB |
+
+With contract v2 (Lane 2's branch at c2bacfc merged with this one in a scratch tree; tile cache warmed once; same
+conditions otherwise):
+
+| Run | Wall | Peak daemon tree RSS / PSS |
+|---|---|---|
+| 14-shot iteration, warm daemon (in place; 9.4 s on its first request) | 7.5 s | |
+| D2, 2 lanes, first request (browser launch, 3 boots) | 15.6 s | |
+| D2, 2 lanes, second request (10 of 12 in place) | 13.2 s | 3.44 / 2.61 GB |
+| D2, 1 lane, second request | 14.0 s | 2.52 / 1.92 GB |
+| D2 on fresh pages (`--fresh-pages`), 2 lanes | 15.5 s | |
+| D2 through `--direct` (dev server, in place) | 16.4 s | |
+| D2 from the memo | 0.03 s in the tool, 0.27 s with Node start | |
+| 4 clients x 3 shots, 2 lanes | 14.7-17.9 s | 3.64 / 2.74 GB |
+| QA zones warm (fresh pages, 2 lanes) | 52.8 s | 3.24 / 2.37 GB |
+| QA zones cold (1 lane) | 303 s | |
+
+On that tree the D2 captures were 0 px different between in place and fresh pages, daemon build and `--direct` dev
+server, memo and re-render, and cold and warm cache, at high, ultra and medium.
 
 Most runs shared the machine with the other lanes' test runs and captures. The cold QA numbers suffer most: the
 bake is bandwidth bound.

@@ -278,8 +278,9 @@ node tools/shoot.mjs --params "seed=1&quality=high&noaudio=1" --eval "__backroom
 
 The shots go to the capture daemon (`tools/rsd`), which the first call starts. It keeps one warm browser for the
 whole machine and renders a content-addressed build of the calling tree (built in about 1 s after an edit). It
-serves an unchanged shot from its memo in a few milliseconds and takes shots from all agents in turn. Put several
-`--params` in one call: 12 warm shots take about 23 s on one lane and 15 s on two, against 34 s before the daemon.
+serves an unchanged shot from its memo in a few milliseconds and takes shots from all agents in turn. On pages with
+capture contract v2 it moves one page from shot to shot instead of booting a new one. Put several `--params` in one
+call: a 14-shot iteration took 37 s before the daemon, 16 s with fresh pages, and 7.5 s moving pages in place.
 `node tools/rsd/client.mjs status` shows what it is doing; `stop` ends it (it also exits after 10 idle minutes).
 
 Options: `--params` (repeatable), `--out` (default `shots/`), `--size` (default 1600x900), `--eval` (JS evaluated in
