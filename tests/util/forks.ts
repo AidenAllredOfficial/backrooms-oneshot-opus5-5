@@ -253,6 +253,15 @@ export async function browserRunning(ledger: Ledger | null, slotDir = BROWSER_SL
   return false;
 }
 
+/** A quick-tier run: --tags-filter excludes 'sweep' (npm run test:quick / test:related / test:changed). */
+export function isQuickTier(argv: readonly string[]): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const m = /^--tags-?[fF]ilter(?:=(.*))?$/.exec(argv[i]);
+    if (m && /!\s*sweep\b/.test(m[1] ?? argv[i + 1] ?? '')) return true;
+  }
+  return false;
+}
+
 /** vitest's own CLI: watch mode, and a --maxWorkers the user passed (it overrides the config). */
 export function parseVitestArgv(argv: readonly string[], env: NodeJS.ProcessEnv = process.env, stdinTty = !!process.stdin.isTTY): { watch: boolean; maxWorkers: number | null; command: string | null } {
   const args = argv.slice(2);

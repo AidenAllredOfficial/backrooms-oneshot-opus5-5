@@ -17,7 +17,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import {
-  browserRunning, createForkRegistry, FORK_REGISTRY_DIR, MAX_FORKS, parseVitestArgv, planForks, readMemAvailableMb, TOTAL_FORKS, weightOf,
+  browserRunning, createForkRegistry, FORK_REGISTRY_DIR, isQuickTier, MAX_FORKS, parseVitestArgv, planForks, readMemAvailableMb, TOTAL_FORKS, weightOf,
   type ForkWeights, type Ledger, type Plan,
 } from './tests/util/forks.ts';
 
@@ -92,6 +92,9 @@ export default defineConfig(async () => {
   // V8 bytecode cache for three.js and src across the fresh fork processes (forks inherit the variable)
   process.env.NODE_COMPILE_CACHE ??= path.join(ROOT, 'node_modules', '.cache', 'node-compile');
   return {
+    // Quick-tier runs keep their own results cache (vitest orders files longest-first from it): they get the order of
+    // quick-tier durations, and never reorder the full run with their short ones.
+    ...(isQuickTier(process.argv) ? { cacheDir: path.join(ROOT, 'node_modules', '.vite', 'quick') } : {}),
     test: {
       environment: 'node',
       pool: 'forks',

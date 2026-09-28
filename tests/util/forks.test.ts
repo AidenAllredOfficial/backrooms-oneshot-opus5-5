@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  browserRunning, createForkRegistry, forksThatFit, parseVitestArgv, planForks, weightOf, type ForkRegistry, type Ledger, type PlanInput,
+  browserRunning, createForkRegistry, forksThatFit, isQuickTier, parseVitestArgv, planForks, weightOf, type ForkRegistry, type Ledger, type PlanInput,
 } from './forks.ts';
 
 const base = (o: Partial<PlanInput>): PlanInput => ({
@@ -132,6 +132,13 @@ describe('fork sizing', () => {
     expect(logs.join('\n')).toMatch(/other test runs hold 4 of the 6 forks/);
     p.release(); p.release();
     expect(reg.released).toBe(1);
+  });
+
+  it('recognises quick-tier runs by their tags filter', () => {
+    expect(isQuickTier(['node', 'vitest.mjs', 'run', "--tags-filter=!sweep"])).toBe(true);
+    expect(isQuickTier(['node', 'vitest.mjs', 'related', '--run', '--tagsFilter', '!sweep', 'src/a.ts'])).toBe(true);
+    expect(isQuickTier(['node', 'vitest.mjs', 'run', '--tags-filter=sweep'])).toBe(false);
+    expect(isQuickTier(['node', 'vitest.mjs', 'run'])).toBe(false);
   });
 
   it('reads watch mode and --maxWorkers from the vitest command line', () => {
