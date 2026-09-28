@@ -156,7 +156,7 @@ describe('reflection draw culling', () => {
         throw new Error('draw failed');
       },
     } as unknown as THREE.WebGLRenderer;
-    const reflection = createPlanarReflection(createGlobals(), QUALITY.high);
+    const reflection = createPlanarReflection(createGlobals(), QUALITY.high, () => true); // water in view
     expect(() => reflection.update(renderer, scene, mainCamera(0, 1.6, 0, 0, 0), 0)).toThrow('draw failed');
     expect(renders).toBe(2);
     expect(water.visible).toBe(true); expect(far.visible).toBe(true); expect(alreadyHidden.visible).toBe(false);

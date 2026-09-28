@@ -7,6 +7,8 @@
 // While rendering: reflOn = 0 and reflTex = null (no feedback loop, not even a bound-but-unsampled texture), the
 // module-private reflection-pass flag is 1 (props beyond 20 m and water surfaces discard), shadow maps are
 // not re-rendered. The mirrored view is rendered with the depth prepass (materials/prepass.ts).
+// Where the water is the mirror's only reader (mirrorWaterOnly: high / ultra), it is rendered only while a water
+// draw passed the depth test lately (water/waterVisibility.ts occlusion queries): the plane scan does not see walls.
 
 import * as THREE from 'three';
 import type { MaterialGlobals } from '../core/runtime.ts';
@@ -14,6 +16,7 @@ import type { QualityConfig } from '../core/quality.ts';
 import { REFL_PASS, setWirePixel } from './shared.ts';
 import { TUNE } from './chunks/params.ts';
 import { renderWithPrepass } from './prepass.ts';
+import { WATER_VIS } from './water/waterVisibility.ts';
 
 export interface PlanarReflection {
   readonly enabled: boolean;
@@ -89,8 +92,17 @@ export function reflectionTextureMatrix(camera: THREE.Camera, refl: THREE.Perspe
   out.multiply(camera.matrixWorld); // V⁻¹ (camera.matrixWorld is float64 on the CPU)
 }
 
-export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfig): PlanarReflection {
+/** Whether the water is the mirror's only reader: the SSR and froxel presets compile the floors' planar path out
+ * (chunks/lighting.ts), so the mirror may wait for a visible water pixel (water/waterVisibility.ts). */
+export const mirrorWaterOnly = (q: QualityConfig): boolean => q.ssr !== 'off' || q.volumetrics !== 'off';
+
+/** `waterVisible`: the occlusion gate's answer (tests inject their own; the app polls WATER_VIS on the renderer's
+ * context). */
+export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfig,
+  waterVisible: (renderer: THREE.WebGLRenderer) => boolean = (r) => WATER_VIS.poll(r.getContext() as WebGL2RenderingContext)): PlanarReflection {
   let scale = q.planarReflectionScale;
+  WATER_VIS.enabled = scale > 0 && mirrorWaterOnly(q);
+  WATER_VIS.reset();
   let target: THREE.WebGLRenderTarget | null = null;
   const reflCam = new THREE.PerspectiveCamera();
   reflCam.matrixAutoUpdate = true;
@@ -139,6 +151,8 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
       camera.updateMatrixWorld();
       const camY = camera.matrixWorld.elements[13];
       if (camY < waterY + MIN_CAMERA_CLEARANCE) { globals.reflOn.value = 0; return; }
+      // no water pixel passed the depth test lately (every plane in reach is behind a wall): no mirror
+      if (WATER_VIS.enabled && !waterVisible(renderer)) { globals.reflOn.value = 0; return; }
       renderer.getDrawingBufferSize(scratch.size);
       const w = Math.max(16, Math.round(scratch.size.x * scale));
       const h = Math.max(16, Math.round(scratch.size.y * scale));
@@ -182,6 +196,9 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
     },
     setQuality(nq) {
       scale = nq.planarReflectionScale;
+      const gate = scale > 0 && mirrorWaterOnly(nq);
+      if (gate !== WATER_VIS.enabled) WATER_VIS.reset();
+      WATER_VIS.enabled = gate;
       if (scale <= 0) {
         target?.dispose();
         target = null;

@@ -197,13 +197,16 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
   },
   ultra: {
     name: 'ultra', streamRadius: 3, lmTpc: 12, bakeShadowSamples: 6, probeRays: 128, bakeWorkers: 6, textureSize: 1024,
-    // reflection 0.5 of the 1.5x supersampled buffer = 0.75 of the display resolution (package E: the water magnifies
+    // reflection 0.5 of the 1.4x supersampled buffer = 0.7 of the display resolution (package E: the water magnifies
     // it with a cubic B-spline and blurs it by its roughness and ripples; the refraction pays for itself with the
-    // ~1 ms this saves on water frames; 1.0 cost 4x as much)
-    anisotropy: 16, ao: 'High', aoHalfRes: true, aa: 'smaa', smaaPreset: 'ULTRA', bloomLevels: 9, planarReflectionScale: 0.5,
-    // ultra spends the GPU headroom on pixels: 1.5x supersampling (2.25x samples: clean wallpaper stripes, carpet and
-    // tile grout at distance) under the load-driven dynamic resolution (R2 B9)
-    floorReflections: true, flashlightShadow: 2048, renderScale: 1.5, dynamicResolution: true, maxDpr: 2,
+    // ~1 ms this saves on water frames; 1.0 cost 4x as much; 0.35 showed the texel grid in saturated lamp images).
+    // AO 12 samples and SMAA's HIGH search: under the supersampling they matched 16 samples / ULTRA (perf pass,
+    // docs/PERFORMANCE_AUDIT.md)
+    anisotropy: 16, ao: 'Medium', aoHalfRes: true, aa: 'smaa', smaaPreset: 'HIGH', bloomLevels: 9, planarReflectionScale: 0.5,
+    // ultra spends the GPU headroom on pixels: 1.4x supersampling (1.96x samples: clean wallpaper stripes, carpet and
+    // tile grout at distance) under the load-driven dynamic resolution (R2 B9); 1.5x cost 12-15 % more per frame
+    // than the realism pipeline's budget allows (perf pass)
+    floorReflections: true, flashlightShadow: 2048, renderScale: 1.4, dynamicResolution: true, maxDpr: 2,
     propDistance: 60, humVoices: 12, hrtf: true, uploadBudgetMs: 3, fogAirlight: true, shaderDetail: 'full',
     ssr: 'half',
     ssrMaxRoughness: 0.6,
