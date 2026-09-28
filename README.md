@@ -172,7 +172,8 @@ See [the performance audit](docs/PERFORMANCE_AUDIT.md) for measurements, changes
 browser session on the NVIDIA GPU and restores it about a second later: that is the GPU process restarting after GPU
 compositing failed. The game absorbs it on a throwaway context before creating its own (once per tab), so textures
 and shaders are not built twice. Under XWayland the loss does not happen, and `npm run play` skips the wait
-(`noprime=1`, about 0.55 s off the boot).
+(`noprime=1`, about 0.55 s off the boot). The capture tools absorb the loss once per browser and then pass
+`noprime=1` to every game page.
 
 ## The world
 
@@ -263,9 +264,9 @@ npm run typecheck    # tsc --noEmit
 
 ### Screenshots: `tools/shoot.mjs`
 
-Starts its own Vite server, loads each URL in headless Chromium (GPU through ANGLE/Vulkan) with `autostart=1`, waits
-until the world is ready (textures, shaders, full bakes around the player), and saves a PNG. It prints a JSON report
-with console errors and `window.__backrooms.stats()` for every shot.
+Loads each URL in headless Chromium (GPU through ANGLE/Vulkan) with `autostart=1`, waits until the world is ready
+(textures, shaders, full bakes around the player), and saves a PNG. It prints a JSON report with console errors,
+`window.__backrooms.stats()` and a timing breakdown for every shot.
 
 ```sh
 node tools/shoot.mjs --out /tmp/shots --size 1920x1080 \
@@ -275,17 +276,25 @@ node tools/shoot.mjs --page harness/chunk.html --params "seed=1&cx=0&cz=0&view=l
 node tools/shoot.mjs --params "seed=1&quality=high&noaudio=1" --eval "__backrooms.perf(10)"
 ```
 
-Options: `--params` (repeatable), `--out` (default `shots/`), `--size` (default 1600x900), `--wait` (ms after ready,
-default 250; the frame at ready is already final), `--eval` (JS evaluated in the page; the result goes into the
-report), `--page`, `--preset`, and `--url` (use a server that is already running).
+The shots go to the capture daemon (`tools/rsd`), which the first call starts. It keeps one warm browser for the
+whole machine and renders a content-addressed build of the calling tree (built in about 1 s after an edit). It
+serves an unchanged shot from its memo in a few milliseconds and takes shots from all agents in turn. Put several
+`--params` in one call: 12 warm shots take about 23 s on one lane and 15 s on two, against 34 s before the daemon.
+`node tools/rsd/client.mjs status` shows what it is doing; `stop` ends it (it also exits after 10 idle minutes).
 
-Put several `--params` in one call. Each call starts a browser and a Vite server.
+Options: `--params` (repeatable), `--out` (default `shots/`), `--size` (default 1600x900), `--eval` (JS evaluated in
+the page; the result goes into the report), `--page`, `--preset`, `--wait` (ms after ready; default 250, or 0 once
+the page reports a deterministic ready gate), `--draft` (preview lighting, fast on new locations), `--fresh`
+(re-render instead of using the memo), `--no-memo`, `--tree <path>` (render another tree), `--direct` (capture in
+this process with its own Vite server and browser) and `--url` (use a server that is already running; implies
+`--direct`). [docs/CAPTURE.md](docs/CAPTURE.md) describes the daemon, the memo and every flag.
 
 ### QA: `tools/qa.mjs`
 
 Runs the named presets from `tools/qa-presets.json` and checks every shot against thresholds: brightness range,
 clipping, Level 0 hue, draw calls, readiness time, errors, and per-shot checks. It writes `<out>/qa-report.json` and
-exits non-zero if any shot fails.
+exits non-zero if any shot fails. It uses the capture daemon like `shoot.mjs` (`--direct` and `--url` work the same
+way); the checks run in the QA process.
 
 ```sh
 node tools/qa.mjs --list
@@ -296,16 +305,33 @@ node tools/qa.mjs --preset all --out /tmp/qa-all      # about 40 minutes
 
 Presets: `zones`, `spawn`, `leak`, `cornell`, `views`, `dark`, `pools`, `tower`, `landmarks`, `materials`, `post`,
 `perf`, `soak` (1.5 km autowalk with memory checks), `stress` (50 teleports), `edge`, `decals`, `ui`.
-`--baseline dir` compares each image with an earlier run; the result is reported but never fails a run.
+`--baseline dir` compares each image with an earlier run (changed pixels, pixels more than 8 levels off, the largest
+difference and a 64x36 MAD); the result is reported but never fails a run. QA re-renders every shot unless you pass
+`--memo`, and readiness-time limits never apply to memo hits. `--draft` cannot be combined with `--baseline`.
+
+### A/B captures: `tools/ab.mjs`
+
+Renders the same framings from two trees and writes pixel diffs and contact sheets (base | test | diff x4, red
+where a pixel is more than 8 levels off).
+
+```sh
+node tools/ab.mjs --base HEAD --shots zones --out /tmp/ab                   # working tree vs HEAD
+node tools/ab.mjs --base ../other-worktree --shots /tmp/shots.json --crop 600,300,400,300
+node tools/ab.mjs baseline set before-grade                                  # pin this tree as a named base
+node tools/ab.mjs --base before-grade --shots zones,landmarks --expect same  # exit 1 if anything changed
+```
+
+`--base` is a revision (extracted with `git archive`), a tree path or a named baseline. An unchanged base comes
+from the daemon's build cache and memo, so an A/B of 12 framings takes about as long as rendering the test side.
 
 ### QA speed and the result cache
 
 Screenshot and QA runs (`autostart=1`, bake level `full`) wait until the 36 tiles around the player are fully baked.
 Those tiles are built with full lighting straight away and ahead of all other work, uploads skip the per-frame limit
-and the fade-in until the page is ready, and a shot is taken 250 ms after ready (the frame is final by then). A shot
-reaches ready in about 7 s on a cold cache.
+and the fade-in until the page is ready, and a shot is taken 250 ms after ready. A shot reaches ready in about 7 s on
+a cold cache.
 
-The dev server of a tool run keeps every worker result (layouts, tile builds, full bakes, spawn and `goto` searches)
+The tool server (the capture daemon, or the dev server of a `--direct` run) keeps every worker result (layouts, tile builds, full bakes, spawn and `goto` searches)
 in `~/.cache/backrooms-tilecache`, so a later shot or run of the same place reuses it: the 36-shot `zones` preset takes
 about 4.5 minutes the first time and 1.7 minutes after that (about 1.8 s to ready per shot). Results are keyed by a hash
 of every source file the worker runs (world generator, mesher, props, baker), the world and bake settings and the
@@ -320,20 +346,29 @@ cache.
 | `BACKROOMS_TILE_CACHE_DIR` | `~/.cache/backrooms-tilecache` | Cache directory (delete it to clear the cache). |
 | `BACKROOMS_TILE_CACHE_MB` | 8192 | Size cap; the least recently used entries are removed beyond it (a shot stores about 50 MB). |
 
-### Browser slot and memory gate
+### Memory budget
 
-Every `shoot.mjs` or `qa.mjs` process first takes a machine-wide slot (a lock directory under
-`/tmp/backrooms-browser-slots`). It then waits until the system has enough free memory before starting Vite and
-Chromium. Concurrent runs therefore queue instead of exhausting RAM. The environment variables are:
+Several agents share this machine with the desktop, so every heavy tool job takes a lease from a machine-wide
+budget before it starts (`tools/lib/budget.mjs`, a ledger in `/tmp/backrooms-budget`). This covers browsers,
+capture pages, builds, dev servers and test runs. A lease is admitted while the sum of all weights stays within
+`BACKROOMS_BUDGET_MB` and MemAvailable minus its weight stays above `BACKROOMS_MIN_FREE_MB`. Otherwise the job waits
+and says who holds what. At most `BACKROOMS_BROWSER_SLOTS` tool browsers run at once (older tool versions share the
+same slot directories). The capture tools also watch their own process tree and memory: below 3.5 GB MemAvailable
+they close idle pages, below 2.5 GB they close their browser. `node tools/lib/budget.mjs --status` lists the leases.
+The environment variables are:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `BACKROOMS_BUDGET_MB` | 7000 | Sum of lease weights allowed at once. |
+| `BACKROOMS_MIN_FREE_MB` | 4500 | MemAvailable that must remain after a job's weight. |
 | `BACKROOMS_BROWSER_SLOTS` | 1 | Browsers allowed at once, machine-wide. |
-| `BACKROOMS_MIN_FREE_MB` | 3000 | Free memory (MemAvailable) required before a browser starts. |
 | `BACKROOMS_HC` | 8 | `navigator.hardwareConcurrency` reported to the page. This keeps the bake worker pool small (4 workers). |
+| `BACKROOMS_RSD` | on | `0`: `shoot.mjs` and `qa.mjs` capture in-process (as `--direct`). |
 | `BACKROOMS_EVAL_TIMEOUT_MS` | 900000 | Timeout for one `--eval`. |
 | `BACKROOMS_UNCAPPED` | unset | `1`: no vsync or frame-rate cap, so the GPU stays clocked up (steadier in-page timings). |
 | `CHROMIUM` | `/usr/bin/chromium` | Browser executable. |
+
+See [docs/CAPTURE.md](docs/CAPTURE.md) for the weights, the daemon's lanes and idle policy, and the measurements.
 
 ### Showcase video: `tools/showcase.mjs`
 
