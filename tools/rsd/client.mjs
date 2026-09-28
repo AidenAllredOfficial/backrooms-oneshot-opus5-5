@@ -133,7 +133,7 @@ export async function render(req) {
       while ((k = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, k); buf = buf.slice(k + 1); handle(line); }
     }
     handle(buf);
-    if (!done) throw new Error(`capture daemon: the connection closed before the job finished (see ${LOG_FILE})`);
+    if (!done) throw new Error(`capture daemon: the connection closed before the job finished (see ${LOG_FILE}; --direct captures without the daemon)`);
     return { builds, build: builds[0], done };
   }
 }

@@ -201,7 +201,7 @@ function ensureBrowser() {
   browserP = (async () => {
     const t0 = Date.now();
     await gov.whenOk();
-    browserLease = await acquire({ weightMb: WEIGHTS.browser, kind: 'browser', label: `capture daemon browser (pid ${process.pid})` });
+    browserLease = await acquire({ weightMb: WEIGHTS.browser, kind: 'browser', label: `capture daemon browser (pid ${process.pid})`, onWait: broadcastWait });
     try {
       const b = await launchBrowser();
       const w = await warmGpu(b);
@@ -209,6 +209,7 @@ function ensureBrowser() {
       try { writeFileSync(path.join(RUN_DIR, 'browser.json'), JSON.stringify(browserInfo)); } catch { /* ignore */ }
       b.on('disconnected', () => { if (browser === b) { log('browser disconnected'); browser = null; browserP = null; releaseBrowserLease(); for (const l of lanes) l.lane.setBrowser(null); } });
       browser = b;
+      closedBy = null;
       browserShots = 0;
       for (const l of lanes) l.lane.setBrowser(b);
       log(`browser up in ${Date.now() - t0} ms (${browserInfo.version}; first-context loss ${w.lost ? 'absorbed' : 'not seen'})`);
@@ -219,10 +220,18 @@ function ensureBrowser() {
   return browserP;
 }
 
+/** A budget wait of the daemon: log it and tell every waiting client (they would otherwise see nothing). */
+function broadcastWait(msg) {
+  log(msg);
+  for (const r of requests.values()) send(r, { type: 'log', msg: `[rsd] ${msg.replace(/^\[budget\] /, '')}` });
+}
+
 function releaseBrowserLease() { if (browserLease) { try { browserLease.release(); } catch { /* ignore */ } browserLease = null; } }
 
+let closedBy = null; // why the browser last closed
 async function closeBrowser(why) {
   const b = browser;
+  closedBy = why;
   browser = null;
   browserP = null;
   for (const l of lanes) { l.lane.setBrowser(null); releasePageLease(l); }
@@ -370,7 +379,7 @@ function pump() {
   if (stopping) return;
   if (!lanes[0]) newLaneSlot(0);
   if (!lanes[0].busy && queue.length) void runLane(lanes[0]);
-  if (MAX_LANES > 1 && gov.state === 'ok' && !coldCache() && queue.some((j) => laneEligible(1, j))) {
+  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !coldCache() && queue.some((j) => laneEligible(1, j))) {
     const l1 = lanes[1] ?? newLaneSlot(1);
     // a refused second page is retried at most every 2 s
     if (!l1.busy && (lanes[0].busy || queue.length > 1) && Date.now() - (l1.refusedAt ?? 0) > 2000) void runLane(l1);
@@ -383,7 +392,7 @@ async function ensurePageLease(l, job) {
   const label = `capture daemon page lane ${l.id} (pid ${process.pid})`;
   if (l.id === 0) {
     if (l.lease) { if (await l.lease.resize(w, { wait: true, timeoutMs: 600000 })) return true; releasePageLease(l); }
-    l.lease = await acquire({ weightMb: w, kind: 'page', label, timeoutMs: 600000 });
+    l.lease = await acquire({ weightMb: w, kind: 'page', label, timeoutMs: 600000, onWait: broadcastWait });
     return !!l.lease;
   }
   if (l.lease) return l.lease.resize(w);
@@ -394,6 +403,7 @@ async function ensurePageLease(l, job) {
 async function runLane(l) {
   if (l.busy) return;
   l.busy = true;
+  let ran = 0;
   try {
     for (;;) {
       if (stopping) break;
@@ -403,6 +413,7 @@ async function runLane(l) {
       if (job.req.cancelled) { finishJob(job, null); continue; }
       if (!(await ensurePageLease(l, job))) { queue.unshift(job); l.refusedAt = Date.now(); break; } // lane 1 not admitted: lane 0 takes it
       l.job = job;
+      ran++;
       if (job.exclusive) exclusiveRunning++;
       try { await runJob(l, job); } finally { if (job.exclusive) exclusiveRunning--; l.job = null; }
       // between jobs: recycle on PSS / shot counts
@@ -417,7 +428,8 @@ async function runLane(l) {
     l.busy = false;
     if (!l.lane.page) releasePageLease(l);
     lastActivity = Date.now();
-    if (queue.length && !stopping) setTimeout(pump, 50);
+    // a lane that ran something may have unblocked the other (exclusive jobs, lane 1 refusals)
+    if (ran && queue.length && !stopping) setTimeout(pump, 50);
   }
 }
 
@@ -438,7 +450,7 @@ async function runJob(l, job) {
       await withTimeout(l.lane.closePage(), 15000, 'page.close').catch(async () => { killBrowser(); await closeBrowser('wedged page'); });
       return { entry: failEntry(shot, `SHOT ERROR: ${e.message}`), qa: null };
     });
-    if (gov.state === 'closed' || (!browser && !stopping)) r.entry.errors.push('memory guard: the capture browser was closed at low MemAvailable');
+    if (gov.state === 'closed' || closedBy === 'memory guard') r.entry.errors.push('memory guard: the capture browser was closed at low MemAvailable');
     browserShots++;
     if (job.memoKey && !r.entry.errors.length) memoPut(job.memoKey, job.distHash, r.entry, r.qa);
     msg = { entry: r.entry, qa: r.qa };
