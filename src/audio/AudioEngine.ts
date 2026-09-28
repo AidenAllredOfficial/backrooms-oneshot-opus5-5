@@ -48,6 +48,13 @@ const METER_DT = 10; // output-level report period (s, AudioContext clock)
  * post-limiter output over the last METER_DT window in dBFS (-120 = silence or not measured yet). */
 export interface AudioStatsEx extends AudioStats { outRmsDb: number; outPeakDb: number }
 
+/** AudioSystem plus diagnostics beyond the §4 contract. */
+export interface AudioSystemEx extends AudioSystem {
+  /** Resolves when the buffer bank has nothing queued or rendering (at once before start() or after dispose()).
+   * Tests await it instead of polling the buffer count. */
+  idle(): Promise<void>;
+}
+
 interface Systems {
   ctx: AudioContext;
   env: AudioEnv;
@@ -66,7 +73,7 @@ interface Systems {
   ui: UiSounds;
 }
 
-export function createAudioSystem(bus: GameBus, settings: Settings, q: QualityConfig): AudioSystem {
+export function createAudioSystem(bus: GameBus, settings: Settings, q: QualityConfig): AudioSystemEx {
   let sys: Systems | null = null;
   let starting: Promise<void> | null = null;
   let disposed = false;
@@ -205,7 +212,7 @@ export function createAudioSystem(bus: GameBus, settings: Settings, q: QualityCo
     }
   }
 
-  const api: AudioSystem = {
+  const api: AudioSystemEx = {
     start(): Promise<void> {
       if (disposed) return Promise.resolve();
       if (starting) return starting.then(() => sys ? sys.ctx.resume().catch(() => undefined) : undefined);
@@ -338,6 +345,10 @@ export function createAudioSystem(bus: GameBus, settings: Settings, q: QualityCo
 
     recentEvents(): string[] {
       return recent.slice();
+    },
+
+    idle(): Promise<void> {
+      return sys ? sys.bank.idle() : Promise.resolve();
     },
 
     dispose(): void {

@@ -6,6 +6,10 @@ import { runSynth, synthKey, type SynthRequest } from './dsp/dispatch.ts';
 interface Pending { key: string; req: SynthRequest; resolve: (b: AudioBuffer) => void; reject: (e: unknown) => void; priority: number }
 
 export class BufferBank {
+  /** Tests only: main-thread synthesis results shared by every bank (runSynth is a pure function of the request and
+   * the sample rate), so a test file that starts many AudioSystems renders each buffer once. null (off) in the game. */
+  static synthMemo: Map<string, Float32Array[]> | null = null;
+
   readonly sampleRate: number;
   private readonly ctx: BaseAudioContext;
   private readonly buffers = new Map<string, AudioBuffer>();
@@ -18,6 +22,8 @@ export class BufferBank {
   private nextId = 1;
   private disposed = false;
   private inlineScheduled = false;
+  /** idle() callers, re-checked whenever work finishes (see settle()) */
+  private idleWaiters: (() => void)[] = [];
   /** synthesis wall time (ms) of completed jobs, for diagnostics */
   synthMs = 0;
   jobs = 0;
@@ -76,8 +82,36 @@ export class BufferBank {
     return null;
   }
 
+  /** Jobs not finished yet: queued, in flight on a worker, or about to run on the main thread. */
+  pending(): number {
+    return this.queue.length + this.waiting.size + (this.inlineScheduled ? 1 : 0);
+  }
+
+  /** Resolves once nothing is pending, and still nothing is after one macrotask (the callbacks of the last buffer
+   * may queue more work). Resolves at once after dispose(). For tests and diagnostics. */
+  idle(): Promise<void> {
+    return new Promise((resolve) => {
+      const check = (): void => {
+        if (!this.disposed && this.pending() > 0) { this.idleWaiters.push(check); return; }
+        setTimeout(() => {
+          if (!this.disposed && this.pending() > 0) this.idleWaiters.push(check);
+          else resolve();
+        }, 0);
+      };
+      check();
+    });
+  }
+
+  /** Wake idle() callers once nothing is pending (they re-check on their own). */
+  private settle(): void {
+    if (this.idleWaiters.length === 0 || (!this.disposed && this.pending() > 0)) return;
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    for (const w of waiters) w();
+  }
+
   private pump(): void {
-    if (this.disposed) return;
+    if (this.disposed) { this.settle(); return; }
     if (this.workers.length > 0) {
       for (let w = 0; w < this.workers.length && this.queue.length > 0; w++) {
         if (this.busy[w] > 0) continue;
@@ -87,9 +121,10 @@ export class BufferBank {
         this.busy[w]++;
         this.workers[w].postMessage({ id, req: job.req, sampleRate: this.sampleRate });
       }
+      this.settle();
       return;
     }
-    if (this.inlineScheduled || this.queue.length === 0) return;
+    if (this.inlineScheduled || this.queue.length === 0) { this.settle(); return; }
     this.inlineScheduled = true;
     setTimeout(() => {
       this.inlineScheduled = false;
@@ -97,9 +132,14 @@ export class BufferBank {
       const job = this.queue.shift();
       if (job) {
         try {
-          const t0 = performance.now();
-          const chans = runSynth(job.req, this.sampleRate);
-          this.synthMs += performance.now() - t0;
+          const memo = BufferBank.synthMemo, memoKey = `${job.key}@${this.sampleRate}`;
+          let chans = memo?.get(memoKey);
+          if (!chans) {
+            const t0 = performance.now();
+            chans = runSynth(job.req, this.sampleRate);
+            this.synthMs += performance.now() - t0;
+            memo?.set(memoKey, chans);
+          }
           this.finish(job, chans);
         } catch (e) {
           this.inflight.delete(job.key);
@@ -155,5 +195,6 @@ export class BufferBank {
     this.buffers.clear();
     this.queue.length = 0;
     this.waiting.clear();
+    this.settle();
   }
 }
