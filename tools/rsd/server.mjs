@@ -388,7 +388,7 @@ function memoPut(key, distHash, entry, qa) {
 function takeJob(l) {
   if (!queue.length) return null;
   // lane 1 takes only jobs whose build is known to hit the tile cache
-  const q = l.id > 0 ? queue.filter((j) => !coldJob(j)) : queue;
+  const q = l.id > 0 ? queue.filter((j) => !coldJob(j) && !j.lane0Only) : queue;
   const r = pickJob(q, l.id, { warmKey: l.lane.warmKey, avoidKey: l.id > 0 ? lane0InPlaceKey() : null, exclusiveRunning: exclusiveRunning > 0, othersBusy: lanes.some((x) => x && x !== l && x.job), last: lastClient });
   lastClient = r.last;
   if (r.job) queue.splice(queue.indexOf(r.job), 1);
@@ -415,7 +415,7 @@ function pump() {
   if (!lanes[0]) newLaneSlot(0);
   if (!lanes[0].busy && queue.length) void runLane(lanes[0]);
   const k0 = lane0InPlaceKey();
-  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !heavyLane0() && queue.some((j) => laneEligible(1, j) && !coldJob(j) && !(k0 && j.warmKey === k0))) {
+  if (MAX_LANES > 1 && gov.state === 'ok' && exclusiveRunning === 0 && !heavyLane0() && queue.some((j) => laneEligible(1, j) && !coldJob(j) && !j.lane0Only && !(k0 && j.warmKey === k0))) {
     const l1 = lanes[1] ?? newLaneSlot(1);
     // a refused second page is retried at most every 2 s
     if (!l1.busy && (lanes[0].busy || queue.length > 1) && Date.now() - (l1.refusedAt ?? 0) > 2000) void runLane(l1);
@@ -436,6 +436,28 @@ function lane0InPlaceKey() {
 /** Lane 0 holds a heavy page (ultra, >= 1440p, or baking a cold location): a second page would take the tree past
  * the 3.2 GB PSS cap. */
 function heavyLane0() { return (lanes[0]?.lease?.weightMb ?? 0) > WEIGHTS.page; }
+
+/**
+ * Mid-job cap guard. The PSS checks between jobs cannot see a peak inside a job, and the warm-cache window cannot
+ * predict a cold location on a warm build: two pages baking cold locations at once took the tree to 4.1 GB PSS and
+ * slowed both past QA's 20 s readiness limit. While both lanes run, a tree over the cap makes lane 1 hand its shot
+ * back: its page closes and lane 0 renders the shot later.
+ */
+let capChecking = false;
+async function capGuard() {
+  const l1 = lanes[1];
+  if (capChecking || !l1?.job || !l1.handBack || !lanes[0]?.job) return;
+  if (gov.last.rssMb <= RECYCLE_PSS_MB) return; // PSS <= RSS: only a tree RSS over the cap needs the PSS read
+  capChecking = true;
+  try {
+    const pss = await gov.samplePssAsync();
+    if (pss > RECYCLE_PSS_MB && l1.job && l1.handBack && lanes[0]?.job) {
+      log(`tree PSS ${Math.round(pss)} MB over ${RECYCLE_PSS_MB} MB with two pages: lane 1 hands shot ${l1.job.index} back to lane 0`);
+      l1.handBack('tree PSS over the cap with two pages');
+    }
+  } catch { /* /proc race */ } finally { capChecking = false; }
+}
+setInterval(() => void capGuard(), 500).unref();
 
 async function ensurePageLease(l, job) {
   // a build not yet known to hit the tile cache counts as a cold page (4 bake workers busy: 1600 MB)
@@ -476,7 +498,10 @@ async function runLane(l) {
       }
       // the second lane may fit now (lane 0's page weight shrinks once its build's tiles hit the cache)
       else if (l.id === 0 && queue.length) pump();
-      try { await runJob(l, job); } finally { if (job.exclusive) exclusiveRunning--; l.job = null; }
+      let outcome;
+      try { outcome = await runJob(l, job); } finally { if (job.exclusive) exclusiveRunning--; l.job = null; }
+      // handed back over the cap: lane 1 rests for 15 s instead of starting the next shot into the same peak
+      if (outcome === 'handBack') { ran--; l.refusedAt = Date.now() + 15000; await closeLanePage(l); break; }
       // between jobs: a fresh PSS sample (the 5 s sampler misses short peaks); over the cap, this lane's warm page goes,
       // and the browser too if that is not enough and nothing else runs
       // (PSS <= RSS: only a tree RSS over the cap needs the ~100 ms PSS read)
@@ -514,17 +539,27 @@ async function runJob(l, job) {
     if (l.lane.browser !== b) l.lane.setBrowser(b);
     const nEvals = (req.evals?.length ?? 0) + (shot.eval?.length ?? 0) + (shot.captures?.length ?? 0);
     const timeout = 2 * READY_TIMEOUT_MS + 60000 + nEvals * (req.evalTimeoutMs ?? 900000);
-    const r = await withTimeout(l.lane.run(shot, {
+    // capGuard() may hand the job back to the queue (lane 1 only)
+    const handBack = new Promise((_, rej) => { l.handBack = (why) => rej(Object.assign(new Error(why), { handBack: true })); });
+    handBack.catch(() => {});
+    const r = await Promise.race([withTimeout(l.lane.run(shot, {
       index: job.index, out: job.out, wait: req.wait ?? null, size: req.size, evals: req.evals ?? [], qa: !!req.qa,
       streamCapture: !!req.streamCapture, draft: !!req.draft, root: job.root, features: job.features, hc: req.hc, evalTimeoutMs: req.evalTimeoutMs,
       fresh: req.freshPages || undefined,
-    }), timeout, 'capture job').catch(async (e) => {
+    }), timeout, 'capture job'), handBack]).catch(async (e) => {
       // the run itself goes on in the background: abort() closes its page (not only the warm one) and turns it into
       // a no-op, so it neither leaks a page nor installs one as this lane's warm page later
       log(`lane ${l.id}: ${e.message}; closing its pages`);
       if (!(await l.lane.abort())) { killBrowser(); await closeBrowser('wedged page'); }
+      if (e.handBack) return { handBack: true };
       return { entry: failEntry(shot, `SHOT ERROR: ${e.message}`), qa: null };
-    });
+    }).finally(() => { l.handBack = null; });
+    if (r.handBack) {
+      // rendered again from the start on lane 0 (alone, or beside a lighter page), never on lane 1
+      job.lane0Only = true;
+      queue.unshift(job);
+      return 'handBack';
+    }
     if (gov.state === 'closed' || closedBy === 'memory guard') r.entry.errors.push('memory guard: the capture browser was closed at low MemAvailable');
     browserShots++;
     if (job.memoKey && !r.entry.errors.length) memoPut(job.memoKey, job.distHash, r.entry, r.qa);

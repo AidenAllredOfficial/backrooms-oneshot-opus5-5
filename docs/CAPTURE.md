@@ -104,6 +104,12 @@ also always boot their own page:
 A warm page is recycled after 40 shots, or when the tree PSS, sampled after each job, is over 3.2 GB. At most one
 idle warm page is kept.
 
+The warm-cache window cannot predict a cold location on a warm build, and the checks after each job cannot see a
+peak inside one. Two pages baking cold QA zones at once reached 4.1 GB PSS, and both became so slow that two shots
+failed QA's 20 s readiness limit. So while both lanes run, the tree is also checked every 0.5 s: over 3.2 GB PSS,
+lane 1 hands its shot back (its page closes, lane 0 renders the shot later) and rests for 15 s. Cold QA zones on the
+contract-v2 tree then peaked at 3.30 GB and passed 36 of 36, with images identical to the warm run.
+
 **Memo.** A finished shot is stored in `/var/tmp/backrooms-render/memo`, keyed by SHA-1 of:
 - the build's `distHash`;
 - the canonical shot (final launch params sorted, minus `autostart` and `noprime`, plus page, size, wait, evals,
