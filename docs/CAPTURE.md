@@ -68,8 +68,11 @@ available. Lane 1, a second page in the same browser, opens only when all of the
 - the shot is at quality high or lower and at most 1920x1080;
 - recent tile-cache requests show a warm cache (20 or more GETs, 75 % or more hits).
 
-Two cold pages would split the memory-bandwidth-bound bake between 8 workers for no gain. The long presets (`soak`,
-`stress`, `perf`, `edge`) use at most one lane.
+Two cold pages would split the memory-bandwidth-bound bake between 8 workers for no gain.
+
+Shots with evals, and the long presets (`soak`, `stress`, `perf`, `edge`), run alone in the browser. They start only
+when no other lane is busy, and nothing starts beside them. Their checks measure frame times and behaviour, and a
+second page booting next to the tower walk pushed its longest frame from 50 ms to 66-83 ms.
 
 **In-place shots.** When a page reports capture contract v2 (`__backrooms.captureGate >= 2` and `load()`), the lane
 keeps it after a shot. The next shot with the same boot key (quality, scale, radius, bake, camcorder, hud, debug,
@@ -106,6 +109,12 @@ as activity.
 **Versions.** The daemon's version is a hash of `tools/rsd/*.mjs` and `tools/lib/*.mjs`. A client from a tree with
 different tool code asks the running daemon to retire. It finishes its queued jobs and exits, and the client starts
 its own daemon.
+
+**Priming.** A fresh headless browser loses its first WebGL context about 0.5 s after creating it. The daemon
+absorbs that loss once per browser. Game pages without evals then get `noprime=1`, which saves 0.45 s per boot.
+Shots with evals keep the players' boot. Without the priming wait, ready comes earlier relative to background
+streaming. The tower walk and the elevator ride then started before the upper storey had streamed in, and both
+failed, although they pass at 5c3ea7d. `BACKROOMS_NOPRIME=0` lets every page prime itself.
 
 **Direct mode.** `--direct` (or `--url <server>`, or `BACKROOMS_RSD=0`) captures in the calling process with the same
 capture code: a Vite dev server started with node (no npx) and a browser, launched in parallel under one budget
@@ -187,7 +196,7 @@ count. Waiting jobs register too, and the capture daemon releases an idle browse
 | 300 + 700 per fork | vitest |
 
 `node tools/lib/budget.mjs --status` lists holders and waiters. The API (`acquire`, `status`, `WEIGHTS`,
-`pageWeight`) is typed in `tools/lib/budget.d.mts`. vitest sizes its forks from `status().headroomMb`.
+`pageWeight`) is typed in `tools/lib/budget.d.mts`. Test runs take a lease as well (300 MB + 700 MB per fork).
 
 **Governor (`tools/lib/procmem.mjs`).** Each capture tool samples its own process tree: RSS every 0.5 s, PSS every
 5 s. It acts only on processes it started:
@@ -218,6 +227,10 @@ The last resort stays outside the repository: an ad-hoc OOM guard script run by 
   when far tiles arrive relative to ready. That changed 1.6k-33k px on 5 of 12 D2 shots. This is the known
   timing dependence of the old ready gate. Capture contract v2 (a position-defined capture set, a frame-counted
   settle and the exposure snap) removes it.
+- **QA verdicts.** The 76-shot list `zones,landmarks,views,dark,pools,leak,cornell,spawn,decals,tower,materials,post`
+  gave identical pass/fail results and fail messages through the daemon, through `--direct`, and through `qa.mjs`
+  at 5c3ea7d, on a warm cache. The comparison ignores readyMs values and the tower's two 50 ms frame-time checks.
+  Those checks are flaky under load in every version: the old tool failed them at 50.0-66.7 ms in 3 of 4 runs.
 - **After contract v2** (Lane 2 of the iteration plan), in-place vs fresh, daemon build vs dev server, and memo vs
   re-render must all be 0 px on D2 at high and ultra.
 
@@ -238,6 +251,7 @@ The last resort stays outside the repository: an ad-hoc OOM guard script run by 
 | `BACKROOMS_BROWSER_SLOTS` | 1 | Tool browsers allowed at once, machine-wide. |
 | `BACKROOMS_HC` | 8 | `navigator.hardwareConcurrency` for pages (4 bake workers). |
 | `BACKROOMS_RSD` | on | `0` makes shoot/qa capture in-process (`--direct`). |
+| `BACKROOMS_NOPRIME` | on | `0`: never add `noprime=1` (every page primes its own GPU context). |
 | `BACKROOMS_RSD_LANES` | 2 | Upper limit on daemon lanes (the second still needs the budget). |
 | `BACKROOMS_MEMO_MB` | 2048 | Capture memo cap. |
 | `BACKROOMS_RSD_IDLE_PAGE_MS`, `_BROWSER_MS`, `_EXIT_MS` | 90000, 180000, 600000 | Idle timers. |
@@ -267,6 +281,12 @@ warmed beforehand, a free browser slot at the start. Memory is the peak of the m
 | daemon, memo repeat | 0.04 s in the tool, 0.3 s with Node start | | |
 | 4 clients x 3 shots, 2 lanes | 13.9 s makespan (38.3 s before) | | 3.34 / 2.45 GB |
 | A/B of 12 framings, base memoized, test built | 18.7 s | | |
+| `qa.mjs --preset zones`, warm, 2 lanes (1.7 min before) | 73.6 s | | QA client 0.14 GB RSS |
+| `qa.mjs --preset zones`, cold, 1 lane | 357 s of shots (lane 3's vitest running alongside) | 9.1 s mean ready | 3.19 / 2.53 GB incl. daemon |
+| 76-shot QA parity list, warm: 5c3ea7d / `--direct` / daemon | 294 s / 283 s / 226 s | | 4.33 / 3.63, 3.86 / 3.23, 3.64 / 2.96 GB |
+
+Most runs shared the machine with the other lanes' test runs and captures. The cold QA numbers suffer most: the
+bake is bandwidth bound.
 
 The fresh-page shot on the daemon breaks down as: new page 0.05 s, page load 0.33-0.42 s, then ready at
 0.7-1.2 s. The page's own boot marks come at textures 0.1 s, shaders 0.55-0.7 s, spawn 0.62-0.84 s and ready
