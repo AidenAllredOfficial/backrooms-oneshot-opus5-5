@@ -6,18 +6,19 @@
 //    a linear march for rays toward the camera (ssrGlsl.ts SSR_TRACE_GLSL), thickness and facing tests, the glossy
 //    lobe's footprint on the hit surface (narrowed by N.V out of the plane of incidence) looked up anisotropically in
 //    the low-passed colour pyramid (a core and a GGX tail), and the confidence fades (screen border, roughness
-//    cut-off, ray length, rays toward the camera, thickness). Ultra adds a 3x3 bilateral filter (ssrFilter).
+//    cut-off, ray length, rays toward the camera, thickness). The resolve then gathers each texel's neighbours over
+//    the lobe's spread on the receiver (ssrGlsl.ts SSR_RESOLVE_FRAG; 8 taps on ultra (ssrFilter), 6 on high).
 //  - The result reaches the MRT composite (post/frame/MrtComposite.ts setReflection), which upsamples it bilaterally
 //    and replaces the fallback specular by its confidence.
-// Both hooks run only on MRT frames (q.ssr on, the ssr toggle on, no debug view). BR_SSR_STEPS is compile-time: a
-// quality change with other steps builds a new trace program.
+// Both hooks run only on MRT frames (q.ssr on, the ssr toggle on, no debug view). BR_SSR_STEPS and BR_SSR_TAPS are
+// compile-time: a quality change with other steps or taps builds a new trace or resolve program.
 
 import * as THREE from 'three';
 import type { QualityConfig } from '../../core/quality.ts';
 import type { FrameContext, FrameHook, ScenePass } from '../ScenePass.ts';
 import { FullscreenQuad, quadMaterial } from '../frame/quad.ts';
 import { HiZ } from './HiZ.ts';
-import { SSR, SSR_FILTER_FRAG, SSR_TRACE_FRAG } from './ssrGlsl.ts';
+import { SSR, SSR_RESOLVE_FRAG, SSR_TRACE_FRAG } from './ssrGlsl.ts';
 
 export interface SsrSettings {
   maxRough: number;
@@ -39,12 +40,13 @@ export class ScreenSpaceReflections {
   enabled: boolean;
   private settings: SsrSettings;
   private trace: THREE.ShaderMaterial;
-  private readonly filter: THREE.ShaderMaterial;
+  private resolve: THREE.ShaderMaterial;
   private readonly ssrRT: THREE.WebGLRenderTarget;
   private readonly tmpRT: THREE.WebGLRenderTarget;
   private readonly quad = new FullscreenQuad();
   private readonly full = new THREE.Vector2(1, 1);
   private readonly aoP = new THREE.Vector2();
+  private readonly projP = new THREE.Vector4();
   private readonly renderScale: () => number;
   private step = 2;
   private attached: { sp: ScenePass; remove: (() => void)[] } | null = null;
@@ -60,23 +62,25 @@ export class ScreenSpaceReflections {
       type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false,
       generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     } as const;
-    // MRT: [0] premultiplied reflection + confidence, [1] metadata (linear depth, oct normal, roughness)
-    this.ssrRT = new THREE.WebGLRenderTarget(1, 1, { ...opts, count: 2 });
+    // MRT: [0] premultiplied reflection + confidence, [1] metadata (linear depth, oct normal, roughness), [2] the
+    // resolve's kernel
+    this.ssrRT = new THREE.WebGLRenderTarget(1, 1, { ...opts, count: 3 });
     this.ssrRT.textures[0].name = 'SSR.Trace';
     this.ssrRT.textures[1].name = 'SSR.Meta';
+    this.ssrRT.textures[2].name = 'SSR.Kernel';
     this.tmpRT = new THREE.WebGLRenderTarget(1, 1, opts);
-    this.tmpRT.texture.name = 'SSR.Filtered';
+    this.tmpRT.texture.name = 'SSR.Resolved';
     this.trace = this.makeTrace(this.settings.steps);
-    this.filter = quadMaterial('br-ssr-filter', SSR_FILTER_FRAG, {}, { tSsr: { value: null }, tMeta: { value: null } });
+    this.resolve = this.makeResolve(this.settings.filter);
   }
 
   /** Every program (compiled ahead by boot / the quality switch). */
   get materials(): readonly THREE.ShaderMaterial[] {
-    return [...this.hiz.materials, this.trace, this.filter];
+    return [...this.hiz.materials, this.trace, this.resolve];
   }
 
-  /** The trace-resolution result of the last traced frame (premultiplied rgb, a = confidence). */
-  get texture(): THREE.Texture { return this.settings.filter ? this.tmpRT.texture : this.ssrRT.textures[0]; }
+  /** The trace-resolution result of the last traced frame, resolved (premultiplied rgb, a = confidence). */
+  get texture(): THREE.Texture { return this.tmpRT.texture; }
 
   private makeTrace(steps: number): THREE.ShaderMaterial {
     return quadMaterial('br-ssr-trace', SSR_TRACE_FRAG, { BR_SSR_STEPS: steps }, {
@@ -86,6 +90,14 @@ export class ScreenSpaceReflections {
       uProj: { value: new THREE.Matrix4() }, uProjInv: { value: new THREE.Matrix4() },
       uFull: { value: this.full }, uMaxRough: { value: this.settings.maxRough },
       uStep: { value: this.step },
+    });
+  }
+
+  /** The resolve: SSR.RESOLVE_TAPS[0] taps with ssrFilter (ultra), [1] without (compile-time, like the trace's steps). */
+  private makeResolve(full: boolean): THREE.ShaderMaterial {
+    return quadMaterial('br-ssr-resolve', SSR_RESOLVE_FRAG, { BR_SSR_TAPS: SSR.RESOLVE_TAPS[full ? 0 : 1] }, {
+      tSsr: { value: null }, tMeta: { value: null }, tKer: { value: null }, uProjP: { value: this.projP },
+      uFull: { value: this.full }, uStep: { value: this.step },
     });
   }
 
@@ -107,12 +119,16 @@ export class ScreenSpaceReflections {
   setQuality(q: QualityConfig): void {
     this.enabled = q.ssr !== 'off';
     const s = ssrSettingsOf(q);
-    if (s.steps !== this.settings.steps) {
+    const prev = this.settings;
+    this.settings = s;
+    if (s.steps !== prev.steps) {
       this.trace.dispose();
-      this.settings = s;
       this.trace = this.makeTrace(s.steps);
     }
-    this.settings = s;
+    if (s.filter !== prev.filter) {
+      this.resolve.dispose();
+      this.resolve = this.makeResolve(s.filter);
+    }
     this.trace.uniforms.uMaxRough.value = s.maxRough;
     if (!this.enabled) {
       // free the GL targets on presets without SSR (they reallocate on the next traced frame)
@@ -162,22 +178,22 @@ export class ScreenSpaceReflections {
     (u.uProj.value as THREE.Matrix4).copy(cam.projectionMatrix);
     (u.uProjInv.value as THREE.Matrix4).copy(cam.projectionMatrixInverse);
     this.quad.render(renderer, this.trace, this.ssrRT);
-    let result = this.ssrRT.textures[0];
-    if (this.settings.filter) {
-      const fu = this.filter.uniforms;
-      fu.tSsr.value = this.ssrRT.textures[0];
-      fu.tMeta.value = this.ssrRT.textures[1];
-      this.quad.render(renderer, this.filter, this.tmpRT);
-      result = this.tmpRT.texture;
-    }
-    sp.composite.setReflection(result, this.ssrRT.textures[1], step, cam);
+    const e = cam.projectionMatrix.elements;
+    this.projP.set(e[0], e[5], e[8], e[9]);
+    const ru = this.resolve.uniforms;
+    ru.tSsr.value = this.ssrRT.textures[0];
+    ru.tMeta.value = this.ssrRT.textures[1];
+    ru.tKer.value = this.ssrRT.textures[2];
+    ru.uStep.value = step;
+    this.quad.render(renderer, this.resolve, this.tmpRT);
+    sp.composite.setReflection(this.tmpRT.texture, this.ssrRT.textures[1], step, cam);
   }
 
   dispose(): void {
     this.detach();
     this.hiz.dispose();
     this.trace.dispose();
-    this.filter.dispose();
+    this.resolve.dispose();
     this.ssrRT.dispose();
     this.tmpRT.dispose();
   }

@@ -59,12 +59,29 @@ export const SSR = {
   HIZ_LEVELS: 8,
   /** anisotropic filtering of the colour pyramid (the streak lookups use textureGrad) */
   PYR_ANISO: 8,
-  /** ultra's bilateral filter: radius = rough x FILTER_R (half-res texels, at most 2); mirrors below FILTER_ROUGH stay
-   * unfiltered */
-  FILTER_R: 6,
-  FILTER_ROUGH: 0.12,
-  FILTER_Z: 0.05,
-  FILTER_NPOW: 16,
+  /** the resolve (SSR_RESOLVE_FRAG): each texel also gathers its neighbours' rays over the lobe's spread seen from the
+   * camera through the mirror (the angle x L0 / (|P| + L0), along the plane of incidence's screen direction and x N.V
+   * across it), a Gaussian of sd RESOLVE_K x RESOLVE_SD x the cone's tan (GGX's in-plane half width at half maximum
+   * is about the cone's 1.5 alpha: sd = tan / 1.18). One ray per texel read through its footprint on the hit plane
+   * cannot see what lies off that plane: a lamp fixture hanging below a lit ceiling grid, a partition, a lamp's own
+   * ribbed lens. Where the ray hit or missed such a thing the lookup flipped from texel to texel (a terrazzo floor drew
+   * the lamp as a lit rectangle with a dashed dark line through it and a dotted tail of the grid beside it); a
+   * supersampled GGX reference shows a smooth glow. Neighbouring rays are samples of nearby directions of the same
+   * lobe: gathering them averages what each one saw. The lookup keeps the whole cone: against a 1536-ray GGX
+   * reference of 15 framings, the full cone plus RESOLVE_K 0.7 came closest (splitting the cone between lookup and
+   * resolve left the lookups sharper and PARKING's painted roll-up door headers brighter than the reference) */
+  RESOLVE_K: 0.7,
+  RESOLVE_SD: 0.85,
+  /** trace texels: the resolve's sd cap; kernels below RESOLVE_MIN (mirrors, contact reflections) are copied */
+  RESOLVE_MAX: 16,
+  RESOLVE_MIN: 0.35,
+  /** resolve weights: distance to the texel's macro plane (x its depth), roughness. The plane is the trace's macro
+   * normal Nm, not the block's: a corrugated deck's rib flanks lie on one plane, and weighing their block normals kept
+   * each texel to its own flank, a rib-periodic subset of the taps that drew the roof glints as a checkered grid */
+  RESOLVE_PLANE: 0.01,
+  RESOLVE_ROUGH: 8,
+  /** taps on the resolve's Vogel disc (radius 2 sd): ultra (ssrFilter) and high */
+  RESOLVE_TAPS: [8, 6] as const,
   /** full-resolution upsample in the composite: depth (relative), normal power, roughness */
   UP_Z: 0.03,
   UP_NPOW: 8,
@@ -110,10 +127,11 @@ vec3 brOctDec( vec2 e ) {
  *
  * brSsrTrace( P, R, proj, maxDist, hitUv, hitZ, hitGap, rayT ): P = view-space origin, R = unit view-space direction.
  * On a hit returns true with hitUv (screen uv), hitZ (the scene's linear view depth there), hitGap (how far the ray
- * lies behind the depth buffer, as a share of the accepted thickness: 0..1) and rayT (distance / maxDist).
- * Receding rays (away from the camera) use the min-pyramid traversal (Uludag, GPU Pro 5): coarse cells the ray
- * passes in front of are skipped whole. Rays toward the camera use a linear march with growing strides and a
- * bisection.
+ * lies behind the depth buffer, as a share of the accepted thickness: 0..1) and rayT (distance / maxDist). A receding
+ * ray that passed behind an occluder leaves the distance at which it last did in brSsrBehindT (0 if it never did: a
+ * miss behind a lamp fixture still tells the resolve how far its lobe reached). Receding rays (away from the camera)
+ * use the min-pyramid traversal (Uludag, GPU Pro 5): coarse cells the ray passes in front of are skipped whole. Rays
+ * toward the camera use a linear march with growing strides and a bisection.
  */
 export const SSR_TRACE_GLSL = /* glsl */ `
 #ifndef BR_SSR_TRACE_GLSL
@@ -149,11 +167,13 @@ bool brSsrAccept( vec3 p, mat4 proj, ivec2 hz0, out float zs, out float gap ) {
 	gap = ( zr - zs ) / ( BR_SSR_THICK + BR_SSR_THICK_Z * zs );
 	return gap >= 0.0 && gap < 1.0;
 }
+float brSsrBehindT = 0.0;
 bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out float hitZ, out float hitGap, out float rayT ) {
 	hitUv = vec2( 0.0 );
 	hitZ = 0.0;
 	hitGap = 0.0;
 	rayT = 1.0;
+	brSsrBehindT = 0.0;
 	if ( uHiZInfo.w < 0.5 ) return false;
 	// the ray ends in front of the near plane
 	float near = proj[ 3 ][ 2 ] / ( proj[ 2 ][ 2 ] - 1.0 );
@@ -214,6 +234,7 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 						return true;
 					}
 					// passing behind a thick occluder: what the ray meets there is not on screen
+					brSsrBehindT = t * L;
 					if ( ++ behind >= BR_SSR_BEHIND_MAX ) return false;
 				}
 				t = tExit + 1e-5;
@@ -282,10 +303,11 @@ void main() {
 `;
 
 /** The trace at half the display resolution (one ray per step x step block, from its top-left pixel like the SSAO;
- * step 2, or 3 on ultra's 1.4x supersampled buffer). MRT: location 0 =
- * premultiplied reflected radiance x confidence (rgb), confidence (a); location 1 = the representative pixel's
- * metadata for the filter and the upsample: linear view depth, oct view normal, lobe roughness (0 where the pixel has
- * no G-buffer specular). */
+ * step 2, or 3 on ultra's 1.4x supersampled buffer). MRT: location 0 = premultiplied reflected radiance x confidence
+ * (rgb), confidence (a); location 1 = the representative pixel's metadata for the resolve and the upsample: linear
+ * view depth, oct view normal, lobe roughness (0 where the pixel has no G-buffer specular); location 2 = its resolve
+ * kernel: the oct macro normal Nm (xy), the sd along the plane of incidence and across it (zw, trace texels; 0 where
+ * no ray told how far the lobe reaches). */
 export const SSR_TRACE_FRAG = /* glsl */ `
 precision highp float;
 precision highp int;
@@ -304,6 +326,7 @@ uniform float uMaxRough;
 uniform int uStep;                // full-resolution pixels per trace texel (2, 3 on ultra's 1.4x buffer)
 layout( location = 0 ) out highp vec4 outSsr;
 layout( location = 1 ) out highp vec4 outMeta;
+layout( location = 2 ) out highp vec4 outKer;
 #define BR_SSR_DEPTH_AT( px ) texelFetch( tDepth, clamp( px, ivec2( 0 ), ivec2( uFull ) - 1 ), 0 ).x
 #define BR_SSR_MAX_DIST ${f(SSR.MAX_DIST)}
 #define BR_SSR_EDGE ${f(SSR.EDGE_FADE)}
@@ -326,6 +349,8 @@ layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_NAGREE0 ${f(SSR.NAGREE[0])}
 #define BR_SSR_NAGREE1 ${f(SSR.NAGREE[1])}
 #define BR_SSR_BLOCK_DR ${f(SSR.BLOCK_DR)}
+#define BR_SSR_RES_S ${f(SSR.RESOLVE_K * SSR.RESOLVE_SD)}
+#define BR_SSR_RES_MAX ${f(SSR.RESOLVE_MAX)}
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
 ${SSR_OCT_GLSL}
 vec2 brOctEnc( vec3 n ) {
@@ -403,9 +428,17 @@ void brSsrFootprint( vec3 P, vec3 R, vec3 N, float nv, vec3 Ph, vec3 Nh, float t
 	if ( lI < lMin ) gI = ( lI > 1e-9 ? gI / lI : vec2( - gO.y, gO.x ) / lO ) * lMin;
 	if ( lO < lMin ) gO = ( lO > 1e-9 ? gO / lO : vec2( - gI.y, gI.x ) / lI ) * lMin;
 }
+// The resolve's kernel of a texel at P (N.V nv) whose lobe (tan tn) reached Lr metres, in trace texels: for a mirror
+// the camera sees the hit as if through a window, so a neighbour whose ray hits Lr x d away from ours sits
+// d x Lr / (|P| + Lr) away on screen; the sd along the plane of incidence, and x N.V across it (resolveKernel twin)
+vec2 brSsrKernel( vec3 P, float nv, float tn, float Lr ) {
+	float s = BR_SSR_RES_S * tn * Lr / ( length( P ) + Lr ) * uProj[ 1 ][ 1 ] * uFull.y * 0.5 / float( uStep );
+	return min( vec2( s, s * max( nv, BR_SSR_NV_MIN ) ), vec2( BR_SSR_RES_MAX ) );
+}
 void main() {
 	outSsr = vec4( 0.0 );
 	outMeta = vec4( 0.0 );
+	outKer = vec4( 0.0 );
 	ivec2 p = min( ivec2( gl_FragCoord.xy ) * uStep, ivec2( uFull ) - 1 );
 	vec4 s1 = texelFetch( tSpec, p, 0 );
 	vec4 g = texelFetch( tGNR, p, 0 );
@@ -432,6 +465,7 @@ void main() {
 	vec3 P = brViewPos( d, ( vec2( p ) + 0.5 ) / uFull );
 	outMeta = vec4( - P.z, brOctEnc( N ), rough );
 	if ( rough > uMaxRough ) return;
+	float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );
 	// the macro surface: the depth's own normal. A block whose normals disagree (a normal map finer than the trace
 	// grid: a corrugated deck's ribs) is traced along it, the spread kept as the Toksvig cone: the mean of a partial rib
 	// period changes from block to block and beat against the grid into dashed glints beside every high-bay, crawling
@@ -461,8 +495,15 @@ void main() {
 	if ( up <= 0.0 ) return;
 	vec2 hitUv;
 	float hitZ, hitGap, rayT;
-	// start just off the surface: its own depth must not stop the ray
-	if ( ! brSsrTrace( P + Nt * ( 0.002 * - P.z ), R, uProj, BR_SSR_MAX_DIST, hitUv, hitZ, hitGap, rayT ) ) return;
+	// start just off the surface: its own depth must not stop the ray. A miss behind an occluder (a lamp fixture
+	// hanging below the ceiling it would have hit) still sizes the resolve, which fills it from the neighbours' rays
+	if ( ! brSsrTrace( P + Nt * ( 0.002 * - P.z ), R, uProj, BR_SSR_MAX_DIST, hitUv, hitZ, hitGap, rayT ) ) {
+		if ( brSsrBehindT > 0.0 ) outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, brSsrBehindT ) );
+		return;
+	}
+	vec3 Ph = brViewPos( 1.0, hitUv );
+	Ph *= hitZ / - Ph.z;
+	outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, length( Ph - P ) ) );
 	ivec2 hp = ivec2( hitUv * uFull );
 	vec3 Nh = brDepthNormal( hp );
 	if ( dot( Nh, R ) > BR_SSR_FACING ) return; // the back of a surface: not what the ray sees
@@ -470,9 +511,6 @@ void main() {
 	// pyramid. A screen-aligned disc stretched along the projected normal (the lookup until September 2026) was up to
 	// 16x the lobe's area at grazing views and ignored the hit surface: a lamp beside a dark hit, metres behind it
 	// and far outside the lobe, drew phantom copies in puddles and sparkle on tile ceilings
-	vec3 Ph = brViewPos( 1.0, hitUv );
-	Ph *= hitZ / - Ph.z;
-	float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );
 	vec2 gI, gO;
 	brSsrFootprint( P, R, Nt, nv, Ph, Nh, BR_SSR_CONE * a, gI, gO );
 	vec3 col = textureGrad( tPyr, hitUv, gI, gO ).rgb;
@@ -495,38 +533,72 @@ void main() {
 }
 `;
 
-/** Ultra: one 3x3 bilateral pass over the half-resolution result (premultiplied, so misses fade the confidence
- * smoothly); taps r = rough x FILTER_R texels apart (rounded, at most 2), none below FILTER_ROUGH: mirrors stay
- * sharp. Weights: Gaussian x depth x normal^FILTER_NPOW, from the trace's metadata. */
-export const SSR_FILTER_FRAG = /* glsl */ `
+/** The resolve, at the trace's resolution: each texel gathers BR_SSR_TAPS neighbours on a Vogel disc of radius 2 sd
+ * in its kernel's frame (the trace's location 2: along the plane of incidence, the screen line toward the vanishing
+ * point of the macro normal (vertical on a floor), and across it), Gaussian-weighted x the distance to its macro
+ * plane x roughness, over the premultiplied result (a miss among the taps lowers the confidence, not the colour).
+ * Kernels under RESOLVE_MIN texels (mirrors, contact reflections) are copied. uProjP = (P00, P11, P20, P21). */
+export const SSR_RESOLVE_FRAG = /* glsl */ `
 precision highp float;
 precision highp int;
 uniform highp sampler2D tSsr;
 uniform highp sampler2D tMeta;
+uniform highp sampler2D tKer;
+uniform vec4 uProjP;
+uniform vec2 uFull;
+uniform int uStep;
 layout( location = 0 ) out highp vec4 outSsr;
+#ifndef BR_SSR_TAPS
+#define BR_SSR_TAPS ${SSR.RESOLVE_TAPS[0]}
+#endif
 ${SSR_OCT_GLSL}
+// view position of trace texel q's representative pixel at linear depth z
+vec3 brResPos( ivec2 q, float z ) {
+	vec2 ndc = ( vec2( q * uStep ) + 0.5 ) / uFull * 2.0 - 1.0;
+	return vec3( ( ndc + uProjP.zw ) / uProjP.xy * z, - z );
+}
+// screen position (px, up to a constant) of view point v
+vec2 brResPx( vec3 v ) { return ( uProjP.xy * v.xy + uProjP.zw * v.z ) / - v.z * 0.5 * uFull; }
 void main() {
 	ivec2 t = ivec2( gl_FragCoord.xy );
 	vec4 c = texelFetch( tSsr, t, 0 );
 	outSsr = c;
 	vec4 m = texelFetch( tMeta, t, 0 );
-	int r = int( floor( clamp( m.w * ${f(SSR.FILTER_R)}, 0.0, 2.0 ) + 0.5 ) );
-	if ( m.x <= 0.0 || m.w <= ${f(SSR.FILTER_ROUGH)} || r == 0 ) return;
+	if ( m.x <= 0.0 ) return;
+	vec4 k = texelFetch( tKer, t, 0 );
+	if ( k.z < ${f(SSR.RESOLVE_MIN)} ) return;
 	ivec2 sz = textureSize( tSsr, 0 ) - 1;
-	vec3 Nc = brOctDec( m.yz );
+	vec3 Nc = brOctDec( k.xy );
+	vec3 Pc = brResPos( t, m.x );
+	vec2 dir = brResPx( Pc + Nc * ( 0.05 * m.x ) ) - brResPx( Pc );
+	float dl = length( dir );
+	dir = dl > 1e-6 ? dir / dl : vec2( 0.0, 1.0 );
+	vec2 dI = dir * k.z, dO = vec2( - dir.y, dir.x ) * k.w;
+	// every tap is clamped to the range of the texel and the kernel's four axis points at 1 sd (at least a texel off):
+	// one ray that caught a lamp is far brighter than the lobe around it, and the fixed tap pattern of every texel
+	// within 2 sd of it copied it as a ring of glints (dots along ultra LOBBY's T-bars beside the troffers). A hole or
+	// a flip smaller than the kernel still has lit axis points around it and is filled
+	vec4 lo = c, hi = c;
+	for ( int n = 0; n < 4; n ++ ) {
+		vec2 ax = ( n < 2 ? dI : dO ) * ( ( n & 1 ) == 0 ? - 1.0 : 1.0 );
+		ax *= max( 1.0 / max( length( ax ), 1e-3 ), 1.0 );
+		vec4 sn = texelFetch( tSsr, clamp( t + ivec2( floor( ax + 0.5 ) ), ivec2( 0 ), sz ), 0 );
+		lo = min( lo, sn );
+		hi = max( hi, sn );
+	}
+	float pInv = 1.0 / ( ${f(SSR.RESOLVE_PLANE)} * m.x );
 	vec4 acc = c;
 	float ws = 1.0;
-	for ( int j = - 1; j <= 1; j ++ ) {
-		for ( int i = - 1; i <= 1; i ++ ) {
-			if ( i == 0 && j == 0 ) continue;
-			ivec2 q = clamp( t + ivec2( i, j ) * r, ivec2( 0 ), sz );
-			vec4 mq = texelFetch( tMeta, q, 0 );
-			if ( mq.x <= 0.0 ) continue;
-			float w = exp( - 0.5 * float( i * i + j * j ) ) * exp( - abs( mq.x - m.x ) / ( ${f(SSR.FILTER_Z)} * m.x ) )
-				* pow( max( dot( Nc, brOctDec( mq.yz ) ), 0.0 ), ${f(SSR.FILTER_NPOW)} );
-			acc += w * texelFetch( tSsr, q, 0 );
-			ws += w;
-		}
+	for ( int i = 0; i < BR_SSR_TAPS; i ++ ) {
+		float r = 2.0 * sqrt( ( float( i ) + 0.5 ) / float( BR_SSR_TAPS ) );
+		float th = float( i ) * 2.39996323;
+		ivec2 q = clamp( t + ivec2( floor( r * ( cos( th ) * dI + sin( th ) * dO ) + 0.5 ) ), ivec2( 0 ), sz );
+		vec4 mq = texelFetch( tMeta, q, 0 );
+		if ( mq.x <= 0.0 ) continue;
+		float w = exp( - 0.5 * r * r - abs( dot( brResPos( q, mq.x ) - Pc, Nc ) ) * pInv
+			- ${f(SSR.RESOLVE_ROUGH)} * abs( mq.w - m.w ) );
+		acc += w * clamp( texelFetch( tSsr, q, 0 ), lo, hi );
+		ws += w;
 	}
 	outSsr = acc / ws;
 }
@@ -667,6 +739,19 @@ export function lobeFootprint(P: Vec3, R: Vec3, N: Vec3, nv: number, Ph: Vec3, N
   if (lI < lMin) gI = lI > 1e-9 ? [gI[0] / lI * lMin, gI[1] / lI * lMin] : [-gO[1] / lO * lMin, gO[0] / lO * lMin];
   if (lO < lMin) gO = lO > 1e-9 ? [gO[0] / lO * lMin, gO[1] / lO * lMin] : [-gI[1] / lI * lMin, gI[0] / lI * lMin];
   return { edges, gI, gO };
+}
+
+/** brSsrKernel twin: the resolve's sd along the plane of incidence and across it, in trace texels, for a texel at P
+ * (N.V nv) whose lobe (tan tn) reached Lr metres; p11 = the projection's [1][1], fullH = the frame's height (px),
+ * step = full-resolution pixels per trace texel. */
+export function resolveKernel(P: Vec3, nv: number, tn: number, Lr: number, p11: number, fullH: number, step: number): [number, number] {
+  const s = SSR.RESOLVE_K * SSR.RESOLVE_SD * tn * Lr / (Math.hypot(P[0], P[1], P[2]) + Lr) * p11 * fullH * 0.5 / step;
+  return [Math.min(s, SSR.RESOLVE_MAX), Math.min(s * Math.max(nv, SSR.NV_MIN), SSR.RESOLVE_MAX)];
+}
+
+/** Tap i of n on the resolve's Vogel disc: radius (in sd, up to 2) and angle (golden angle steps). */
+export function resolveTap(i: number, n: number): [number, number] {
+  return [2 * Math.sqrt((i + 0.5) / n), i * 2.39996323];
 }
 
 /** The composite's specular term: fallback s1 (rgb, a = Ws), upsampled reflection ssr (premultiplied, a = conf). */

@@ -49,7 +49,7 @@ export interface QualityConfig {
   ssrMaxRoughness: number;
   /** D: SSR ray-march steps; final 0/0/48/56 */
   ssrSteps: number;
-  /** D: 9-tap bilateral SSR filter; final false/false/false/true */
+  /** D: the SSR resolve's full tap set (post/ssr/ssrGlsl.ts RESOLVE_TAPS: 8, else 6); final false/false/false/true */
   ssrFilter: boolean;
   /** D: box-projected reflection probe cube size (0 = off); final 0/0/128/256 */
   reflectionProbe: 0 | 128 | 256;

@@ -1,18 +1,18 @@
 // tests/post/ssr.test.ts — package D's screen-space reflections: the Hi-Z layout (level sizes, the remainder texels),
-// the glossy cone's footprint, the composite's confidence mix (CPU twins in post/ssr/ssrGlsl.ts) and the shape of the
-// shader sources (texelFetch of the Hi-Z at a level, the hook order on the frame graph).
+// the glossy cone's footprint, the resolve's kernel, the composite's confidence mix (CPU twins in post/ssr/ssrGlsl.ts)
+// and the shape of the shader sources (texelFetch of the Hi-Z at a level, the hook order on the frame graph).
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { QUALITY } from '../../src/core/quality.ts';
 import {
-  compositeSpecular, HIZ_FRAG, hiZLayout, hiZSpan, lobeCones, lobeFootprint, SSR, SSR_COMPOSITE_SPECULAR, SSR_FILTER_FRAG,
-  SSR_TRACE_FRAG, SSR_TRACE_GLSL, symAxis,
+  compositeSpecular, HIZ_FRAG, hiZLayout, hiZSpan, lobeCones, lobeFootprint, resolveKernel, resolveTap, SSR,
+  SSR_COMPOSITE_SPECULAR, SSR_RESOLVE_FRAG, SSR_TRACE_FRAG, SSR_TRACE_GLSL, symAxis,
 } from '../../src/post/ssr/ssrGlsl.ts';
 import { MRT_COMPOSITE_FRAG } from '../../src/post/frame/MrtComposite.ts';
 import { MIP_DOWN_FRAG, PYR_MAX } from '../../src/post/frame/ColorPyramid.ts';
 import { HDR_CLAMP } from '../../src/core/constants.ts';
-import { ssrSettingsOf, ssrStepFor } from '../../src/post/ssr/SsrTrace.ts';
+import { ScreenSpaceReflections, ssrSettingsOf, ssrStepFor } from '../../src/post/ssr/SsrTrace.ts';
 
 describe('Hi-Z layout', () => {
   it('level 0 is half the frame (rounded up), then floor-halved down to 1x1, HIZ_LEVELS of them built', () => {
@@ -200,6 +200,103 @@ describe('glossy lobe footprint', () => {
   });
 });
 
+describe('resolve', () => {
+  const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.05, 400);
+  cam.updateProjectionMatrix();
+  const p11 = cam.projectionMatrix.elements[5];
+  const angle = (a: THREE.Vector3, b: THREE.Vector3): number => a.angleTo(b);
+
+  it('a neighbour whose ray hits d away along our lobe sits d x Lr / (|P| + Lr) away on screen (a mirror is a window)', () => {
+    // a floor 1.6 m below the eye, a wall facing the camera 20 m away: the reflected ray of view direction v meets it at H
+    const hit = (v: THREE.Vector3): { P: THREE.Vector3; H: THREE.Vector3 } => {
+      const P = v.clone().multiplyScalar(-1.6 / v.y);
+      const R = new THREE.Vector3(v.x, -v.y, v.z);
+      return { P, H: P.clone().addScaledVector(R, (-20 - P.z) / R.z) };
+    };
+    const v = new THREE.Vector3(0, -1.6, -8).normalize();
+    const { P, H } = hit(v);
+    const Lr = P.distanceTo(H);
+    for (const axis of [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0)]) {
+      const dv = 0.002;
+      const v2 = v.clone().applyAxisAngle(axis, dv);
+      const { H: H2 } = hit(v2);
+      // the lobe direction from P that reaches the neighbour's hit is off ours by dv x (|P| + Lr) / Lr
+      const lobeOff = angle(H.clone().sub(P), H2.clone().sub(P));
+      expect(lobeOff * Lr / (P.length() + Lr) / dv).toBeGreaterThan(0.9);
+      expect(lobeOff * Lr / (P.length() + Lr) / dv).toBeLessThan(1.1);
+    }
+  });
+
+  it('the kernel follows the lobe and the ray length, narrows by N.V across the plane of incidence, and is capped', () => {
+    const P: [number, number, number] = [0, -1.6, -8];
+    const k = resolveKernel(P, 0.2, 0.05, 12, p11, 1080, 2);
+    const angleSd = SSR.RESOLVE_K * SSR.RESOLVE_SD * 0.05 * 12 / (Math.hypot(...P) + 12);
+    expect(k[0]).toBeLessThan(SSR.RESOLVE_MAX);
+    expect(k[0]).toBeCloseTo(angleSd * p11 * 540 / 2, 9);
+    expect(k[1] / k[0]).toBeCloseTo(0.2, 9);
+    // a mirror and a contact reflection are points; ultra's 3x3 blocks make the texels a third the size in px
+    expect(resolveKernel(P, 0.2, 0, 12, p11, 1080, 2)[0]).toBe(0);
+    expect(resolveKernel(P, 0.2, 0.05, 0.01, p11, 1080, 2)[0]).toBeLessThan(SSR.RESOLVE_MIN);
+    expect(resolveKernel(P, 0.2, 0.05, 12, p11, 1080, 3)[0]).toBeCloseTo((k[0] * 2) / 3, 9);
+    expect(resolveKernel(P, 1, 0.8, 60, p11, 1080, 2)).toEqual([SSR.RESOLVE_MAX, SSR.RESOLVE_MAX]);
+    expect(resolveKernel(P, 0, 0.05, 12, p11, 1080, 2)[1] / k[0]).toBeCloseTo(SSR.NV_MIN, 9);
+  });
+
+  it('the taps cover a disc of 2 sd evenly (a Vogel spiral)', () => {
+    for (const n of SSR.RESOLVE_TAPS) {
+      let r2 = 0;
+      for (let i = 0; i < n; i++) {
+        const [r] = resolveTap(i, n);
+        expect(r).toBeLessThanOrEqual(2);
+        r2 += r * r;
+      }
+      // area-uniform over radius 2: mean r^2 = 2
+      expect(r2 / n).toBeCloseTo(2, 9);
+    }
+    expect(SSR_RESOLVE_FRAG).toContain('float r = 2.0 * sqrt( ( float( i ) + 0.5 ) / float( BR_SSR_TAPS ) );');
+    expect(SSR_RESOLVE_FRAG).toContain('float th = float( i ) * 2.39996323;');
+  });
+
+  it('the trace sizes the kernel from the hit, and from where a ray last went behind an occluder when it missed', () => {
+    expect(SSR_TRACE_FRAG).toContain('outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, length( Ph - P ) ) );');
+    expect(SSR_TRACE_FRAG).toContain('if ( brSsrBehindT > 0.0 ) outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, brSsrBehindT ) );');
+    expect(SSR_TRACE_GLSL).toContain('brSsrBehindT = t * L;');
+    // the kernel is sized before the facing test: a hit on the back of a surface is a miss the resolve fills
+    expect(SSR_TRACE_FRAG.indexOf('outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, length( Ph - P ) ) );'))
+      .toBeLessThan(SSR_TRACE_FRAG.indexOf('if ( dot( Nh, R ) > BR_SSR_FACING ) return;'));
+  });
+
+  it('mirrors stay sharp, and the taps are weighed on the macro plane, not by their block normals', () => {
+    expect(SSR_RESOLVE_FRAG).toContain(`if ( k.z < ${SSR.RESOLVE_MIN} ) return;`);
+    expect(SSR_RESOLVE_FRAG).toContain('vec3 Nc = brOctDec( k.xy );');
+    expect(SSR_RESOLVE_FRAG).not.toContain('mq.yz');
+    expect(SSR_RESOLVE_FRAG).toContain('abs( dot( brResPos( q, mq.x ) - Pc, Nc ) ) * pInv');
+    // premultiplied: a miss (confidence 0) among the taps lowers the confidence, not the colour; each tap is clamped to
+    // the range of the texel and its kernel's axis points at 1 sd (one lamp-lit ray is not copied as a ring of glints)
+    expect(SSR_RESOLVE_FRAG).toContain('acc += w * clamp( texelFetch( tSsr, q, 0 ), lo, hi );');
+    expect(SSR_RESOLVE_FRAG).toContain('vec2 ax = ( n < 2 ? dI : dO ) * ( ( n & 1 ) == 0 ? - 1.0 : 1.0 );');
+    expect(SSR_RESOLVE_FRAG).toContain('outSsr = acc / ws;');
+  });
+
+  it('every traced frame is resolved: 8 taps with ssrFilter (ultra), 6 without (high)', () => {
+    for (const [q, taps] of [[QUALITY.ultra, 8], [QUALITY.high, 6]] as const) {
+      const ssr = new ScreenSpaceReflections(q);
+      const resolve = ssr.materials.find((m) => m.name === 'br-ssr-resolve');
+      expect(resolve?.defines.BR_SSR_TAPS).toBe(taps);
+      expect(ssr.materials.some((m) => m.name === 'br-ssr-filter')).toBe(false);
+      ssr.dispose();
+    }
+    // a quality switch that changes the steps and the tap set together rebuilds both programs
+    const ssr = new ScreenSpaceReflections(QUALITY.high);
+    ssr.setQuality(QUALITY.ultra);
+    expect(ssr.materials.find((m) => m.name === 'br-ssr-trace')?.defines.BR_SSR_STEPS).toBe(QUALITY.ultra.ssrSteps);
+    expect(ssr.materials.find((m) => m.name === 'br-ssr-resolve')?.defines.BR_SSR_TAPS).toBe(SSR.RESOLVE_TAPS[0]);
+    ssr.setQuality(QUALITY.high);
+    expect(ssr.materials.find((m) => m.name === 'br-ssr-resolve')?.defines.BR_SSR_TAPS).toBe(SSR.RESOLVE_TAPS[1]);
+    ssr.dispose();
+  });
+});
+
 describe('composite', () => {
   it('confidence 0 (or no weight) gives exactly the fallback; confidence 1 gives Ws x the reflection', () => {
     const s1 = [0.3, 0.2, 0.1, 0.25] as const;
@@ -237,10 +334,6 @@ describe('shader sources', () => {
   it('the Hi-Z build reads a source level and folds the odd remainder into the last texel', () => {
     expect(HIZ_FRAG).toContain('texelFetch( tSrc, min( s0 + ivec2( x, y ), last ), uLevel )');
     expect(HIZ_FRAG).toContain('clamp( uSrcSize.x - s0.x, 1, 3 )');
-  });
-
-  it('the ultra filter leaves mirrors sharp', () => {
-    expect(SSR_FILTER_FRAG).toContain(`m.w <= ${SSR.FILTER_ROUGH}`);
   });
 
   it('traces at half the display resolution: 2x2 blocks, 3x3 on ultra\'s 1.5x supersampled buffer', () => {
@@ -288,7 +381,7 @@ describe('shader sources', () => {
     expect(SSR_TRACE_FRAG.slice(i, i + 800)).toContain('if ( any( isnan( col ) ) || any( isinf( col ) ) ) return;');
   });
 
-  it('presets: high and ultra trace, ultra filters; low and medium do not', () => {
+  it('presets: high and ultra trace, ultra resolves with the full tap set; low and medium do not trace', () => {
     expect(QUALITY.low.ssr).toBe('off');
     expect(QUALITY.medium.ssr).toBe('off');
     expect(ssrSettingsOf(QUALITY.high)).toEqual({ maxRough: 0.45, steps: 48, filter: false });
