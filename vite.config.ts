@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { defineConfig } from 'vite';
 import { tileCachePlugin } from './tools/viteTileCache.ts';
 
@@ -14,6 +15,10 @@ const TILE_CACHE = TOOL && process.env.BACKROOMS_TILE_CACHE !== '0';
 export default defineConfig({
   // relative asset URLs: the build runs from any sub-path (itch.io, GitHub Pages project sites, file shares)
   base: './',
+  // per-tree dependency cache: worktrees and staged trees share one node_modules (symlinked), and a shared
+  // node_modules/.vite would be re-optimized by every tree (its hash includes the root) and could swap under a
+  // running server
+  cacheDir: path.join(import.meta.dirname, '.vite'),
   plugins: [tileCachePlugin(TILE_CACHE)],
   server: TOOL ? { port: 5173, strictPort: false, hmr: false, watch: null } : { port: 5173, strictPort: false },
   optimizeDeps: { include: ['three', 'three/examples/jsm/lights/RectAreaLightUniformsLib.js', 'postprocessing'] },
