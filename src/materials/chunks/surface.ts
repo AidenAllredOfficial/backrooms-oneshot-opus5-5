@@ -556,7 +556,7 @@ brA = max( mix( vec3( brLuma( brA ) ), brA, 1.0 + BR_WET_SAT * brAbs ), vec3( 0.
 float brFilm = smoothstep( 0.3 + 0.55 * brPor, 0.6 + 0.35 * brPor, brSoak ) * brAir;
 float brPuddle = 0.0;
 #ifdef BR_PUDDLES
-if ( brNWg.y > 0.9 && brPor < 0.95 ) {
+if ( brNWg.y > 0.9 ) {
 	// relief (m) above the layer's mean plane: the 1x1 mip holds the mean height (constant address: always cached).
 	// Decals are thin films on the base floor: they take the base's mean state (no relief of their own).
 	float brRelM = 0.0;
@@ -564,11 +564,19 @@ if ( brNWg.y > 0.9 && brPor < 0.95 ) {
 	float brMuH = textureLod( uBrNormal, vec3( 0.5, 0.5, brLayerF ), 16.0 ).a;
 	brRelM = ( brNrm.w - brMuH ) * brLC.x;
 #endif
-	float brLvl = mix( BR_PUDDLE_LO, BR_PUDDLE_HI, smoothstep( BR_PUDDLE_W0, BR_PUDDLE_W1, brSoak ) );
+	// textiles (porosity >= 0.95: carpet) soak the water up first: it stands over the pile only where the floor is
+	// saturated (the film complete), in the cores of the soak field; there it is a mirror like any puddle (as a broken
+	// film over the pile it blurred the ceiling lamps into bright blotches through the SSR)
+	vec2 brPw = brPor < 0.95 ? vec2( BR_PUDDLE_W0, BR_PUDDLE_W1 ) : vec2( BR_PUDDLE_PILE_W0, BR_PUDDLE_PILE_W1 );
+	float brLvl = mix( BR_PUDDLE_LO, BR_PUDDLE_HI, smoothstep( brPw.x, brPw.y, brSoak ) );
 	// shoreline width grows with the texel footprint: the mip-filtered height flattens toward the mean far away
 	float brPx = max( length( brDx ), length( brDy ) ) * float( textureSize( uBrNormal, 0 ).x );
 	float brEdge = BR_PUDDLE_EDGE + 0.05 * brLC.x * clamp( brPx, 0.0, 8.0 );
-	brPuddle = smoothstep( 0.0, brEdge, brLvl - brRelM ) * smoothstep( BR_PUDDLE_W0, BR_PUDDLE_W0 + 0.05, brSoak ) * brAir;
+	brPuddle = smoothstep( 0.0, brEdge, brLvl - brRelM ) * smoothstep( brPw.x, brPw.x + 0.05, brSoak ) * brAir;
+	// a textile's shore pixel is either water (flat, a mirror) or fibre tips through the film (the pile's normal, a
+	// broad sheen): a blend of the two tilted part-flattened pile normals under a near-mirror lobe and sparkled with
+	// the ceiling lamps as a string of bright dots along every shore
+	if ( brPor >= 0.95 ) brPuddle = smoothstep( 0.4, 0.6, brPuddle );
 	brA *= mix( vec3( 1.0 ), BR_PUDDLE_TINT, brPuddle * min( 2.0 * brPor, 1.0 ) ); // murky on dirty porous floors, clear on glaze
 }
 #endif
@@ -591,7 +599,7 @@ if ( brPuddle > 0.0 && brRn > 0.0 && uBrReflPass < 0.5 ) { // per-pixel branch: 
 #endif
 #endif
 brNLen = mix( brNLen, 1.0, brPuddle );
-brRoughTo = mix( BR_WET_FILM_ROUGH + BR_WET_FILM_ROUGH_POROUS * brPor, BR_PUDDLE_ROUGH, brPuddle );
+brRoughTo = mix( BR_WET_FILM_ROUGH + BR_WET_FILM_ROUGH_POROUS * brPor + ( brPor < 0.95 ? 0.0 : BR_WET_FILM_ROUGH_PILE ), BR_PUDDLE_ROUGH, brPuddle );
 brRoughToW = max( brFilm, brPuddle );
 diffuseColor.rgb = brA * vBrTint.rgb;
 diffuseColor.a = brAlpha;
@@ -695,19 +703,23 @@ vec3 brEmVw = ( vec4( brEmV, 0.0 ) * viewMatrix ).xyz;
 vec3 brEmVt = vec3( brEmVw.x, brEmVw.z, - brEmVw.y );
 #endif
 #endif
+// the diffuse albedo punctual lights (the flashlight) see where the emitter model sets one, -1 = the material's
+// (chunks/materialPost.ts swaps it in for three's lights_fragment_begin; chunks/lighting.ts restores the room's)
+float brPunctAlb = - 1.0;
 if ( vBrEmit > 0.0 ) {
 	float brIsLens = ( brL == BR_M_PANEL_LENS || brL == BR_M_SIGNAGE ) ? 1.0 : 0.0;
 	float brDyn = ( brF & BR_F_DYN_EMIT ) != 0 ? brLuma( uFlick[ 0 ] ) : 1.0;
 	float brSh = 1.0;
 	if ( ( brF & BR_F_SHIMMER ) != 0 ) brSh = brLensShimmer( int( brAuxB.w ), floor( vBrTint.a * 255.0 + 0.5 ), uTime, uFlickerMode );
 #if BR_DETAIL == 1
-	float brEpRoom;
+	float brEpRoom, brEpRoomP;
 	if ( brEp != 0 ) {
 		totalEmissiveRadiance = vBrEmit * vBrTint.rgb * brEmitterShape( brEp, ( int( brAuxB.z + 0.5 ) >> 5 ) & 7,
 			int( brAuxB.x + 0.5 ), floor( vBrTint.a * 255.0 + 0.5 ), vBrUv, brEmVt, brEmFp, uTime, int( brAuxB.w + 0.5 ), brDyn, brSh,
-			( brF & BR_F_DYN_EMIT ) != 0, ( brF & BR_F_SHIMMER ) != 0, brEpRoom );
+			( brF & BR_F_DYN_EMIT ) != 0, ( brF & BR_F_SHIMMER ) != 0, brEpRoom, brEpRoomP );
 		// parabolic louver: its aluminium mirrors the room (neutral), not the lamp-tinted lens diffuse
 		if ( brEpRoom >= 0.0 ) diffuseColor.rgb = vec3( brEpRoom );
+		brPunctAlb = brEpRoomP;
 	} else
 #endif
 	totalEmissiveRadiance = vBrEmit * vBrTint.rgb * mix( 1.0, brOrmh.a * 1.3, brIsLens ) * brDyn * brSh;
@@ -718,7 +730,7 @@ if ( vBrEmit > 0.0 ) {
 	// a dead parabolic louver shows its aluminium blade grid over the dark cells
 	if ( brEp != 0 && brL == BR_M_PANEL_LENS && ( brF & BR_F_PROP_AUX ) == 0 ) {
 		if ( brEp == BR_EP_LOUVER ) diffuseColor.rgb = vec3( brOffLouver( int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7,
-			vBrUv, brEmVt, brEmFp ) );
+			vBrUv, brEmVt, brEmFp, brPunctAlb ) );
 		else diffuseColor.rgb *= brOffLensShade( brEp, int( brAuxB.x + 0.5 ), ( int( brAuxB.z + 0.5 ) >> 5 ) & 7, vBrUv, brEmVt, brEmFp );
 	}
 #endif

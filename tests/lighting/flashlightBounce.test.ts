@@ -161,7 +161,7 @@ describe('flashlight bounce', () => {
     expect(out[14]).toBe(0);
   });
 
-  it('ultra: 8 rays, 4 slots (each quadrant\'s inner and outer hit merged)', () => {
+  it('ultra: 8 rays, 4 slots (the upper and the lower pair of each ring merged)', () => {
     const w = world();
     const fb = createFlashlightBounce();
     const u = uniforms();
@@ -177,6 +177,18 @@ describe('flashlight bounce', () => {
     for (let k = 0; k < 4; k++) c4 += f4.slot(k)[6];
     expect(c / c4).toBeGreaterThan(0.9);
     expect(c / c4).toBeLessThan(1.1);
+  });
+
+  it('ultra never merges a far core hit with the near spill: the spill pairs stay a few metres ahead', () => {
+    // down the open room: the inner ring (6.8 deg) meets the ceiling / floor ~15 m ahead, the outer ring (23.6 deg)
+    // ~4.5 m ahead; a slot averaging one of each sat ~12 m out and the near fill all but vanished
+    const w = world();
+    const fb = createFlashlightBounce();
+    fb.update(input(8, 3, 2, [0, 0, 1]), w, uniforms());
+    expect(fb.active).toBe(4);
+    const range = [0, 1, 2, 3].map((k) => { const s = fb.slot(k); return Math.hypot(s[0] - 3, s[1] - 1.42, s[2] - 2); });
+    expect(range.filter((d) => d < 6).length).toBe(2);
+    expect(range.filter((d) => d > 10).length).toBe(2);
   });
 
   it('off (n = 0, torch off, or no raycast) uploads nothing', () => {

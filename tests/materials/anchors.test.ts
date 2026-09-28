@@ -164,7 +164,7 @@ describe('WP9 shader anchors (three r186)', () => {
     const i = (s: string): number => { const k = f.indexOf(s); expect(k, s).toBeGreaterThan(0); return k; };
     expect(i('float brSs = 1.0, brSsK = 1.0;')).toBeGreaterThan(i('brEf += max( brFl[ k ], 0.0 )'));
     expect(i('bool brMrtSpec = false;')).toBeLessThan(i('if ( brW > 0.0 ) {'));
-    expect(i('float brDirVis = 1.0;')).toBeGreaterThan(i('if ( brW > 0.0 ) {'));
+    expect(i('float brDirVis = brCs;')).toBeGreaterThan(i('if ( brW > 0.0 ) {'));
     expect(i('brDL.color = brW * brE / brNgL * brDirVis;')).toBeLessThan(i('RE_Direct( brDL'));
     expect(i('iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC );')).toBeLessThan(i('vec3 brIrrLocal'));
     expect(i('computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav')).toBeGreaterThan(0);

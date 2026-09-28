@@ -74,13 +74,16 @@ const RINGS: Readonly<Record<1 | 4 | 8, readonly (readonly [number, number, numb
   8: [[0, 4, 45], [16, 4, 45]],
 };
 /** How the rays of each quality value become VPL slots: the ray split, and the groups of rays merged into one slot
- * (null: one slot per ray). Ultra casts 8 rays (an inner and an outer sector per quadrant) and merges each quadrant's
- * pair: the per-pixel cost of 4 VPLs (a VPL costs ~0.07 ms at the 3840 x 2160 ultra buffer) with the energy placed
- * by 8 rays. Medium merges the 4 rays of the high split into its one VPL. */
+ * (null: one slot per ray). Ultra casts 8 rays (an inner and an outer sector per quadrant) and merges the two upper
+ * and the two lower sectors of each ring: the per-pixel cost of 4 VPLs (a VPL costs ~0.07 ms at the 3840 x 2160 ultra
+ * buffer) with the energy placed by 8 rays. Rays of one ring leave at the same angle, so a pair lands at a similar
+ * range (the ceiling or the floor ahead; merging a quadrant's inner and outer ray averaged a hit far down a corridor
+ * with the near spill into one wide VPL metres from both, and the near fill all but vanished). Medium merges the 4
+ * rays of the high split into its one VPL. */
 const LAYOUT: Readonly<Record<1 | 4 | 8, { rays: 4 | 8; groups: readonly (readonly number[])[] | null }>> = {
   1: { rays: 4, groups: [[0, 1, 2, 3]] },
   4: { rays: 4, groups: null },
-  8: { rays: 8, groups: [[0, 4], [1, 5], [2, 6], [3, 7]] },
+  8: { rays: 8, groups: [[0, 1], [2, 3], [4, 5], [6, 7]] },
 };
 /** VPL slots the shader evaluates for a quality value. */
 export const bounceSlots = (n: number): number => {
@@ -323,7 +326,7 @@ export function createFlashlightBounce(): FlashlightBounce {
       if (world.storey !== storey) { storey = world.storey; fills.clear(); wasOn = false; }
       const count = inp.n > 0 && world.raycast ? bounceCount(inp.n) : 0;
       // medium's one VPL merges the 4 rays of the high split, so its light lands where the beam's flux does (mostly
-      // the near spill) instead of wherever the axis happens to hit; ultra merges its 8 rays pairwise (LAYOUT)
+      // the near spill) instead of wherever the axis happens to hit; ultra merges its 8 rays pairwise within each ring (LAYOUT)
       const layout = count === 0 ? null : LAYOUT[count];
       const bins = layout ? bounceBins(layout.rays) : [];
       const m = bins.length;

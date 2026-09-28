@@ -119,7 +119,12 @@ describe('GLSL twins', () => {
   it('applies SSAO to the indirect terms only and the contact shadow to the baked directional term only', () => {
     const src = FRAG_LIGHTS_GLSL;
     const direct = src.slice(src.indexOf('if ( brW > 0.0 ) {'), src.indexOf('RE_Direct('));
-    expect(direct).toContain('brContactShadow( geometryPosition, brNg, brLv, brW )');
+    // marched once before the branch, in uniform control flow (the quad mean takes derivatives), then only the
+    // directional term's visibility starts from it
+    const pre = src.slice(src.indexOf('vec3 brLv = '), src.indexOf('if ( brW > 0.0 ) {'));
+    expect(pre).toContain('brCs = brQuadMean( brContactShadow( geometryPosition, brNg, brLv, brW ) )');
+    expect(pre).not.toMatch(/\bif \( brW/);
+    expect(direct).toContain('float brDirVis = brCs;');
     expect(src.split('brContactShadow(').length).toBe(2); // only there
     expect(direct).not.toMatch(/brSs[KC]?\b/);
     expect(src).toContain('iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC );');

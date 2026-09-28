@@ -134,6 +134,9 @@ export const OCC_ALIGN_TOL = 0.2;
 /** The part list of a placed prop (variant replacement, else the kind's list), undefined if it has none. */
 export const propOccluders = (kind: number, variant: number): readonly Box6[] | undefined =>
   PROP_OCCLUDER_VARIANTS[kind]?.[variant] ?? PROP_OCCLUDERS[kind];
+/** Kinds that meet the floor with a round base (a swivel chair's star base under its seat, lathe-turned bins): their
+ * analytic contact AO (bake/ao.ts) is a disc darkest under the centre, not the footprint rectangle's flat square. */
+export const PROP_ROUND_CONTACT: ReadonlySet<number> = new Set([1 /* OFFICE_CHAIR */, 11 /* TRASH_CAN */, 39 /* BUCKET */]);
 /** Is a yaw (radians) within OCC_ALIGN_TOL of a multiple of 90 degrees? */
 export function quarterAligned(yaw: number): boolean {
   const q = Math.PI / 2;

@@ -19,7 +19,9 @@
 // bias and less than CS.THICK is occluded, by (1 - t)^2 at the ray fraction t of the first crossing: the baked light
 // is an area source (troffers, several panels), so a shadow is darkest at the contact and its penumbra swallows it
 // within a few decimetres (an armrest over a seat casts a faint one, a monitor foot a dark line). It fades out over
-// 10-20 m (the march is the costliest part at ultra) and where the light is non-directional (w small).
+// 10-20 m (the march is the costliest part at ultra) and where the light is non-directional (w small). Its dithered
+// hit / miss on thin occluders (armrests, lounger axles) would draw the IGN pattern as hatching: chunks/lighting.ts
+// marches in uniform control flow and averages the result over the pixel quad (brQuadMean, no history needed).
 // chunks/lighting.ts multiplies only the baked directional term (brDirVis) by it: not the flicker channels (no stored
 // direction), not the flashlight (a real shadow map). The TS twins below mirror the GLSL
 // (tests/materials/screenspace.test.ts).
@@ -107,6 +109,15 @@ float brSsao( vec3 P, vec3 N ) {
 vec3 brAoMultiBounce( float v, vec3 a ) {
 	return max( vec3( v ), ( ( v * ( 2.0404 * a - 0.3324 ) + ( - 4.7951 * a + 0.6417 ) ) * v + ( 2.7552 * a + 0.6903 ) ) * v );
 }
+// mean of v over the pixel's 2x2 quad: the x pair through dFdx, then the y pair through dFdy (x pairs start on even
+// columns, y pairs on even rows). Call in uniform control flow. The deterministic stand-in for the temporal filter
+// the dithered contact-shadow march lacks: four IGN offsets per quad instead of one per pixel
+float brQuadMean( float v ) {
+	vec2 q = mod( floor( gl_FragCoord.xy ), 2.0 );
+	v += dFdx( v ) * ( 0.5 - q.x );
+	v += dFdy( v ) * ( 0.5 - q.y );
+	return clamp( v, 0.0, 1.0 );
+}
 // visibility of the baked directional light L (view space, directionality w) from P (1 = unshadowed)
 float brContactShadow( vec3 P, vec3 Ng, vec3 L, float w ) {
 #ifdef BR_CS_STEPS
@@ -126,7 +137,11 @@ float brContactShadow( vec3 P, vec3 Ng, vec3 L, float w ) {
 	// q + 0.5 / st): test a sample against the texel whose representative lies nearest to it (a centred +-0.5 texel
 	// error instead of 0 .. 1, and no half-pixel shift of the shadow)
 	vec2 rep = vec2( 0.5 - 0.5 / float( brSsStep() ) );
-	float j = brIGN( gl_FragCoord.xy );
+	// jitter stratified within the pixel quad (offsets u, u + 1/4, u + 1/2, u + 3/4; u from the IGN of the quad), so
+	// brQuadMean averages four evenly spread marches
+	vec2 qc = floor( gl_FragCoord.xy * 0.5 );
+	vec2 ql = floor( gl_FragCoord.xy ) - 2.0 * qc;
+	float j = 0.25 * ( brIGN( qc ) + ql.x * 2.0 + abs( ql.x - ql.y ) );
 	float hs = 0.5 / float( BR_CS_STEPS );
 	float tHit = - 1.0;
 	for ( int i = 0; i < BR_CS_STEPS; i ++ ) {

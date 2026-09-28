@@ -141,6 +141,21 @@ describe('shader sources', () => {
     expect(SSR_COMPOSITE_SPECULAR).toContain('vec2 tf = vec2( p ) / uSsrP.z;');
   });
 
+  it('a texel averages its whole block and traces a normal-mapped block along the macro (depth) normal', () => {
+    // every pixel of the step x step block (ultra's 3x3 too, not a 2x2 subset)
+    expect(SSR_TRACE_FRAG).toContain('for ( int k = 1; k < uStep * uStep; k ++ )');
+    // disagreeing normals (1 - |mean| over NVAR) move the traced lobe to the depth normal; the cone keeps the spread
+    expect(SSR.NVAR[0]).toBeLessThan(SSR.NVAR[1]);
+    expect(SSR_TRACE_FRAG).toContain('vec3 Nt = normalize( mix( N, Ng, smoothstep( BR_SSR_NVAR0, BR_SSR_NVAR1, 1.0 - nLen ) ) );');
+    expect(SSR_TRACE_FRAG).toContain('vec3 R = reflect( - V, Nt );');
+    expect(SSR_TRACE_FRAG).toContain('float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );');
+    // rays below the macro surface are left to the fallback
+    const i = SSR_TRACE_FRAG.indexOf('float up = dot( R, Ng );');
+    expect(i).toBeGreaterThan(0);
+    expect(SSR_TRACE_FRAG.indexOf('if ( up <= 0.0 ) return;')).toBeGreaterThan(i);
+    expect(SSR_TRACE_FRAG.indexOf('if ( up <= 0.0 ) return;')).toBeLessThan(SSR_TRACE_FRAG.indexOf('brSsrTrace( P + Nt'));
+  });
+
   it('half-float mips never reach the cone lookups as Inf: the pyramid is clamped, a non-finite lookup is a miss', () => {
     // gl.generateMipmap may sum a 2x2 block of an RGBA16F level in half precision (NVIDIA GL): 4 x PYR_MAX must fit
     expect(4 * PYR_MAX).toBeLessThan(65504);

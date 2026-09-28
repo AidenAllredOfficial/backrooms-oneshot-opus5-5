@@ -226,6 +226,33 @@ describe('emitter profiles: angular behaviour', () => {
     expect(s / 40).toBeGreaterThan(0.5); // obliquely the blades (mirroring the room) fill the view
   });
 
+  it('dead louver under a torch at the eye: dark mirrored blades, the dead lamps lit through the cells', () => {
+    const inp = defaultShapeInput();
+    inp.ep = EP.LOUVER; inp.variant = lensVariant(3, false); inp.param = lensParam(1, 2, 1); inp.fp = 0.001;
+    // obliquely (past the cutoff) the blades fill the view: they mirror the torch away from the camera
+    inp.vx = 0; inp.vy = Math.sin((75 * Math.PI) / 180); inp.vz = Math.cos((75 * Math.PI) / 180);
+    let room = 0, torch = 0;
+    for (let i = 0; i < 40; i++) {
+      inp.u = 0.3 / LENS_TILE; inp.v = (2 * 0.2 + (i + 0.5) / 40 * 0.2) / LENS_TILE;
+      room += offLouverAlbedo(inp); torch += offLouverAlbedo(inp, true);
+    }
+    expect(torch / room).toBeLessThan(0.3);
+    // from below, through the cells: the reflector and the dead lamps' phosphor catch the torch (the room's light
+    // barely enters there); the painted bottom edges look the same to both
+    inp.vy = 0; inp.vz = 1;
+    let lampMax = 0, cellMin = Infinity;
+    for (let i = 0; i < 40; i++) {
+      inp.u = (i + 0.5) / 40 * 0.6 / LENS_TILE; inp.v = 0.1 / LENS_TILE;
+      const t = offLouverAlbedo(inp, true);
+      expect(t, `u ${inp.u}`).toBeGreaterThan(offLouverAlbedo(inp));
+      lampMax = Math.max(lampMax, t); cellMin = Math.min(cellMin, t);
+    }
+    expect(lampMax).toBeGreaterThan(0.45); // a dead tube
+    expect(cellMin).toBeLessThan(0.3); // the reflector between the tubes
+    inp.u = 0.3 / LENS_TILE; inp.v = 0.2 / LENS_TILE;
+    expect(offLouverAlbedo(inp, true)).toBeCloseTo(offLouverAlbedo(inp), 1);
+  });
+
   it('a lit louver whose lamps are out (flicker burst, anomaly dip) shows the dead louver\'s albedo, not black cells', () => {
     const inp = defaultShapeInput();
     inp.ep = EP.LOUVER; inp.variant = lensVariant(3, false); inp.param = lensParam(1, 2, 1);
