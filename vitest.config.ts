@@ -20,8 +20,14 @@ import {
 } from './tests/util/forks.ts';
 
 const ROOT = import.meta.dirname;
-/** Whole directories whose files generate worlds, bake, mesh or synthesise audio: isolated, one process per file. */
-const HEAVY = ['tests/{world,bake,integration,audio,mesh,workers}/**/*.test.ts'];
+/** Files that generate worlds, bake, mesh or synthesise audio: isolated, one process per file. Whole directories,
+ * plus the slow files elsewhere: the queue runs every 'heavy' file before any 'unit' file (projects sort by name,
+ * then longest first), so a slow 'unit' file would start last and run alone at the end. */
+const HEAVY = [
+  'tests/{world,bake,integration,audio,mesh,workers}/**/*.test.ts',
+  'tests/lighting/flicker.test.ts', 'tests/props/{props,tileProps}.test.ts', 'tests/player/traversal.test.ts',
+  'tests/materials/depthPrepass.test.ts',
+];
 
 type BudgetModule = Partial<Ledger> & { WEIGHTS?: { vitestBase?: number; vitestFork?: number } };
 
