@@ -15,7 +15,7 @@ import { createPlayerState } from '../../src/core/player.ts';
 import { QUALITY } from '../../src/core/quality.ts';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.ts';
 import type { FixtureRef, MaterialGlobals, TextureSet, TileRuntime, WorldQuery } from '../../src/core/runtime.ts';
-import { ATMOSPHERES, MOOD_EXTRA, MOOD_MODS } from '../../src/lighting/atmospheres.ts';
+import { ATMOSPHERES, MOOD_EXTRA, MOOD_MODS, TORCH_EV } from '../../src/lighting/atmospheres.ts';
 import {
   atmosphereTarget, copyParams, createAtmosphereBlender, DARK_MOTES_MIN, DUST_MAX, lerpParams, newParams, VOL_DEFAULTS,
 } from '../../src/lighting/atmosphereBlend.ts';
@@ -85,12 +85,12 @@ describe('atmospheres', () => {
     }
     expect(MOOD_MODS.length).toBe(4);
     const lobby = ATMOSPHERES[Zone.LOBBY];
-    expect(lobby.hazeDensity).toBe(0.006);
+    expect(lobby.hazeDensity).toBe(0.004); // C.7b: the froxel haze read far too thick at the old 0.006
     expect(lobby.hazeTint).toEqual([1.0, 0.93, 0.75]);
     // R2-post: NORMAL Level 0 floors at EV 4 (an unlit pocket reads as max-gain murk, not #000)
     expect(lobby.ev100Range).toEqual([4, 11]);
     const dark = atmosphereTarget(Zone.LOBBY, Mood.DARK, newParams());
-    expect(dark.hazeDensity).toBeCloseTo(0.009, 10);
+    expect(dark.hazeDensity).toBeCloseTo(lobby.hazeDensity * 1.5, 10);
     expect(dark.hazeTint[0]).toBeCloseTo(0.8, 10);
     expect(dark.ev100Range[0]).toBeCloseTo(5.5, 10);
     expect(dark.ev100Range[1]).toBeCloseTo(10, 10);
@@ -105,7 +105,11 @@ describe('atmospheres', () => {
   });
 
   it('R2-post: camcorder exposure biases, pedestals blend, dark moods keep their floors', () => {
-    for (const z of [Zone.LOBBY, Zone.MAZE]) expect(ATMOSPHERES[z].exposureBias).toBeCloseTo(1.0, 10);
+    // C.7b: the over-exposed Level 0 camcorder (LOBBY +1.35, MAZE +1.2 EV)
+    for (const z of [Zone.LOBBY, Zone.MAZE]) {
+      expect(ATMOSPHERES[z].exposureBias).toBeGreaterThanOrEqual(1.0);
+      expect(ATMOSPHERES[z].exposureBias).toBeLessThanOrEqual(1.5);
+    }
     expect(ATMOSPHERES[Zone.POOLROOMS].exposureBias).toBeCloseTo(1.6, 10);
     for (const z of [Zone.LOBBY, Zone.MANILA, Zone.MAZE, Zone.OFFICE, Zone.LOW_EXPANSE, Zone.PILLAR_HALL]) {
       expect(ATMOSPHERES[z].ev100Range[0]).toBeLessThanOrEqual(4.5);
@@ -118,27 +122,29 @@ describe('atmospheres', () => {
     // the +1 EV look bias is mostly withheld in a DARK sector
     expect(atmosphereTarget(Zone.LOBBY, Mood.DARK, newParams()).exposureBias).toBeLessThan(0.5);
     const b = createAtmosphereBlender();
-    b.update(Zone.LOBBY, Mood.NORMAL, 0, true);
-    expect(b.current.grade.pedestal).toBeCloseTo(ATMOSPHERES[Zone.LOBBY].grade.pedestal ?? 0, 10);
+    b.update(Zone.PARKING, Mood.NORMAL, 0, true);
+    expect(b.current.grade.pedestal).toBeCloseTo(ATMOSPHERES[Zone.PARKING].grade.pedestal ?? 0, 10);
     b.update(Zone.POOLROOMS, Mood.NORMAL, 0.75, false);
     const mid = b.current.grade.pedestal ?? 0;
-    expect(mid).toBeLessThan(ATMOSPHERES[Zone.LOBBY].grade.pedestal ?? 0);
+    expect(mid).toBeLessThan(ATMOSPHERES[Zone.PARKING].grade.pedestal ?? 0);
     expect(mid).toBeGreaterThan(ATMOSPHERES[Zone.POOLROOMS].grade.pedestal ?? 0);
   });
 
   it('crossfades over 1.5 s (smooth), snaps on request, first update is immediate', () => {
     const b = createAtmosphereBlender();
+    const hL = ATMOSPHERES[Zone.LOBBY].hazeDensity, hP = ATMOSPHERES[Zone.POOLROOMS].hazeDensity;
+    expect(hP).not.toBe(hL);
     b.update(Zone.LOBBY, Mood.NORMAL, 0.016, false);
-    expect(b.current.hazeDensity).toBe(0.006);
+    expect(b.current.hazeDensity).toBe(hL);
     b.update(Zone.POOLROOMS, Mood.NORMAL, 0.0, false);
-    expect(b.current.hazeDensity).toBe(0.006);
+    expect(b.current.hazeDensity).toBe(hL);
     b.update(Zone.POOLROOMS, Mood.NORMAL, 0.75, false);
-    expect(b.current.hazeDensity).toBeCloseTo((0.006 + 0.015) / 2, 6);
+    expect(b.current.hazeDensity).toBeCloseTo((hL + hP) / 2, 6);
     b.update(Zone.POOLROOMS, Mood.NORMAL, 0.75, false);
-    expect(b.current.hazeDensity).toBeCloseTo(0.015, 10);
+    expect(b.current.hazeDensity).toBeCloseTo(hP, 10);
     expect(b.progress).toBe(1);
     b.update(Zone.OFFICE, Mood.NORMAL, 0.016, true);
-    expect(b.current.hazeDensity).toBe(0.005);
+    expect(b.current.hazeDensity).toBe(ATMOSPHERES[Zone.OFFICE].hazeDensity);
   });
 });
 
@@ -281,7 +287,7 @@ describe('LightingRuntime', () => {
     expect(a.edgeFog[0]).toBeCloseTo(EDGE_FOG.START * R, 9);
     expect(a.edgeFog[1]).toBeCloseTo(EDGE_FOG.END * R, 9);
     expect(g.edgeFog.value.x).toBeCloseTo(EDGE_FOG.START * R, 5);
-    expect(g.hazeDensity.value).toBe(0.006);
+    expect(g.hazeDensity.value).toBe(ATMOSPHERES[Zone.LOBBY].hazeDensity);
     expect(g.hazeTint.value.g).toBeCloseTo(0.93, 5);
     const far = 320 * a.hazeAlbedo / Math.PI * FAR_FRACTION;
     expect(g.farColor.value.r).toBeCloseTo(far * a.hazeTint[0] * FAR_WARM[0], 3);
@@ -294,10 +300,10 @@ describe('LightingRuntime', () => {
     // zone change crossfades over 1.5 s (simulation time)
     w.zone = Zone.POOLROOMS;
     rt.update(10.1, 0.75, tiles, p, new THREE.PerspectiveCamera(), w);
-    expect(g.hazeDensity.value).toBeGreaterThan(0.006);
-    expect(g.hazeDensity.value).toBeLessThan(0.015);
+    expect(g.hazeDensity.value).toBeGreaterThan(ATMOSPHERES[Zone.LOBBY].hazeDensity);
+    expect(g.hazeDensity.value).toBeLessThan(ATMOSPHERES[Zone.POOLROOMS].hazeDensity);
     rt.update(10.2, 0.8, tiles, p, new THREE.PerspectiveCamera(), w);
-    expect(g.hazeDensity.value).toBeCloseTo(0.015, 9);
+    expect(g.hazeDensity.value).toBeCloseTo(ATMOSPHERES[Zone.POOLROOMS].hazeDensity, 9);
     rt.setFlickerMode('reduced');
     expect(g.flickerMode.value).toBe(1);
     rt.setFlickerMode('off');
@@ -428,6 +434,25 @@ describe('LightingRuntime', () => {
     fl.set(false);
     rt.update(8, 1 / 60, [], p, new THREE.PerspectiveCamera(), world());
     expect(rt.atmosphere().flashlight).toBe(0);
+  });
+
+  it('C.7b torch exposure: the torch opens a dark sector TORCH_EV.DROP below its floor, never below TORCH_EV.MIN', () => {
+    const rt = createLightingRuntime(new THREE.Scene(), globals(), textures, QUALITY.high, DEFAULT_SETTINGS, new EventBus<GameEvents>());
+    const p = player(10, 20);
+    const dark = world(Zone.LOBBY, Mood.DARK);
+    rt.update(1, 0, [], p, new THREE.PerspectiveCamera(), dark);
+    const floor = rt.atmosphere().ev100Range[0];
+    expect(floor).toBeCloseTo(5.5, 10);
+    expect(TORCH_EV.DROP).toBeGreaterThan(0);
+    rt.flashlight.set(true);
+    rt.update(2, 0, [], p, new THREE.PerspectiveCamera(), dark);
+    expect(rt.atmosphere().ev100Range[0]).toBeCloseTo(Math.max(TORCH_EV.MIN, floor - TORCH_EV.DROP), 10);
+    // a lit Level 0 district already floors at the camcorder's max gain: the torch changes nothing
+    rt.update(3, 0, [], p, new THREE.PerspectiveCamera(), world(Zone.LOBBY, Mood.NORMAL));
+    expect(rt.atmosphere().ev100Range[0]).toBeCloseTo(Math.min(TORCH_EV.MIN, ATMOSPHERES[Zone.LOBBY].ev100Range[0]), 10);
+    rt.flashlight.set(false);
+    rt.update(4, 0, [], p, new THREE.PerspectiveCamera(), dark);
+    expect(rt.atmosphere().ev100Range[0]).toBeCloseTo(floor, 10);
   });
 });
 

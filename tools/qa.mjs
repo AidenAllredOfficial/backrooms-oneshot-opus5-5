@@ -30,12 +30,12 @@ export const THRESHOLDS = {
   dark: { meanLum: [0.01, 0.25], clippedMax: 0.03 },
   darkFlash: { meanLumMin: 0.05, clippedMax: 0.03 },
   // p5Max (package C.7): the darkest 5 % of a lit Level 0 view must stay below this, so the old frame-wide warm veil
-  // (halation + lifted blacks: LOBBY p5 0.32, MANILA 0.38) cannot creep back. MANILA's own target is p5 0.22-0.28 (its
-  // paler, flatter grade) and LOW_EXPANSE carries twice the Level 0 haze, so both measure 0.27-0.29 on the provisional
-  // C.7a grades: they get 0.30 until the C.7b retune (after the volumetric haze lands) tightens every zone.
+  // (halation + lifted blacks: LOBBY p5 0.32, MANILA 0.38) cannot creep back. One limit for every Level 0 zone since
+  // the C.7b retune (toe, contrast 1.3-1.46, thinner froxel haze): the zone= spawns measure 0.24-0.27 at high; the
+  // highest are the evenly lit open views (forceZone MANILA / LOW_EXPANSE spawns, ~0.28), whose darkest pixels are
+  // lamp-lit carpet and pale walls rather than deep reveals.
   level0: {
-    zones: ['LOBBY', 'MANILA', 'MAZE', 'LOW_EXPANSE'], hueDeg: [38, 65], sat: [0.15, 0.6],
-    p5Max: 0.26, p5MaxZone: { MANILA: 0.3, LOW_EXPANSE: 0.3 },
+    zones: ['LOBBY', 'MANILA', 'MAZE', 'LOW_EXPANSE'], hueDeg: [38, 65], sat: [0.15, 0.6], p5Max: 0.3,
   },
 };
 
@@ -173,8 +173,7 @@ export function checkShot(shot, entry, qa) {
       if (T.level0.zones.includes(zone) && mood !== 'DARK' && (shot.expect?.level0 ?? true)) {
         range(fails, `hueDeg (${zone})`, img.hueDeg, T.level0.hueDeg);
         range(fails, `sat (${zone})`, img.sat, T.level0.sat);
-        const p5Max = T.level0.p5MaxZone[zone] ?? T.level0.p5Max;
-        if (!(img.p5 <= p5Max)) fails.push(`p5 (${zone}) ${img.p5?.toFixed(3)} > ${p5Max}`);
+        if (!(img.p5 <= T.level0.p5Max)) fails.push(`p5 (${zone}) ${img.p5?.toFixed(3)} > ${T.level0.p5Max}`);
       }
     } else if (cls === 'dark') {
       range(fails, 'meanLum (dark)', img.meanLum, T.dark.meanLum);
