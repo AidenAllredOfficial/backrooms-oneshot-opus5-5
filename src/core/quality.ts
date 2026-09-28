@@ -134,7 +134,9 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
   medium: {
     name: 'medium', streamRadius: 2, lmTpc: 8, bakeShadowSamples: 2, probeRays: 64, bakeWorkers: 4, textureSize: 1024,
     anisotropy: 8, ao: 'Low', aoHalfRes: true, aa: 'smaa', smaaPreset: 'MEDIUM', bloomLevels: 6, planarReflectionScale: 0.35,
-    floorReflections: true, flashlightShadow: 1024, renderScale: 0.9, dynamicResolution: true, maxDpr: 1,
+    // render scale 0.85 (0.9 until the perf pass): the realism packages' shared surface and water code added 14-20 %
+    // to medium frames with no single feature over 0.1 ms; 11 % fewer pixels bring it back within 10 % of before
+    floorReflections: true, flashlightShadow: 1024, renderScale: 0.85, dynamicResolution: true, maxDpr: 1,
     propDistance: 30, humVoices: 8, hrtf: true, uploadBudgetMs: 2.5, fogAirlight: false, shaderDetail: 'full',
     ssr: 'off',
     ssrMaxRoughness: 0,
@@ -197,13 +199,16 @@ export const QUALITY: Readonly<Record<QualityName, QualityConfig>> = {
   },
   ultra: {
     name: 'ultra', streamRadius: 3, lmTpc: 12, bakeShadowSamples: 6, probeRays: 128, bakeWorkers: 6, textureSize: 1024,
-    // reflection 0.5 of the 1.5x supersampled buffer = 0.75 of the display resolution (package E: the water magnifies
+    // reflection 0.5 of the 1.4x supersampled buffer = 0.7 of the display resolution (package E: the water magnifies
     // it with a cubic B-spline and blurs it by its roughness and ripples; the refraction pays for itself with the
-    // ~1 ms this saves on water frames; 1.0 cost 4x as much)
-    anisotropy: 16, ao: 'High', aoHalfRes: true, aa: 'smaa', smaaPreset: 'ULTRA', bloomLevels: 9, planarReflectionScale: 0.5,
-    // ultra spends the GPU headroom on pixels: 1.5x supersampling (2.25x samples: clean wallpaper stripes, carpet and
-    // tile grout at distance) under the load-driven dynamic resolution (R2 B9)
-    floorReflections: true, flashlightShadow: 2048, renderScale: 1.5, dynamicResolution: true, maxDpr: 2,
+    // ~1 ms this saves on water frames; 1.0 cost 4x as much; 0.35 showed the texel grid in saturated lamp images).
+    // AO 12 samples and SMAA's HIGH search: under the supersampling they matched 16 samples / ULTRA (perf pass,
+    // docs/PERFORMANCE_AUDIT.md)
+    anisotropy: 16, ao: 'Medium', aoHalfRes: true, aa: 'smaa', smaaPreset: 'HIGH', bloomLevels: 9, planarReflectionScale: 0.5,
+    // ultra spends the GPU headroom on pixels: 1.4x supersampling (1.96x samples: clean wallpaper stripes, carpet and
+    // tile grout at distance) under the load-driven dynamic resolution (R2 B9); 1.4x since the perf pass (1.5x costs
+    // 11-13 % more, which water frames cannot afford)
+    floorReflections: true, flashlightShadow: 2048, renderScale: 1.4, dynamicResolution: true, maxDpr: 2,
     propDistance: 60, humVoices: 12, hrtf: true, uploadBudgetMs: 3, fogAirlight: true, shaderDetail: 'full',
     ssr: 'half',
     ssrMaxRoughness: 0.6,

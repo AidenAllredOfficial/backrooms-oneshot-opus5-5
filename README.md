@@ -96,8 +96,8 @@ and `high` for everything else.
 | Lightmap texels per 1.2 m cell | 8 | 8 | 12 | 12 |
 | Near-field bake rays around props | off | off | 16 | 32 |
 | Texture size | 512 | 1024 | 1024 | 1024 |
-| Ambient occlusion (half resolution, samples per texel) | off | 10 | 12 | 16 |
-| Anti-aliasing | off | SMAA | SMAA | SMAA |
+| Ambient occlusion (half resolution, samples per texel) | off | 10 | 12 | 12 |
+| Anti-aliasing | off | SMAA medium | SMAA high | SMAA high |
 | Surface shader detail | lite | full | full | full |
 | Bake workers (max) | 3 | 4 | 4 | 6 |
 | Water reflections | off | on | on | on |
@@ -108,7 +108,7 @@ and `high` for everything else.
 | Volumetric haze (froxels) and dust motes | off | off | on, 3000 motes | on, 6000 motes |
 | Water refraction and water body (refracted view, per-kind media, blur, in-scatter, contact lines from depth) | off | off | on | on |
 | In-water light (flashlight beam and underwater lamps scattered in the water) | off | off | 2 lamps | 4 lamps |
-| Render scale | 0.75 | 0.9 | 1.0 | 1.5 (supersampled) |
+| Render scale | 0.75 | 0.85 | 1.0 | 1.4 (supersampled) |
 
 Every preset uses dynamic resolution unless you turn it off. It budgets for at least 11 ms per frame, so on a
 high-refresh display it only lowers the resolution when the frame rate would drop toward 60 fps (each change resizes
@@ -154,11 +154,16 @@ memory-bandwidth bound, so more worker threads do not help:
 4 workers reached ready faster than 10. Screenshot and QA runs (`autostart=1`) still wait for full lighting on the
 whole 3 x 3 chunk ring so their images are deterministic; `bake=preview` / `bake=interactive` give the player gate.
 
-**GPU cost.** On the development laptop (RTX 5070 Ti) a frame at high and 1080p costs about 1.6-2 ms of GPU time,
-and ultra at 1440p (a 3840 × 2160 supersampled buffer) about 6-7 ms. The scene is drawn with a depth prepass (each
-visible pixel is shaded once; the image is identical). Ambient occlusion runs at half resolution between the depth
-prepass and shading, so it darkens only indirect light (with the albedo's multi-bounce: yellow corners stay yellow),
-and on high and ultra short screen-space contact shadows ground furniture, monitors and chair legs in the baked light.
+**GPU cost.** On the development laptop (RTX 5070 Ti) a frame at high and 1080p costs about 3-4 ms of GPU time
+(4.0 ms where water is in view), ultra at 1440p (a 3584 × 2016 supersampled buffer) about 9-10.6 ms, and 11.3-12.9
+ms where water is in view; medium costs about 1.3-2.2 ms and low about 0.6 ms. At high and ultra most of the frame
+is the shading pass into the specular G-buffer (about 2.2 of 3 ms at high); the rest is screen-space reflections
+(0.3-0.9 ms at high), the water mirror (0.7-1.4 ms at high, only while water is in view), the probe, SSAO, the
+froxel haze, the water pass and the post stack. The scene is drawn with a depth prepass (each visible pixel is shaded
+once; the image is identical). Ambient occlusion runs at half resolution between the depth prepass and shading, so it
+darkens only indirect light (with the albedo's multi-bounce: yellow corners stay yellow), and on high and ultra short
+screen-space contact shadows ground furniture, monitors and chair legs in the baked light. Dynamic resolution (on by
+default) lowers the render scale when frames run over its budget, which ultra's water frames can.
 `__backrooms.gpuBench()` measures the current view, `__backrooms.gpuProfile(seconds)` splits it by pass.
 
 See [the performance audit](docs/PERFORMANCE_AUDIT.md) for measurements, changes and reproduction steps.

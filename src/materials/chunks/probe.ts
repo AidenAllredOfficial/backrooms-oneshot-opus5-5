@@ -39,8 +39,9 @@ export const PROBE = {
   ANCHOR_MOVE: 2,
   /** stale faces (a new anchor, streamed tiles) captured per frame */
   BURST: 2,
-  /** otherwise one face every STEADY_EVERY frames (a full refresh every 6 x STEADY_EVERY frames) */
-  STEADY_EVERY: 2,
+  /** otherwise one face every STEADY_EVERY frames (a full refresh every 6 x STEADY_EVERY frames; 2 until the perf
+   * pass: 4 halves the steady main-thread and GPU cost, and flicker reaches a face at most 24 frames late) */
+  STEADY_EVERY: 4,
   /** m: capture camera planes */
   NEAR: 0.05,
   FAR: 60,

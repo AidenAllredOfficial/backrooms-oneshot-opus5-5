@@ -125,7 +125,9 @@ async function main(): Promise<void> {
   if (tile.water.getAttribute('position').count > 0 && mats.water) add(tile.water, mats.water, false);
   scene.add(group);
 
-  const reflection = createPlanarReflection(g, q);
+  // the harness's water mesh carries no occlusion query (stream/TileObject.ts installs them on streamed tiles only):
+  // without this gate the high / ultra mirror would wait forever for a visible water draw (water/waterVisibility.ts)
+  const reflection = createPlanarReflection(g, q, () => true);
   const waterY = sceneKind === 'room' && P.get('refl') !== '0' ? -0.1 : null;
 
   const view = P.get('view') ?? 'final';

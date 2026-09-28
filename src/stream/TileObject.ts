@@ -8,6 +8,7 @@ import { globalTileX, globalTileZ, mod, tileKeyStr, tileOriginX, tileOriginZ, ty
 import type { LightmapData, MeshBuffers, TileMesh } from '../core/mesh.ts';
 import type { DynamicMeshHandle, MaterialSystem, TileBindings, TileMaterials } from '../core/runtime.ts';
 import { LAYER_LATE } from '../materials/shared.ts';
+import { waterQueryAfter, waterQueryBefore } from '../materials/water/waterVisibility.ts';
 import { meshBytes, releaseCpuArraysOnUpload, toBufferGeometry } from './geometry.ts';
 import { createTexturePoolEx, type TexturePoolEx } from './TexturePool.ts';
 
@@ -232,7 +233,12 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
       case 2: return addMesh(gpu, mesh.decals, mats.decal, false, 1, 'decals');
       default: {
         const w = mesh.water ? addMesh(gpu, mesh.water, mats.water ?? mats.shell, false, 2, 'water') : null;
-        w?.layers.set(LAYER_LATE); // drawn by ScenePass's late render, over the opaque colour copy
+        if (w) {
+          w.layers.set(LAYER_LATE); // drawn by ScenePass's late render, over the opaque colour copy
+          // an occlusion query around each draw: the planar reflection renders only while water is visible
+          w.onBeforeRender = waterQueryBefore;
+          w.onAfterRender = waterQueryAfter;
+        }
         return w;
       }
     }

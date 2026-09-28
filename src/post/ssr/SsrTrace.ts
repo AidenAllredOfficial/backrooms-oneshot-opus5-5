@@ -1,6 +1,6 @@
 // src/post/ssr/SsrTrace.ts — package D: screen-space reflections on the frame graph (post/ScenePass.ts).
 //  - afterDepth hook 'hiz' (order 20): the min device-depth pyramid (post/ssr/HiZ.ts) from the prepass depth.
-//  - afterOpaque hook 'ssr' (order 10): one ray per 2x2 block (half the display resolution: 3x3 on ultra's 1.5x
+//  - afterOpaque hook 'ssr' (order 10): one ray per 2x2 block (half the display resolution: 3x3 on ultra's 1.4x
 //    buffer, ssrStepFor) whose top-left pixel holds a replaceable specular in the G-buffer (att1.a = Ws > 0) below
 //    the preset's ssrMaxRoughness, with the block's averaged lobe: Hi-Z traversal for receding rays,
 //    a linear march for rays toward the camera (ssrGlsl.ts SSR_TRACE_GLSL), thickness and facing tests, a
@@ -29,8 +29,8 @@ export const ssrSettingsOf = (q: QualityConfig): SsrSettings => ({
   maxRough: q.ssrMaxRoughness, steps: Math.max(1, Math.round(q.ssrSteps)), filter: q.ssrFilter,
 });
 
-/** Full-resolution pixels per trace texel: half the DISPLAY resolution, so ultra's 1.5x supersampled buffer traces
- * one ray per 3 x 3 pixels (the same rays per display pixel as high; 2 x 2 cost 2.25x as much there). */
+/** Full-resolution pixels per trace texel: half the DISPLAY resolution, so ultra's 1.4x supersampled buffer traces
+ * one ray per 3 x 3 pixels (about the rays per display pixel of high; 2 x 2 cost 2.25x as much there). */
 export const ssrStepFor = (renderScale: number): number => (renderScale > 1.25 ? 3 : 2);
 
 export class ScreenSpaceReflections {
