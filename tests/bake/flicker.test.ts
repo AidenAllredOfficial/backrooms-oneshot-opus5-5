@@ -58,7 +58,7 @@ describe('flicker channels', () => {
       let v = 0;
       for (let i = ch; i < (withDyn.volume.c as Uint16Array).length; i += 4) v += fromHalf((withDyn.volume.c as Uint16Array)[i]);
       expect(v).toBeGreaterThan(0);
-    }, 60_000);
+    });
   }
 
   it('a dynamic light in the neighbouring tile uses the channel of its own tile', () => {
@@ -70,13 +70,13 @@ describe('flicker channels', () => {
     expect(sumChannel(lm, other)).toBeGreaterThan(0);
     expect(sumChannel(lm, 2)).toBe(0);
     expect(sumChannel(lm, 3)).toBe(0);
-  }, 60_000);
+  });
 
   it('two same-channel dynamic lights reaching one texel throw', () => {
     const nb = handNeighborhood(scene(true, 'sameTile'));
     expect(() => bakeTile(nb, TILE, surfacesOf(nb, TILE, 12), 'full', Q_HIGH, 'all')).toThrow(/channel/);
     expect(() => bakeTile(nb, TILE, surfacesOf(nb, TILE, 12), 'preview', Q_HIGH, 'all')).toThrow(/channel/);
-  }, 60_000);
+  });
 
   it('no dynamic light in reach => flick is null', () => {
     const nb = handNeighborhood(scene(false, 'none'));
@@ -106,7 +106,7 @@ describe('flicker channels', () => {
     const pv = bakeTile(nb, TILE, s, 'preview', Q_HIGH, 'all');
     const [cu, cv] = gridTexel(ceil, 12, 10.2, 9.0);
     expect(texelLum(pv, cu, cv, 'flick', 0)).toBeGreaterThan(0);
-  }, 60_000);
+  });
 
   it('a dynamic light\'s penumbra is smooth (no per-texel sampling noise)', () => {
     // a 105 cm HALF wall on x-line 8 with the flickering panel 1 m in front of it: the floor behind the wall lies in
@@ -137,5 +137,5 @@ describe('flicker channels', () => {
     expect(rows).toBeGreaterThan(1);
     // mean relative texel-to-texel variation across the penumbra rows (4 Halton samples per texel: ~0.3-0.4)
     expect(worst / rows).toBeLessThan(0.1);
-  }, 60_000);
+  });
 });

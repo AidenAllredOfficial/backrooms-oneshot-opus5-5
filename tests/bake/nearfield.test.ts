@@ -145,7 +145,7 @@ describe('seams', () => {
     expect(r.diff).toBe(0);
   });
 
-  it('WAREHOUSE (racks, boxes on the decks): q0 | q1 floor and ceiling seams are bit-identical with near rays', () => {
+  it('WAREHOUSE (racks, boxes on the decks): q0 | q1 floor and ceiling seams are bit-identical with near rays', { tags: ['sweep'] }, () => {
     const nb = zoneNeighborhood(Zone.WAREHOUSE, 0, 0);
     const tA: TileKey = { s: 0, cx: 0, cz: 0, q: 0 }, tB: TileKey = { s: 0, cx: 0, cz: 0, q: 1 };
     const sA = surfacesOf(nb, tA, 12), sB = surfacesOf(nb, tB, 12);
@@ -160,5 +160,5 @@ describe('seams', () => {
       near += r.near;
     }
     expect(near).toBeGreaterThan(50);
-  }, 120_000);
+  });
 });

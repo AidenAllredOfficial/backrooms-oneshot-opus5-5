@@ -9,6 +9,7 @@ import { CellView, clearFloorAt, rayCells } from '../../src/world/spawn.ts';
 import { PROP_DEFS } from '../../src/core/props.ts';
 import { towerFrame } from '../../src/world/structures/tower.ts';
 import { createWorldGen } from '../../src/world/worldgen.ts';
+import { sweepSize } from '../scale.ts';
 
 const opts = (seed: number, o: Partial<WorldGenOptions> = {}): WorldGenOptions => ({
   seed, seedText: String(seed), forceZone: null, forceMood: null, forceLandmark: null, testScene: null, lights: 'default', ...o,
@@ -22,7 +23,8 @@ const cellOf = (g: WorldGen, p: SpawnPoint) => {
 
 describe('findSpawn', () => {
   it('is a lit SPAWN_OK cell near the origin (storey 0: the onboarding LOBBY), deterministic', () => {
-    for (let seed = 1; seed <= 6; seed++) {
+    // an invariant sweep: seeds 1-6 under `npm test`, seed 1 in the quick tiers (tests/scale.ts)
+    for (let seed = 1; seed <= sweepSize(6, 1); seed++) {
       for (const s of [0, 1, 2] as StoreyId[]) {
         const g = createWorldGen(opts(seed));
         const p = g.findSpawn(s);
@@ -41,7 +43,7 @@ describe('findSpawn', () => {
         expect(createWorldGen(opts(seed)).findSpawn(s)).toEqual(p);
       }
     }
-  }, 60_000);
+  });
 });
 
 describe('findNearest', () => {
@@ -61,7 +63,7 @@ describe('findNearest', () => {
     expect(g.findNearest('zone:POOLROOMS', { s: 2, x: 0, z: 0 }, 24)).not.toBeNull();
   });
 
-  it('zone:DARK looks into the dark: no emitting fixture within 4 m inside the view cone', () => {
+  it('zone:DARK looks into the dark: no emitting fixture within 4 m inside the view cone', { tags: ['sweep'] }, () => {
     for (let seed = 1; seed <= 5; seed++) {
       const gd = createWorldGen(opts(seed));
       const p = gd.findNearest('zone:DARK', { s: 0, x: 0, z: 0 }, 24);
@@ -78,9 +80,9 @@ describe('findNearest', () => {
         }
       }
     }
-  }, 60_000);
+  });
 
-  it('zone:DARK is not a black frame: some lighting fixture (not an exit sign) lies ahead within 30 m', () => {
+  it('zone:DARK is not a black frame: some lighting fixture (not an exit sign) lies ahead within 30 m', { tags: ['sweep'] }, () => {
     // exit signs glow but light nothing: seed 1's view "saw" only signs and one far fixture through a slit (a black
     // frame); views without a light in them now search a few chunk rings further
     for (let seed = 1; seed <= 7; seed++) {
@@ -99,7 +101,7 @@ describe('findNearest', () => {
       }
       expect(ahead, `seed ${seed}`).toBeGreaterThan(0);
     }
-  }, 60_000);
+  });
 
   it('tower / elevator: stands at the exit cell facing the door', () => {
     const p = g.findNearest('tower', from, 8) as SpawnPoint;
@@ -144,7 +146,7 @@ describe('findNearest', () => {
     expect(Math.hypot(safe.x - 3.3, safe.z - 7.9)).toBeLessThan(10 * CELL);
     expect(g.findNearest('spawn', from, 1)).toEqual(g.findSpawn(0));
     expect(g.findNearest('bogus', from, 3)).toBeNull();
-  }, 30_000);
+  });
 
   it('test scenes answer spawn / tower from the scene', () => {
     const t = createWorldGen(opts(1, { testScene: 'tower' }));
@@ -206,7 +208,7 @@ describe('QA views (R2 B9)', () => {
         expect(r.seen, `seed ${seed}: elevator cells in frame`).toBeGreaterThan(0);
       }
     }
-  }, 60_000);
+  });
 
   it('landmark:CHAIR_CATHEDRAL: behind the lit chair on the nave floor, chair and pendant in frame', () => {
     for (const seed of [1, 3, 7]) {
@@ -231,7 +233,7 @@ describe('QA views (R2 B9)', () => {
       const eye = p.y + 1.6;
       for (const y of [0.45, 3.2]) expect(Math.abs(Math.atan2(y - eye, d) - p.pitch), `seed ${seed} y ${y}`).toBeLessThan(0.5);
     }
-  }, 60_000);
+  });
 
   it('landmarks (any kind, by name): stands at / in the frame looking in, open view, many frame cells seen', () => {
     const gg = createWorldGen(opts(7));
@@ -262,7 +264,7 @@ describe('QA views (R2 B9)', () => {
       }
     }
     expect(tried).toBeGreaterThan(0);
-  }, 60_000);
+  });
 
   it('zone:NAME prefers a NORMAL-mood district when one is within reach', () => {
     for (const seed of [7, 11]) {
@@ -281,7 +283,7 @@ describe('QA views (R2 B9)', () => {
         if (normalNear) expect(d.mood, `seed ${seed} ${name}`).toBe(Mood.NORMAL);
       }
     }
-  }, 60_000);
+  });
 
   it('flicker prefers the FLICKER channel and aims at it', () => {
     const p = createWorldGen(opts(7, { forceZone: Zone.LOBBY })).findNearest('flicker', { s: 0, x: 0, z: 0 }, 6) as SpawnPoint;
@@ -299,7 +301,7 @@ describe('QA views (R2 B9)', () => {
       }
     }
     expect(aimed).toBe(true);
-  }, 30_000);
+  });
 
   it('clear: a point on a desk / in a prop footprint moves to the nearest standable floor; a clear point stays', () => {
     const gg = createWorldGen(opts(6));
@@ -335,5 +337,5 @@ describe('QA views (R2 B9)', () => {
     const k = cellOf(g6, r);
     expect(k.l.ceilCm[k.c] / 100).toBeGreaterThan(r.y + 1.6 + 0.1);
     expect(clearFloorAt(view(g6, 0), r.x, r.z)).toBe(true);
-  }, 60_000);
+  });
 });

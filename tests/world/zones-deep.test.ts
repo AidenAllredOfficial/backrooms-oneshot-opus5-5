@@ -30,6 +30,8 @@ import { parkingGenerator } from '../../src/world/zones/parking.ts';
 import { pipeworksGenerator } from '../../src/world/zones/pipeworks.ts';
 import { PoolVariant, poolroomsGenerator, poolroomsRoomInfo, poolroomsWallRemoved } from '../../src/world/zones/poolrooms.ts';
 import { warehouseGenerator, warehouseRoof } from '../../src/world/zones/warehouse.ts';
+import { sweepSize } from '../scale.ts';
+import { sameValues } from '../util/check.ts';
 
 const N = CHUNK_CELLS;
 const GENS: Record<string, ZoneGenerator> = {
@@ -453,12 +455,14 @@ function minWalkFor(name: string, d: DistrictInfo): number {
 }
 
 describe('WP3 deep zones: generic acceptance', () => {
+  // an invariant sweep (per-seed checks, minima): all 200 seeds under `npm test`, the first 25 in the quick tiers
+  const INVARIANT_SEEDS = sweepSize(SEEDS, 25);
   for (const name of zoneNames) {
     it(`${name}: invariants, validateLayout and walkable fraction over ${SEEDS} seeds`, () => {
       const gen = GENS[name];
       const problems: string[] = [];
       let minFrac = 1, sumFrac = 0, minShare = 1, sumCarved = 0, minMargin = Infinity;
-      for (let k = 0; k < SEEDS; k++) {
+      for (let k = 0; k < INVARIANT_SEEDS; k++) {
         const r = new Rng(9000 + k);
         const w = makeWorld({ seed: r.next(), s: STOREY[name], gen });
         const cx = r.int(-40, 40), cz = r.int(-40, 40);
@@ -477,7 +481,7 @@ describe('WP3 deep zones: generic acceptance', () => {
       expect(minMargin).toBeGreaterThanOrEqual(0);
       // generators produce (nearly) connected layouts themselves; WP1's repair only fixes stragglers
       expect(minShare).toBeGreaterThanOrEqual(name === 'PIPEWORKS' || name === 'CONCRETE' ? 0.85 : 0.9);
-      console.log(`${name}: walkable mean ${(sumFrac / SEEDS * 100).toFixed(1)}% min ${(minFrac * 100).toFixed(1)}%, main-component share min ${(minShare * 100).toFixed(1)}%, repair carved ${(sumCarved / SEEDS).toFixed(2)}/chunk`);
+      console.log(`${name}: walkable mean ${(sumFrac / INVARIANT_SEEDS * 100).toFixed(1)}% min ${(minFrac * 100).toFixed(1)}%, main-component share min ${(minShare * 100).toFixed(1)}%, repair carved ${(sumCarved / INVARIANT_SEEDS).toFixed(2)}/chunk (${INVARIANT_SEEDS} seeds)`);
     });
 
     it(`${name}: deterministic`, () => {
@@ -512,7 +516,7 @@ describe('WP3 deep zones through the full chunk pipeline', () => {
     ['POOLROOMS', Zone.POOLROOMS], ['PARKING', Zone.PARKING], ['PIPEWORKS', Zone.PIPEWORKS],
     ['WAREHOUSE', Zone.WAREHOUSE], ['CONCRETE', Zone.CONCRETE],
   ];
-  it(`validateLayout = [] and walkable fraction for ${SEEDS} seeds x each deep zone`, { timeout: 300_000 }, () => {
+  it(`validateLayout = [] and walkable fraction for ${SEEDS} seeds x each deep zone`, { tags: ['sweep'] }, () => {
     const report: string[] = [];
     for (const [name, zone] of ZONES) {
       let minFrac = 1, sum = 0, minMargin = Infinity;
@@ -606,8 +610,8 @@ describe('WP3 POOLROOMS', () => {
       for (let c = 0; c < CHUNK_CELL_COUNT; c++) {
         if (l.waterCm[c] === NO_WATER) continue;
         const depth = l.waterCm[c] - l.floorCm[c];
-        if (depth > 110) { deepCells++; expect(l.flags[c] & CellFlag.NOWALK).toBeTruthy(); }
-        else expect(l.flags[c] & CellFlag.NOWALK).toBeFalsy();
+        if (depth > 110) { deepCells++; if (!(l.flags[c] & CellFlag.NOWALK)) expect(l.flags[c] & CellFlag.NOWALK).toBeTruthy(); }
+        else if (l.flags[c] & CellFlag.NOWALK) expect(l.flags[c] & CellFlag.NOWALK).toBeFalsy();
       }
       // every wadeable | NOWALK water edge carries a FLOAT_ROPE at its midpoint
       const ropeAt = new Set(l.props.filter((p) => p.kind === PropKind.FLOAT_ROPE).map((p) => `${Math.round(p.x * 100)},${Math.round(p.z * 100)}`));
@@ -620,7 +624,8 @@ describe('WP3 POOLROOMS', () => {
           const n = cellIdx(ni, nj);
           if (!wet(c) || !wet(n) || nowalk(c) === nowalk(n)) continue;
           ropes++;
-          expect(ropeAt.has(`${Math.round(x * 100)},${Math.round(z * 100)}`), `missing float rope at ${x},${z}`).toBe(true);
+          const rope = ropeAt.has(`${Math.round(x * 100)},${Math.round(z * 100)}`);
+          if (!Object.is(rope, true)) expect(rope, `missing float rope at ${x},${z}`).toBe(true);
         }
       }
       for (const f of l.fixtures) if (f.kind === FixtureKind.UNDERWATER) {
@@ -761,7 +766,7 @@ describe('WP3 PIPEWORKS', () => {
       const e = gen.seamPattern!(new Rng(k), makeWorld({ seed: k, s: 1, gen }).district(0, 0));
       let open = 0, run = 0, maxRun = 0;
       for (let c = 0; c < N; c++) {
-        if (e.kind[c] === EdgeKind.OPEN) { open++; expect(c % 2).toBe(1); run = 0; } else { run++; maxRun = Math.max(maxRun, run); }
+        if (e.kind[c] === EdgeKind.OPEN) { open++; if (!Object.is(c % 2, 1)) expect(c % 2).toBe(1); run = 0; } else { run++; maxRun = Math.max(maxRun, run); }
       }
       expect(open).toBeGreaterThanOrEqual(2);
       expect(maxRun).toBeLessThanOrEqual(12);
@@ -777,24 +782,25 @@ describe('WP3 PIPEWORKS', () => {
       for (const s of l.solids) {
         if (s.kind !== 'pipe') continue;
         pipes++;
-        expect(s.r).toBeGreaterThanOrEqual(0.04 - 1e-9);
-        expect(s.r).toBeLessThanOrEqual(0.15 + 1e-9);
+        if (!(s.r >= 0.04 - 1e-9)) expect(s.r).toBeGreaterThanOrEqual(0.04 - 1e-9);
+        if (!(s.r <= 0.15 + 1e-9)) expect(s.r).toBeLessThanOrEqual(0.15 + 1e-9);
         if (Math.abs(s.a[1] - s.b[1]) < 1e-9) {
           // horizontal pipe (corridor runs and boiler-room plumbing)
-          expect(s.a[1] - s.r).toBeGreaterThanOrEqual(1.8 - 1e-6);
-          expect(s.a[1] + s.r).toBeLessThanOrEqual(2.6 + 1e-6);
+          if (!(s.a[1] - s.r >= 1.8 - 1e-6)) expect(s.a[1] - s.r).toBeGreaterThanOrEqual(1.8 - 1e-6);
+          if (!(s.a[1] + s.r <= 2.6 + 1e-6)) expect(s.a[1] + s.r).toBeLessThanOrEqual(2.6 + 1e-6);
         }
       }
-      for (let c = 0; c < CHUNK_CELL_COUNT; c++) if (l.floorMat[c] === Mat.METAL_GRATE) { grates++; expect(l.flags[c] & CellFlag.SOLID).toBeFalsy(); }
+      for (let c = 0; c < CHUNK_CELL_COUNT; c++) if (l.floorMat[c] === Mat.METAL_GRATE) { grates++; if (l.flags[c] & CellFlag.SOLID) expect(l.flags[c] & CellFlag.SOLID).toBeFalsy(); }
       boilers += l.props.filter((p) => p.kind === PropKind.BOILER).length;
       tanks += l.props.filter((p) => p.kind === PropKind.TANK).length;
       valves += l.props.filter((p) => p.kind === PropKind.PIPE_VALVE).length;
       const bl = l.fixtures.filter((f) => f.kind === FixtureKind.CAGE_BULB);
       bulbs += bl.length;
-      for (const f of bl) expect(f.luminance).toBeGreaterThan(55);
+      for (const f of bl) if (!(f.luminance > 55)) expect(f.luminance).toBeGreaterThan(55);
       expect(ctx.lighting.zoneMul).toBe(0.7);
       for (let c = 0; c < CHUNK_CELL_COUNT; c++) if (!(l.flags[c] & (CellFlag.SOLID | CellFlag.RESERVED))) {
-        expect(l.ceilCm[c]).toBeGreaterThanOrEqual(300); expect(l.ceilCm[c]).toBeLessThanOrEqual(420);
+        if (!(l.ceilCm[c] >= 300)) expect(l.ceilCm[c]).toBeGreaterThanOrEqual(300);
+        if (!(l.ceilCm[c] <= 420)) expect(l.ceilCm[c]).toBeLessThanOrEqual(420);
       }
       expect(l.emitters.some((e) => e.kind === EmitterKind.PIPE) || pipes === 0).toBe(true);
     }
@@ -836,8 +842,8 @@ describe('WP3 PIPEWORKS', () => {
                 const mid = axis === 0 ? (p.a[0] + p.b[0]) / 2 : (p.a[2] + p.b[2]) / 2;
                 return lat > lo && lat < hi && mid > a0 && mid < a1;
               }).map((p) => `${(axis === 0 ? p.a[2] : p.a[0]).toFixed(4)},${p.a[1].toFixed(4)}`)).size;
-              expect(n, `run axis ${axis} line ${line} [${k0}, ${k1}]`).toBeGreaterThanOrEqual(1);
-              expect(n).toBeLessThanOrEqual(4);
+              if (!(n >= 1)) expect(n, `run axis ${axis} line ${line} [${k0}, ${k1}]`).toBeGreaterThanOrEqual(1);
+              if (!(n <= 4)) expect(n).toBeLessThanOrEqual(4);
             }
             k0 = k1 + 1;
           }
@@ -873,19 +879,25 @@ describe('WP3 WAREHOUSE', () => {
       };
       for (let c = 0; c < CHUNK_CELL_COUNT; c++) {
         if (l.ceilKind[c] !== CeilKind.TRUSS || (l.flags[c] & CellFlag.RESERVED)) continue;
-        expect(distToJoist(((c & 31) + 0.5) * CELL, ((c >> 5) + 0.5) * CELL)).toBeLessThanOrEqual(2.4);
+        const dj = distToJoist(((c & 31) + 0.5) * CELL, ((c >> 5) + 0.5) * CELL);
+        if (!(dj <= 2.4)) expect(dj).toBeLessThanOrEqual(2.4);
       }
       for (const f of l.fixtures) {
         if (f.kind !== FixtureKind.HIGHBAY) continue;
         highbays++;
-        expect(f.py).toBeCloseTo(7.0, 6);
-        expect(f.luminance).toBeGreaterThan(1800);
-        expect(distToJoist(f.px, f.pz)).toBeLessThanOrEqual(1.2);
+        if (!(Math.abs(f.py - 7.0) < 10 ** -6 / 2)) expect(f.py).toBeCloseTo(7.0, 6);
+        if (!(f.luminance > 1800)) expect(f.luminance).toBeGreaterThan(1800);
+        const dj = distToJoist(f.px, f.pz);
+        if (!(dj <= 1.2)) expect(dj).toBeLessThanOrEqual(1.2);
       }
       // racks: COLLIDE | OCCLUDE props, 2 cells wide, in rows along x
       const sparse = l.props.filter((p) => p.kind === PropKind.SHELF_RACK && p.variant === 1);
       for (const p of l.props) {
-        if (p.kind === PropKind.SHELF_RACK) { racks++; expect(p.flags & (SolidFlag.COLLIDE | SolidFlag.OCCLUDE)).toBe(SolidFlag.COLLIDE | SolidFlag.OCCLUDE); expect(p.yaw).toBe(0); }
+        if (p.kind === PropKind.SHELF_RACK) {
+          racks++;
+          if (!Object.is(p.flags & (SolidFlag.COLLIDE | SolidFlag.OCCLUDE), SolidFlag.COLLIDE | SolidFlag.OCCLUDE)) expect(p.flags & (SolidFlag.COLLIDE | SolidFlag.OCCLUDE)).toBe(SolidFlag.COLLIDE | SolidFlag.OCCLUDE);
+          if (!Object.is(p.yaw, 0)) expect(p.yaw).toBe(0);
+        }
         if ((p.kind === PropKind.CRATE || p.kind === PropKind.CARDBOARD_BOX) && p.y > 1 && Math.abs(p.y - 3.0) > 1e-6) { // (3.0: mezzanine stock)
           // shelf stock sits on a deck of a sparse rack (WP6 decks at 1.2 / 2.4 / 3.6 m), in its free +x slot
           stock++;
@@ -933,6 +945,7 @@ describe('WP3 CONCRETE', () => {
   });
   it('corridors + utility rooms with openings, loading drops with a HALF rail and a stair, two-tone CMU walls', () => {
     let drops = 0, doorways = 0, walls = 0, wainscot = 0, tubes = 0, bulbs = 0, chunks = 0, clusters = 0;
+    const DROP_EDGES: number[] = [EdgeKind.HALF, EdgeKind.WALL, EdgeKind.OPEN];
     for (let k = 0; k < 150; k++) {
       const r = new Rng(71000 + k);
       const w = makeWorld({ seed: r.next(), s: 1, gen });
@@ -960,7 +973,7 @@ describe('WP3 CONCRETE', () => {
             if (l.flags[n] & CellFlag.SOLID || l.floorCm[n] !== 0) continue;
             const kind = axis === 'x' ? l.ex.kind[exIdx(i, j)] : l.ez.kind[ezIdx(i, j)];
             // a drop edge is a HALF rail, a wall, or the OPEN top of the stair
-            expect([EdgeKind.HALF, EdgeKind.WALL, EdgeKind.OPEN]).toContain(kind);
+            if (DROP_EDGES.indexOf(kind) === -1) expect(DROP_EDGES).toContain(kind);
             if (kind === EdgeKind.HALF) half++;
           }
         }
@@ -984,9 +997,9 @@ describe('WP3 CONCRETE', () => {
 
 // ---------------------------------------------------------------- GLOBAL seams (500 pairs)
 
-describe('WP3 GLOBAL seams agree across 500 chunk pairs per zone', () => {
+describe('WP3 GLOBAL seams agree across 500 chunk pairs per zone', { tags: ['sweep'] }, () => {
   const pairs = (name: string, gen: ZoneGenerator, s: StoreyId, check: (A: ChunkLayout, B: ChunkLayout, axis: 'x' | 'z') => void): void => {
-    it(`${name}: shared line, water, floors and straddling solids agree`, { timeout: 120_000 }, () => {
+    it(`${name}: shared line, water, floors and straddling solids agree`, () => {
       const rng = new Rng(8100 + gen.id);
       for (let k = 0; k < 500; k++) {
         const seed = rng.int(0, 1 << 30);
@@ -999,17 +1012,17 @@ describe('WP3 GLOBAL seams agree across 500 chunk pairs per zone', () => {
         const q1 = gen.globalSeam!(q);
         gen.globalSeam!({ ...q, line: q.line + N }); // warm any cache with another line first
         const q2 = gen.globalSeam!({ ...q });
-        expect(Array.from(q1.kind)).toEqual(Array.from(q2.kind));
-        expect(Array.from(q1.hA)).toEqual(Array.from(q2.hA));
+        if (!sameValues(q1.kind, q2.kind)) expect(Array.from(q1.kind)).toEqual(Array.from(q2.kind));
+        if (!sameValues(q1.hA, q2.hA)) expect(Array.from(q1.hA)).toEqual(Array.from(q2.hA));
         // both chunks of the pair, generated independently, write the same line and agree across it
         const A = genChunk(w, axis === 'x' ? cx - 1 : cx, axis === 'x' ? cz : cz - 1).l;
         const B = genChunk(w, cx, cz).l;
         for (let c = 0; c < N; c++) {
           const ia = axis === 'x' ? exIdx(N, c) : ezIdx(c, N), ib = axis === 'x' ? exIdx(0, c) : ezIdx(c, 0);
           const ea = axis === 'x' ? A.ex : A.ez, eb = axis === 'x' ? B.ex : B.ez;
-          expect(ea.kind[ia]).toBe(q1.kind[c]);
-          expect(eb.kind[ib]).toBe(q1.kind[c]);
-          expect(ea.hA[ia]).toBe(eb.hA[ib]);
+          if (!Object.is(ea.kind[ia], q1.kind[c])) expect(ea.kind[ia]).toBe(q1.kind[c]);
+          if (!Object.is(eb.kind[ib], q1.kind[c])) expect(eb.kind[ib]).toBe(q1.kind[c]);
+          if (!Object.is(ea.hA[ia], eb.hA[ib])) expect(ea.hA[ia]).toBe(eb.hA[ib]);
         }
         check(A, B, axis);
       }
@@ -1049,8 +1062,8 @@ describe('WP3 GLOBAL seams agree across 500 chunk pairs per zone', () => {
       if ((A.flags[a] | B.flags[b]) & CellFlag.RESERVED) continue;
       // water never spills through an opening: equal surfaces, or the dry side's floor holds it back
       const wa = A.waterCm[a], wb = B.waterCm[b];
-      if (wa !== NO_WATER && wa > A.floorCm[a]) expect(wb === wa || B.floorCm[b] >= wa).toBe(true);
-      if (wb !== NO_WATER && wb > B.floorCm[b]) expect(wa === wb || A.floorCm[a] >= wb).toBe(true);
+      if (wa !== NO_WATER && wa > A.floorCm[a] && !(wb === wa || B.floorCm[b] >= wa)) expect(wb === wa || B.floorCm[b] >= wa).toBe(true);
+      if (wb !== NO_WATER && wb > B.floorCm[b] && !(wa === wb || A.floorCm[a] >= wb)) expect(wa === wb || A.floorCm[a] >= wb).toBe(true);
       // a channel through a seam arch: both sides sunken and wet at the same level
       if (A.floorCm[a] < 0 && B.floorCm[b] < 0 && wa !== NO_WATER && wa === wb) seamChannels++;
     }
@@ -1143,7 +1156,8 @@ describe('WP3 PIPEWORKS tees and district boundaries', () => {
             const ax = alongX ? 0 : 2, lat = alongX ? 2 : 0;
             if (Math.abs(E[1] - p.a[1]) > 1e-6 || Math.abs(E[lat] - p.a[lat]) > 1e-6) continue;
             const lo = Math.min(p.a[ax], p.b[ax]), hi = Math.max(p.a[ax], p.b[ax]);
-            expect(E[ax] > lo + 1e-3 && E[ax] < hi - 1e-3, `riser end inside a pipe span in ${cx},${cz}`).toBe(false);
+            const inside = E[ax] > lo + 1e-3 && E[ax] < hi - 1e-3;
+            if (!Object.is(inside, false)) expect(inside, `riser end inside a pipe span in ${cx},${cz}`).toBe(false);
             if (Math.abs(E[ax] - lo) < 1e-6 || Math.abs(E[ax] - hi) < 1e-6) ends++;
           }
           if (ends >= 2) tees++;
@@ -1156,7 +1170,7 @@ describe('WP3 PIPEWORKS tees and district boundaries', () => {
         const row = Math.floor(p.a[2] / CELL);
         if (!EDGE_WALKABLE[l.ex.kind[exIdx(N, row)]]) continue;
         const xe = Math.max(p.a[0], p.b[0]);
-        expect(xe).toBeLessThan(CHUNK_SIZE - 1e-3); // (a turn in the last cell may end up to 0.57 m past its centre)
+        if (!(xe < CHUNK_SIZE - 1e-3)) expect(xe).toBeLessThan(CHUNK_SIZE - 1e-3); // (a turn in the last cell may end up to 0.57 m past its centre)
         if (Math.abs(xe - (CHUNK_SIZE - 0.25)) < 1e-6) boundaryRuns++; // stopped 0.25 m short, then rises
       }
     }
@@ -1166,7 +1180,7 @@ describe('WP3 PIPEWORKS tees and district boundaries', () => {
   });
 });
 
-describe('WP3 deep zones: seams through the full pipeline (stamps, landmarks, district boundaries)', () => {
+describe('WP3 deep zones: seams through the full pipeline (stamps, landmarks, district boundaries)', { tags: ['sweep'] }, () => {
   const block = (zone: ZoneId, lm: LandmarkKindId, seed: number, forced: boolean): Map<string, ChunkLayout> => {
     const wg = createWorldGen({ seed, seedText: String(seed), forceZone: zone, forceMood: null, forceLandmark: forced ? lm : null, testScene: null, lights: 'default' });
     const s: StoreyId = zone === Zone.POOLROOMS ? 2 : 1;
@@ -1175,7 +1189,7 @@ describe('WP3 deep zones: seams through the full pipeline (stamps, landmarks, di
     for (let dz = 0; dz < 3; dz++) for (let dx = 0; dx < 3; dx++) out.set(`${dx},${dz}`, wg.generateChunk({ s, cx: c0 + dx, cz: d0 + dz }));
     return out;
   };
-  it('POOLROOMS: every sunken water body away from the block edge holds a pool (no channel stubs)', { timeout: 300_000 }, () => {
+  it('POOLROOMS: every sunken water body away from the block edge holds a pool (no channel stubs)', () => {
     let channelCells = 0, blocks = 0, channels = 0;
     for (let k = 0; k < 24; k++) {
       const ls = block(Zone.POOLROOMS, LandmarkKind.DEEP_END, 7000 + k, k % 2 === 0);
@@ -1216,7 +1230,7 @@ describe('WP3 deep zones: seams through the full pipeline (stamps, landmarks, di
     console.log(`[zones-deep] POOLROOMS full pipeline: ${blocks} 3x3 blocks, ${channels} channel cells, ${channelCells} of them in pool-less bodies at block edges`);
     expect(channels).toBeGreaterThan(0);
   });
-  it('PIPEWORKS: pipes continue across same-district seams and stop short of district boundaries', { timeout: 300_000 }, () => {
+  it('PIPEWORKS: pipes continue across same-district seams and stop short of district boundaries', () => {
     let matched = 0, boundaries = 0;
     for (let k = 0; k < 24; k++) {
       const ls = block(Zone.PIPEWORKS, LandmarkKind.BOILER_HALL, 7100 + k, k % 2 === 0);

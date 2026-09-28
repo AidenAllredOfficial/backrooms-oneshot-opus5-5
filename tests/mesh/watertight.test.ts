@@ -142,7 +142,7 @@ describe('watertight walls', () => {
       expect(bad.slice(0, 12), name).toEqual([]);
     }
   });
-  test('generated chunks', () => {
+  test('generated chunks', { tags: ['sweep'] }, () => {
     const cases: [number, StoreyId, number, number, number | null][] = [
       [5, 0, 0, 0, Zone.LOBBY], [5, 0, 1, 0, Zone.OFFICE], [5, 0, 0, 1, Zone.MAZE], [5, 2, 0, 0, Zone.POOLROOMS],
       [5, 1, 0, 0, Zone.WAREHOUSE], [5, 1, 1, 1, Zone.PARKING], [9, 0, 2, 2, null],

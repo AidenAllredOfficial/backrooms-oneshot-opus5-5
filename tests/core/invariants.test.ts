@@ -40,11 +40,11 @@ describe('core invariants', () => {
         for (const base of [k * CHUNK_SIZE, k * TILE_SIZE, k * CELL]) {
           const x = base + d;
           const gi = worldToCell(x), cx = worldToChunk(x), li = gi - cx * CHUNK_CELLS;
-          expect(cx).toBe(cellToChunk(gi));
-          expect(li >= 0 && li < CHUNK_CELLS).toBe(true);
+          if (!Object.is(cx, cellToChunk(gi))) expect(cx).toBe(cellToChunk(gi));
+          if (!(li >= 0 && li < CHUNK_CELLS)) expect(li >= 0 && li < CHUNK_CELLS).toBe(true);
           const t = tileKeyAt(0, x, x);
-          expect(t.cx).toBe(cx);
-          expect(t.q).toBe(tileOfLocalCell(li, li));
+          if (!Object.is(t.cx, cx)) expect(t.cx).toBe(cx);
+          if (!Object.is(t.q, tileOfLocalCell(li, li))) expect(t.q).toBe(tileOfLocalCell(li, li));
         }
       }
     }

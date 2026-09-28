@@ -26,7 +26,7 @@ function storeyShares(s: StoreyId): number[] {
 /** A kind "has weight" on a storey when at least this share of its candidates would pick it. */
 const MIN_SHARE = 0.03;
 
-describe('content coverage', () => {
+describe('content coverage', { tags: ['sweep'] }, () => {
   it('every vignette kind appears >= 1 per 256 chunks on each storey where it has weight', () => {
     for (const s of [0, 1, 2] as StoreyId[]) {
       const gen = createWorldGen(opts(11 + s));
@@ -40,7 +40,7 @@ describe('content coverage', () => {
         expect(counts[k], `${VIGNETTE_NAMES[k]} on storey ${s} (share ${share[k].toFixed(3)})`).toBeGreaterThanOrEqual(1);
       }
     }
-  }, 600_000);
+  });
 
   it('every anomaly kind appears >= 1 per 1024 chunks (storeys 0-2)', () => {
     const counts = new Array<number>(Object.keys(AnomalyKind).length).fill(0);
@@ -53,5 +53,5 @@ describe('content coverage', () => {
       }
     }
     for (const [name, k] of Object.entries(AnomalyKind)) expect(counts[k], name).toBeGreaterThanOrEqual(1);
-  }, 600_000);
+  });
 });

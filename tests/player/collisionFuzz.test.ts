@@ -75,12 +75,14 @@ describe('collision fuzz', () => {
         moved += Math.hypot(s.x - px, s.z - pz);
         const pen = penetrationAt(w, s.x, s.z, s.y, PLAYER.height + (PLAYER.crouchHeight - PLAYER.height) * s.crouch, scratch);
         maxPen = Math.max(maxPen, pen);
-        expect(pen).toBeLessThanOrEqual(PEN_ACCEPT + 1e-4);
-        expect(crossesWall(w, px, pz, s.x, s.z)).toBe(false);
+        if (!(pen <= PEN_ACCEPT + 1e-4)) expect(pen).toBeLessThanOrEqual(PEN_ACCEPT + 1e-4);
+        const crossed = crossesWall(w, px, pz, s.x, s.z);
+        if (!Object.is(crossed, false)) expect(crossed).toBe(false);
         // feet on a real surface of the current position, never above step reach of the last one
         if (s.onGround) {
-          expect(s.y).toBeCloseTo(w.floorAt(s.x, s.z, s.y), 5);
-          expect(s.y - py).toBeLessThanOrEqual(PLAYER.stepMax + 0.011);
+          const floorY = w.floorAt(s.x, s.z, s.y);
+          if (!(Math.abs(floorY - s.y) < 10 ** -5 / 2)) expect(s.y).toBeCloseTo(floorY, 5);
+          if (!(s.y - py <= PLAYER.stepMax + 0.011)) expect(s.y - py).toBeLessThanOrEqual(PLAYER.stepMax + 0.011);
         }
       }
       expect(moved).toBeGreaterThan(50); // it really explored

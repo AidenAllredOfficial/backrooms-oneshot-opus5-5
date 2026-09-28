@@ -30,27 +30,33 @@ describe('flicker: determinism and range', () => {
       const md = modes[(n >> 3) % 3];
       flicker(st, seed, t, md, a);
       flicker(st, seed, t, md, b);
-      expect(a.i).toBe(b.i);
-      expect(a.tint).toBe(b.tint);
-      expect(a.buzz).toBe(b.buzz);
-      expect(a.i).toBeGreaterThanOrEqual(0);
-      expect(a.i).toBeLessThanOrEqual(1.1);
-      expect(a.tint).toBeGreaterThanOrEqual(0);
-      expect(a.tint).toBeLessThanOrEqual(1);
-      expect(a.buzz).toBeGreaterThanOrEqual(0);
-      expect(a.buzz).toBeLessThanOrEqual(1);
+      if (!Object.is(a.i, b.i)) expect(a.i).toBe(b.i);
+      if (!Object.is(a.tint, b.tint)) expect(a.tint).toBe(b.tint);
+      if (!Object.is(a.buzz, b.buzz)) expect(a.buzz).toBe(b.buzz);
+      if (!(a.i >= 0)) expect(a.i).toBeGreaterThanOrEqual(0);
+      if (!(a.i <= 1.1)) expect(a.i).toBeLessThanOrEqual(1.1);
+      if (!(a.tint >= 0)) expect(a.tint).toBeGreaterThanOrEqual(0);
+      if (!(a.tint <= 1)) expect(a.tint).toBeLessThanOrEqual(1);
+      if (!(a.buzz >= 0)) expect(a.buzz).toBeGreaterThanOrEqual(0);
+      if (!(a.buzz <= 1)) expect(a.buzz).toBeLessThanOrEqual(1);
     }
   });
 
   it('static states and off mode', () => {
     for (const seed of SEEDS) {
       for (let t = 0; t < 200; t += 0.37) {
-        expect(iAt(seed, t, 'standard', LightState.ON)).toBe(1);
-        expect(iAt(seed, t, 'standard', LightState.OFF)).toBe(0);
-        expect(iAt(seed, t, 'standard', LightState.DYING)).toBe(DYING_MEAN);
-        expect(iAt(seed, t, 'reduced', LightState.BUZZ)).toBe(1);
-        expect(iAt(seed, t, 'off', LightState.FLICKER)).toBe(flickerMean(LightState.FLICKER));
-        expect(iAt(seed, t, 'off', LightState.FLICKER)).toBe(0.8);
+        const on = iAt(seed, t, 'standard', LightState.ON);
+        if (!Object.is(on, 1)) expect(on).toBe(1);
+        const off = iAt(seed, t, 'standard', LightState.OFF);
+        if (!Object.is(off, 0)) expect(off).toBe(0);
+        const dying = iAt(seed, t, 'standard', LightState.DYING);
+        if (!Object.is(dying, DYING_MEAN)) expect(dying).toBe(DYING_MEAN);
+        const buzz = iAt(seed, t, 'reduced', LightState.BUZZ);
+        if (!Object.is(buzz, 1)) expect(buzz).toBe(1);
+        const still = iAt(seed, t, 'off', LightState.FLICKER);
+        if (!Object.is(still, flickerMean(LightState.FLICKER))) expect(still).toBe(flickerMean(LightState.FLICKER));
+        const still2 = iAt(seed, t, 'off', LightState.FLICKER);
+        if (!Object.is(still2, 0.8)) expect(still2).toBe(0.8);
       }
     }
     const out: FlickerEvent[] = [];
@@ -111,8 +117,8 @@ describe('flicker: frame-rate independence', () => {
       expect(e60.length).toBe(e30.length);
       expect(e144.length).toBe(e30.length);
       for (let k = 0; k < e30.length; k++) {
-        expect(Math.abs(e60[k].t - e30[k].t)).toBeLessThanOrEqual(0.001);
-        expect(Math.abs(e144[k].t - e30[k].t)).toBeLessThanOrEqual(0.001);
+        if (!(Math.abs(e60[k].t - e30[k].t) <= 0.001)) expect(Math.abs(e60[k].t - e30[k].t)).toBeLessThanOrEqual(0.001);
+        if (!(Math.abs(e144[k].t - e30[k].t) <= 0.001)) expect(Math.abs(e144[k].t - e30[k].t)).toBeLessThanOrEqual(0.001);
       }
     }
   });
@@ -156,7 +162,7 @@ function maxTransitionsPerSecond(seed: number, seconds: number, mode: FlickerMod
   return { max, total, minI, maxI };
 }
 
-describe('flicker: photosensitivity (WCAG 2.3.1)', () => {
+describe('flicker: photosensitivity (WCAG 2.3.1)', { tags: ['sweep'] }, () => {
   it('standard: a sliding 1 s window over 1e5 s never has > 3 transitions deeper than 0.2', () => {
     const r = maxTransitionsPerSecond(SEEDS[0], 1e5, 'standard', 0.005, 0.2);
     expect(r.total).toBeGreaterThan(1000);
@@ -165,7 +171,7 @@ describe('flicker: photosensitivity (WCAG 2.3.1)', () => {
     for (const seed of SEEDS.slice(1, 4)) {
       expect(maxTransitionsPerSecond(seed, 2e4, 'standard', 0.005, 0.2).max).toBeLessThanOrEqual(3);
     }
-  }, 60000);
+  });
 
   it('reduced: depth <= 0.4, <= 2 transitions per second, no micro-flicker, no overshoot', () => {
     for (const seed of SEEDS.slice(0, 3)) {
@@ -175,13 +181,13 @@ describe('flicker: photosensitivity (WCAG 2.3.1)', () => {
       expect(r.minI).toBeGreaterThanOrEqual(0.6 * (1 - FLICKER_TUNING.DRIFT) - 1e-9);
       expect(r.maxI).toBeLessThanOrEqual(1 + FLICKER_TUNING.DRIFT + 1e-9);
       // no micro-flicker: every edge is a major step (>= 0.2)
-      for (const e of edgesAt(seed, 0, 2000, 1000, 'reduced')) expect(Math.abs(e.to - e.from)).toBeGreaterThan(0.2);
+      for (const e of edgesAt(seed, 0, 2000, 1000, 'reduced')) if (!(Math.abs(e.to - e.from) > 0.2)) expect(Math.abs(e.to - e.from)).toBeGreaterThan(0.2);
     }
     const out: FlickerEvent[] = [];
     flickerEvents(LightState.FLICKER, SEEDS[0], 0, 5000, 'reduced', out);
     expect(out.some((e) => e.kind === 'tink' || e.kind === 'strike' || e.kind === 'off')).toBe(false);
     expect(out.some((e) => e.kind === 'pop')).toBe(true);
-  }, 60000);
+  });
 });
 
 // ---------------------------------------------------------------- events <=> edges
@@ -197,7 +203,7 @@ describe('flicker: events coincide with edges sampled at 1 ms', () => {
       const ev2: FlickerEvent[] = [];
       flickerEvents(LightState.FLICKER, seed, T0, T1, 'standard', ev2);
       expect(ev.length).toBe(ev2.length);
-      for (let k = 1; k < ev.length; k++) expect(ev[k].t).toBeGreaterThanOrEqual(ev[k - 1].t);
+      for (let k = 1; k < ev.length; k++) if (!(ev[k].t >= ev[k - 1].t)) expect(ev[k].t).toBeGreaterThanOrEqual(ev[k - 1].t);
       const N = Math.round((T1 - T0) * 1000);
       const s = new Float64Array(N + 1);
       for (let n = 0; n <= N; n++) s[n] = iAt(seed, T0 + n / 1000);
@@ -209,12 +215,15 @@ describe('flicker: events coincide with edges sampled at 1 ms', () => {
         kinds[e.kind]++;
         const n = Math.ceil((e.t - T0) * 1000 - 1e-9);
         const hit = edgeAt[n] === 1 || edgeAt[Math.min(N, n + 1)] === 1 || edgeAt[Math.max(0, n - 1)] === 1;
-        expect(hit, `${e.kind} at ${e.t} has no edge`).toBe(true);
+        if (!Object.is(hit, true)) expect(hit, `${e.kind} at ${e.t} has no edge`).toBe(true);
         const before = s[Math.max(0, n - 2)];
         const after = s[Math.min(N, n + 1)];
-        if (e.kind === 'off') expect(after).toBeLessThan(0.05);
-        if (e.kind === 'strike' || e.kind === 'pop') expect(after).toBeGreaterThan(before);
-        if (e.kind === 'tink') { expect(after).toBeLessThan(before); expect(before - after).toBeLessThanOrEqual(0.2); }
+        if (e.kind === 'off' && !(after < 0.05)) expect(after).toBeLessThan(0.05);
+        if ((e.kind === 'strike' || e.kind === 'pop') && !(after > before)) expect(after).toBeGreaterThan(before);
+        if (e.kind === 'tink') {
+          if (!(after < before)) expect(after).toBeLessThan(before);
+          if (!(before - after <= 0.2)) expect(before - after).toBeLessThanOrEqual(0.2);
+        }
       }
       expect(kinds.pop).toBeGreaterThan(10);
       expect(kinds.tink).toBeGreaterThan(5);
@@ -225,16 +234,16 @@ describe('flicker: events coincide with edges sampled at 1 ms', () => {
         const a = s[n - 1];
         const b = s[n];
         if (b < a) {
-          if (b < 0.05 && a >= 0.05) expect(has('off', n), `fall to ${b} at ${n} ms without 'off'`).toBe(true);
-          else if (a - b <= 0.2) expect(has('tink', n), `micro drop at ${n} ms without 'tink'`).toBe(true);
+          if (b < 0.05 && a >= 0.05) { if (!has('off', n)) expect(has('off', n), `fall to ${b} at ${n} ms without 'off'`).toBe(true); }
+          else if (a - b <= 0.2) { if (!has('tink', n)) expect(has('tink', n), `micro drop at ${n} ms without 'tink'`).toBe(true); }
         } else if (b >= 0.5 && a < 0.5) {
           let below = true;
           for (let m = Math.max(0, n - 150); m < n; m++) if (s[m] >= 0.2) { below = false; break; }
-          if (below) expect(has('strike', n), `strike at ${n} ms without 'strike'`).toBe(true);
+          if (below && !has('strike', n)) expect(has('strike', n), `strike at ${n} ms without 'strike'`).toBe(true);
         }
       }
     }
-  }, 60000);
+  });
 
   it('strike events exist for deep bursts', () => {
     let strikes = 0;
@@ -260,11 +269,11 @@ describe('flicker: event thresholds see the exact levels', () => {
         const e = Math.floor(t / FLICKER_TUNING.EPOCH);
         const l = levels.get(e);
         if (l === undefined) levels.set(e, v);
-        else expect(v).toBe(l); // one constant LOW level per burst
+        else if (!Object.is(v, l)) expect(v).toBe(l); // one constant LOW level per burst
       }
       expect(levels.size).toBeGreaterThan(5);
     }
-  }, 30000);
+  });
 
   it('pathological windows are bounded (no stall on a clock jump)', () => {
     const out: FlickerEvent[] = [];
@@ -289,24 +298,29 @@ describe('lensShimmer', () => {
       minD = Math.min(minD, d);
       maxD = Math.max(maxD, d);
       if (d < 0.7) dropouts++;
-      expect(lensShimmer(LightState.DYING, seed, t, 'standard')).toBe(d);
-      expect(lensShimmer(LightState.DYING, seed + 256, t, 'standard')).toBe(d);
+      const again = lensShimmer(LightState.DYING, seed, t, 'standard');
+      if (!Object.is(again, d)) expect(again).toBe(d);
+      const wrapped = lensShimmer(LightState.DYING, seed + 256, t, 'standard');
+      if (!Object.is(wrapped, d)) expect(wrapped).toBe(d);
       const r = lensShimmer(LightState.DYING, seed, t, 'reduced');
-      expect(r).toBeGreaterThanOrEqual(0.95 - 1e-9);
-      expect(r).toBeLessThanOrEqual(1.05 + 1e-9);
+      if (!(r >= 0.95 - 1e-9)) expect(r).toBeGreaterThanOrEqual(0.95 - 1e-9);
+      if (!(r <= 1.05 + 1e-9)) expect(r).toBeLessThanOrEqual(1.05 + 1e-9);
       const b = lensShimmer(LightState.BUZZ, seed, t, 'standard');
-      expect(b).toBeGreaterThanOrEqual(0.97 - 1e-9);
-      expect(b).toBeLessThanOrEqual(1.03 + 1e-9);
-      expect(lensShimmer(LightState.BUZZ, seed, t, 'reduced')).toBe(1);
-      expect(lensShimmer(LightState.DYING, seed, t, 'off')).toBe(1);
-      expect(lensShimmer(LightState.ON, seed, t, 'standard')).toBe(1);
+      if (!(b >= 0.97 - 1e-9)) expect(b).toBeGreaterThanOrEqual(0.97 - 1e-9);
+      if (!(b <= 1.03 + 1e-9)) expect(b).toBeLessThanOrEqual(1.03 + 1e-9);
+      const buzzReduced = lensShimmer(LightState.BUZZ, seed, t, 'reduced');
+      if (!Object.is(buzzReduced, 1)) expect(buzzReduced).toBe(1);
+      const dyingOff = lensShimmer(LightState.DYING, seed, t, 'off');
+      if (!Object.is(dyingOff, 1)) expect(dyingOff).toBe(1);
+      const on = lensShimmer(LightState.ON, seed, t, 'standard');
+      if (!Object.is(on, 1)) expect(on).toBe(1);
     }
     expect(minD).toBeGreaterThanOrEqual(0.6 - 1e-9);
     expect(maxD).toBeLessThanOrEqual(1.1 + 1e-9);
     expect(maxD).toBeGreaterThan(1.06);
     expect(dropouts).toBeGreaterThan(0);
     expect(dropouts).toBeLessThan(60000 * 0.05);
-  }, 30000);
+  });
 
   it('GLSL twin exposes the frozen signature and uses no textures/uniforms', () => {
     expect(LENS_SHIMMER_GLSL).toContain('float brLensShimmer(int state, float seed8, float t, int mode)');

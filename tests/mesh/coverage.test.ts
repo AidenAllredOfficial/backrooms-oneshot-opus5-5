@@ -84,12 +84,12 @@ describe('coverage fixtures (rays never escape to the clear colour)', () => {
     const bad = escapes(nb, chunkSoup(nb));
     expect(bad.slice(0, 20)).toEqual([]);
   });
-  test('SOLID pillars, blockers, steps and soffits', () => {
+  test('SOLID pillars, blockers, steps and soffits', { tags: ['sweep'] }, () => {
     const nb = blockerNb();
     const bad = escapes(nb, chunkSoup(nb));
     expect(bad.slice(0, 20)).toEqual([]);
   });
-  test('pits (VOID cells)', () => {
+  test('pits (VOID cells)', { tags: ['sweep'] }, () => {
     const nb = pitNb();
     const bad = escapes(nb, chunkSoup(nb));
     expect(bad.slice(0, 20)).toEqual([]);
@@ -116,7 +116,7 @@ describe('coverage fixtures (rays never escape to the clear colour)', () => {
     }
     expect(bad.slice(0, 20)).toEqual([]);
   });
-  test('mixed edge kinds, openings, trims, ceilings, solids and water', () => {
+  test('mixed edge kinds, openings, trims, ceilings, solids and water', { tags: ['sweep'] }, () => {
     const nb = mixNb();
     const bad = escapes(nb, chunkSoup(nb));
     expect(bad.slice(0, 20)).toEqual([]);

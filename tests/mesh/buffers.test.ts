@@ -28,12 +28,12 @@ function checkTile(nb: LayoutNeighborhood, s: StoreyId, cx: number, cz: number, 
   expect(W).toBe(LM_ATLAS_W);
   expect([256, 512, 768, 1024]).toContain(H);
   for (const c of surfaces.charts) {
-    expect(c.x).toBeGreaterThanOrEqual(0);
-    expect(c.y).toBeGreaterThanOrEqual(0);
-    expect(c.x + c.w).toBeLessThanOrEqual(W);
-    expect(c.y + c.h).toBeLessThanOrEqual(H);
-    expect(c.w).toBeGreaterThanOrEqual(4); // at least 2x2 plus the apron
-    expect(c.h).toBeGreaterThanOrEqual(4);
+    if (!(c.x >= 0)) expect(c.x).toBeGreaterThanOrEqual(0);
+    if (!(c.y >= 0)) expect(c.y).toBeGreaterThanOrEqual(0);
+    if (!(c.x + c.w <= W)) expect(c.x + c.w).toBeLessThanOrEqual(W);
+    if (!(c.y + c.h <= H)) expect(c.y + c.h).toBeLessThanOrEqual(H);
+    if (!(c.w >= 4)) expect(c.w).toBeGreaterThanOrEqual(4); // at least 2x2 plus the apron
+    if (!(c.h >= 4)) expect(c.h).toBeGreaterThanOrEqual(4);
   }
   const padded: Chart[] = surfaces.charts.map((c) => ({ ...c, w: c.w + LM_PAD, h: c.h + LM_PAD }));
   expect(chartOverlaps(padded)).toEqual([]);
@@ -58,7 +58,7 @@ describe('mesh buffers', () => {
     }
   });
 
-  test('generated chunks of every zone: valid buffers and the 120k triangle cap at tpc 12', () => {
+  test('generated chunks of every zone: valid buffers and the 120k triangle cap at tpc 12', { tags: ['sweep'] }, () => {
     const counts: string[] = [];
     for (let z = 0; z < ZONE_COUNT; z++) {
       const s = storeyOf(z);
@@ -131,7 +131,7 @@ function backProjectionErrors(m: MeshBuffers, surfaces: SurfaceSet, label: strin
 }
 
 describe('lightmap uv back-projection', () => {
-  test('lmUv through the contract Chart (origin/axes) lands on the vertex (fixtures + generated zones, both densities)', () => {
+  test('lmUv through the contract Chart (origin/axes) lands on the vertex (fixtures + generated zones, both densities)', { tags: ['sweep'] }, () => {
     const cases: [string, LayoutNeighborhood, StoreyId, number, number][] = [
       ['mix', mixNb(), 0, 0, 0], ['pit', pitNb(), 0, 0, 0], ['blocker', blockerNb(), 0, 0, 0],
       ['lobby', genNb(1, 0, 0, 0, Zone.LOBBY), 0, 0, 0], ['office', genNb(5, 0, 1, 0, Zone.OFFICE), 0, 1, 0],

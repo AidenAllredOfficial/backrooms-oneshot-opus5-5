@@ -177,8 +177,8 @@ describe('directionality', () => {
     let n = 0;
     for (let i = 0; i < lm.width * lm.height; i++) {
       const a = lm.dir[i * 4 + 3] / 255;
-      expect(a).toBeGreaterThanOrEqual(0);
-      expect(a).toBeLessThanOrEqual(1);
+      if (!(a >= 0)) expect(a).toBeGreaterThanOrEqual(0);
+      if (!(a <= 1)) expect(a).toBeLessThanOrEqual(1);
       if (fromHalf(lm.irr[i * 4]) > 0) n++;
     }
     expect(n).toBeGreaterThan(1000);

@@ -36,7 +36,7 @@ function recessedIn(f: Fixture, x: number, z: number): boolean {
 }
 
 describe('recessed fixtures (straddle rule)', () => {
-  test('lens geometry of every recessed fixture lies whole in tileOfPoint(px, pz)', () => {
+  test('lens geometry of every recessed fixture lies whole in tileOfPoint(px, pz)', { tags: ['sweep'] }, () => {
     const cases: [number, StoreyId, number, number, ZoneId][] = [[2, 0, 0, 0, Zone.LOBBY], [2, 0, 1, 0, Zone.OFFICE], [2, 0, 0, 1, Zone.LOW_EXPANSE], [2, 2, 0, 0, Zone.POOLROOMS], [4, 0, -1, 2, Zone.MANILA]];
     let checked = 0;
     for (const [seed, s, cx, cz, z] of cases) {

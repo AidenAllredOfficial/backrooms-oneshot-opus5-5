@@ -65,7 +65,7 @@ describe('face ownership', () => {
     }
   });
 
-  test('generated chunks: ownership in every zone', () => {
+  test('generated chunks: ownership in every zone', { tags: ['sweep'] }, () => {
     const zones: [ZoneId, StoreyId][] = [[Zone.LOBBY, 0], [Zone.OFFICE, 0], [Zone.MAZE, 0], [Zone.PILLAR_HALL, 0], [Zone.POOLROOMS, 2], [Zone.PARKING, 1], [Zone.PIPEWORKS, 1], [Zone.WAREHOUSE, 1], [Zone.CONCRETE, 1], [Zone.LOW_EXPANSE, 0]];
     for (const [z, s] of zones) {
       const nb = genNb(11, s, 1, 1, z);
