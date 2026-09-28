@@ -8,19 +8,20 @@
 //  bake    buildTileSurfaces -> bakeTile(full, st.bakeCache)
 //  find / spawn / ascii   delegate to gen
 // Exceptions become { t: 'error', message, stack }. With init.validate, validate* violations become an error too.
+// The world-stage symbols (world generator, layout LRU, collision, layout cloning) come ONLY through worldStage.ts:
+// its bundle keys the tool cache's layout / spawn / find entries (tools/viteTileCache.ts).
 
 import type { TileKey } from '../core/grid.ts';
 import { chunkKeyStr, tileKeyStr } from '../core/grid.ts';
-import { cloneLayout, layoutTransferables, type ChunkLayout } from '../core/layout.ts';
+import type { ChunkLayout } from '../core/layout.ts';
 import type { ChunkCollision, LightmapData, MeshBuffers, TileMesh } from '../core/mesh.ts';
 import type { HandlerResult, WorkerInit, WorkerRequest, WorkerResponse } from '../core/worker.ts';
 import type { LayoutNeighborhood, WorldGen } from '../core/world.ts';
 import { bakeTile, createBakeCache, type BakeCache } from '../bake/index.ts';
 import { buildTile } from '../mesh/buildTile.ts';
 import { buildTileSurfaces } from '../mesh/surfaces.ts';
-import { buildChunkCollision } from '../player/collisionBuild.ts';
-import { createWorldGen } from '../world/worldgen.ts';
-import { getLayout, NeighborhoodCache } from './layoutCache.ts';
+import { NeighborhoodCache } from './layoutCache.ts';
+import { buildChunkCollision, cloneLayout, createWorldGen, getLayout, layoutTransferables } from './worldStage.ts';
 import { validateBake, validateBuild, validateLayoutPayload } from './validatePayload.ts';
 
 export interface HandlerState { init: WorkerInit | null; gen: WorldGen | null; layouts: Map<string, ChunkLayout> /* LRU 96, never transferred */; bakeCache: BakeCache }

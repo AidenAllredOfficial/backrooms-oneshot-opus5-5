@@ -70,12 +70,20 @@ describe('handleRequest', () => {
     const f = handleRequest({ t: 'bake', job: 3, key }, st2).res;
     if (b.t !== 'build' || f.t !== 'bake') throw new Error(`unexpected ${b.t} / ${f.t}`);
     expect(b.lightmap.variant).toBe('full');
-    expect(b.lightmap.chartHash).toBe(f.lightmap.chartHash);
-    for (const k of ['irr', 'dir', 'mask', 'flick', 'emission'] as const) {
-      const x = b.lightmap[k] as ArrayLike<number> | null, y = f.lightmap[k] as ArrayLike<number> | null;
-      expect(x === null ? null : Array.from(x), k).toEqual(y === null ? null : Array.from(y));
-    }
-    expect(Array.from(b.lightmap.volume.a)).toEqual(Array.from(f.lightmap.volume.a));
+    // every field the streamer uploads: the tool cache answers a 'bake' miss with the 'build lighting:full' entry
+    // (src/workers/tileCache.ts cacheLookup), so the two must be the same bytes
+    for (const k of ['variant', 'width', 'height', 'chartHash', 'tileKey'] as const) expect(b.lightmap[k], k).toBe(f.lightmap[k]);
+    const same = (x: ArrayLike<number> | null, y: ArrayLike<number> | null, k: string): void => {
+      expect(x === null, `${k} null`).toBe(y === null);
+      if (x === null || y === null) return;
+      expect(x.constructor, k).toBe(y.constructor);
+      expect(x.length, k).toBe(y.length);
+      let diff = -1;
+      for (let i = 0; i < x.length && diff < 0; i++) if (x[i] !== y[i] && !(Number.isNaN(x[i]) && Number.isNaN(y[i]))) diff = i;
+      expect(diff, `${k}: first differing element`).toBe(-1);
+    };
+    for (const k of ['irr', 'dir', 'mask', 'flick', 'emission'] as const) same(b.lightmap[k], f.lightmap[k], k);
+    for (const k of ['a', 'b', 'c', 'wallMask'] as const) same(b.lightmap.volume[k], f.lightmap.volume[k], `volume.${k}`);
   });
 
   it('the layout LRU is bounded (96) and refreshes recency on hits', () => {
