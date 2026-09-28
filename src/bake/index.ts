@@ -346,11 +346,14 @@ export function bakeTile(
   const t3 = performance.now();
 
   // ---- dilation, encoding, emission map, light volume
-  const arrs: Float32Array[] = [E, V, AO, M, GR];
-  const comps = [3, 3, 1, 4, 3];
+  // (only probe bakes have a gradient: preview and direct-only bakes skip its dilation, their layer 1 stays 128)
+  const gr = P ? GR : null;
+  const arrs: Float32Array[] = [E, V, AO, M];
+  const comps = [3, 3, 1, 4];
+  if (gr) { arrs.push(gr); comps.push(3); }
   if (F) { arrs.push(F); comps.push(4); }
   dilate(T, { arrs, comps }, surfaces.charts.length, job.g);
-  const enc = encodeLightmap(T, E, V, AO, F, M, GR);
+  const enc = encodeLightmap(T, E, V, AO, F, M, gr);
   const tEnc = performance.now();
   const emission = bakeEmission(job);
   const tEm = performance.now();

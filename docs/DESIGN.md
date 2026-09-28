@@ -4314,7 +4314,11 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
     ambient part never turns negative. Relief (high-passed log luminance, normal-mapped against flat normals):
     PIPEWORKS CMU 6.6 → 13.2 %, the LOBBY ceiling 0.2 → 0.9 %, PARKING's ceiling 0.24 → 0.40 %, goto=dark
     0.7 → 1.0 %; ceiling T-bars and tile bevels now shade. The flicker channels and the uniform environment radiance
-    stay normal-independent.
+    stay normal-independent. Known limit: the stored pair is on the axes of the chart's own normal, and `brLmGrad`
+    decodes it on the axes of the face drawing it. Faces that borrow a chart across a different dominant axis (T-bar
+    sides, diffuser risers and plenum-hole sides on the ceiling chart; baseboards and wall decals that fall back to the
+    floor grid) therefore shade their relief with the chart's gradient on the wrong axes. Their flat normals still
+    get zero, and the faces are small.
   - `material.multiScatteringCompensation` is only initialised by three's `lights_fragment_begin` when punctual lights exist; our chunk **sets it itself** from `material.dfg` exactly as r186 does: `material.multiScatteringCompensation = 1.0 + material.specularColorBlended * (1.0 / (material.dfg.x + material.dfg.y) - 1.0);` (`material.dfg` is always set by `lights_fragment_begin`), so harness scenes without the flashlight match the game.
   - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
     `chunks/pom.ts FRAG_DIRVIS_GLSL`): micro-shadowing (Chan 2018, not lite) `clamp(|N·L| + 2·ao² − 1, 0, 1)` with the
