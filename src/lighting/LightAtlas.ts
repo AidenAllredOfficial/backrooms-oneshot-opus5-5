@@ -8,7 +8,10 @@
 // gtz mod 7). TILE_SIZE = 32 * LV.STEP and the atlas is exactly 7 tiles wide with repeat wrapping, so the atlas
 // coordinate of a world point is simply (x / SPAN, lvV(y), z / SPAN) mod 1, and hardware trilinear filtering is
 // correct across every tile seam (the wrap seam included) while both tiles are in the window. The window only
-// guarantees 3 tiles (57.6 m) from the camera tile's edge, so consumers stay within 56 m.
+// guarantees 3 tiles (57.6 m) from the camera tile's edge, so consumers stay within 56 m. A sample outside the
+// window (a froxel more than 3 tiles to the side at a diagonal heading) finds no light: brLaSample tests the window
+// (laInWindow) before the mask, because the wrapped slot there holds the tile 7 tiles away, and its VALID bit would
+// pass.
 //
 // Textures:
 //   A, B, C  224 x 6 x 224 3D (x, y level, z): RGBA16F / RGBA8 / RGBA16F, linear, repeat on x and z
@@ -74,6 +77,17 @@ export function channelSlot(k: number, qx: number, qz: number, px: number, pz: n
   return SLOT_LUT[(dx + 1) + 3 * (dz + 1)];
 }
 
+/** TS twin of brLaSample's window test: whether the atlas point p (camera-relative point + uLaCamMod, both axes)
+ * lies in the 7 x 7 tiles that plan() keeps around the camera tile (camMod / TILE_SIZE, floored). */
+export function laInWindow(px: number, pz: number, camModX: number, camModZ: number): boolean {
+  const half = (LA.TILES - 1) >> 1;
+  const inAxis = (p: number, c: number): boolean => {
+    const ct = Math.floor(c * (1 / TILE_SIZE));
+    return p >= (ct - half) * TILE_SIZE && p < (ct + half + 1) * TILE_SIZE;
+  };
+  return inAxis(px, camModX) && inAxis(pz, camModZ);
+}
+
 /** Mask texel of the world cell (gi, gj) (repeat wrap). */
 export const laMaskIndex = (gi: number, gj: number): number =>
   ((gj % LA.CELLS) + LA.CELLS) % LA.CELLS * LA.CELLS + ((gi % LA.CELLS) + LA.CELLS) % LA.CELLS;
@@ -92,10 +106,12 @@ export interface LightAtlasUniforms {
 /** GLSL (vertex or fragment: no derivatives): the atlas uniforms and
  *   bool brLaSample( vec3 rel, out vec3 E, out float w, out vec3 Ld, out vec3 Ef )
  * at a camera-relative world point: E = baked irradiance facing the dominant direction (lux), w its directionality,
- * Ld the unit direction toward the light, Ef the live flicker-channel irradiance. False (all zero) outside the valid
- * slots. Self-contained (its own constants and helpers). */
+ * Ld the unit direction toward the light, Ef the live flicker-channel irradiance. False (all zero) outside the
+ * camera's 7 x 7-tile window (laInWindow) and outside the valid slots. Self-contained (its own constants and
+ * helpers). */
 export function lightAtlasGlsl(): string {
   const lvY = LV.Y.map(f).join(', ');
+  const half = (LA.TILES - 1) >> 1;
   return /* glsl */ `
 // ---- light atlas (package F, lighting/LightAtlas.ts)
 uniform highp sampler3D uLaA;
@@ -116,6 +132,9 @@ float brLaLvV( float y ) {
 bool brLaSample( vec3 rel, out vec3 E, out float w, out vec3 Ld, out vec3 Ef ) {
 	E = vec3( 0.0 ); w = 0.0; Ld = vec3( 0.0, 1.0, 0.0 ); Ef = vec3( 0.0 );
 	vec3 p = rel + uLaCamMod;
+	// the window plan() keeps (laInWindow): beyond it the wrapped slot holds a tile 7 tiles away
+	vec2 ct = floor( uLaCamMod.xz * ${f(1 / TILE_SIZE)} );
+	if ( any( lessThan( p.xz, ( ct - ${f(half)} ) * ${f(TILE_SIZE)} ) ) || any( greaterThanEqual( p.xz, ( ct + ${f(half + 1)} ) * ${f(TILE_SIZE)} ) ) ) return false;
 	ivec2 cell = ivec2( floor( p.xz * ${f(1 / CELL)} ) );
 	ivec2 cm = cell - ${LA.CELLS} * ivec2( floor( vec2( cell ) * ${f(1 / LA.CELLS)} ) );
 	int m = int( texelFetch( uLaMask, cm, 0 ).r * 255.0 + 0.5 );
