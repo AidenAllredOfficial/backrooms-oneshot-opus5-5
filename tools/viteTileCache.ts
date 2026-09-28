@@ -6,8 +6,9 @@
 //                             rolldown / vite versions and CACHE_SALT. Comments, types and render-only code that
 //                             only reaches the worker graph through a barrel (core/quality.ts presets) never change
 //                             it; an edit to any code the worker runs does.
-//  - __BR_TILE_CACHE_WORLD__  the same for src/workers/worldStage.ts (what layout / spawn / find run): a baker-only
-//                             edit keeps those entries warm.
+//  - __BR_TILE_CACHE_WORLD__  the same for src/workers/worldStage.ts (what layout / spawn / find run), plus the verbatim
+//                             source of handler.ts and validatePayload.ts (the branches around the world-stage calls
+//                             are not in that bundle): a baker-only edit keeps those entries warm.
 //  - __BR_TILE_CACHE_FEATURES__ '{"raw":1,"ns":1}': the worker PUTs raw entries and uses namespaced URLs.
 // Both hashes are memoised on a stamp of the worker graph (sorted paths + mtime + size + package versions) in memory
 // and in <dir>/.hashmemo.json, so an unchanged tree costs one import walk (~20 ms) instead of two bundles (~0.2-0.4 s).
@@ -45,6 +46,11 @@ export const TILE_ENTRY = 'src/workers/chunk.worker.ts';
 export const WORLD_ENTRY = 'src/workers/worldStage.ts';
 /** Source files hashed verbatim into both hashes (the entry codec: tree-shaking drops it from the bundles). */
 const CODEC_FILES = ['src/workers/tileCache.ts'];
+/** Source files hashed verbatim into the WORLD hash only: the handler's own init / layout / spawn / find branches
+ * (the response assembly around the world-stage calls: collision copy, find / spawn arguments) and the payload
+ * validator they run are not part of the worldStage.ts bundle. Any edit to them invalidates the world entries (a
+ * baker-only edit still does not). */
+export const WORLD_VERBATIM_FILES = ['src/workers/handler.ts', 'src/workers/validatePayload.ts'];
 export const CACHE_FEATURES = { raw: 1, ns: 1 } as const;
 
 export const PUT_INFLIGHT = 8;
@@ -110,7 +116,7 @@ export function graphStamp(root: string): string {
     for (const f of g.files) files.add(f);
     for (const p of g.pkgs) pkgs.add(p);
   }
-  for (const f of CODEC_FILES) files.add(path.resolve(root, f));
+  for (const f of [...CODEC_FILES, ...WORLD_VERBATIM_FILES]) files.add(path.resolve(root, f));
   for (const f of [...files].sort()) {
     let st: { mtimeMs: number; size: number } | null = null;
     try { st = statSync(f); } catch { /* missing: part of the stamp as such */ }
@@ -135,7 +141,7 @@ export async function bundleHash(root: string, entry: string): Promise<string> {
     const { output } = await b.generate({ format: 'es', minify: true });
     const h = createHash('sha1').update(CACHE_SALT).update('\0');
     for (const o of output) if ('code' in o) h.update(o.fileName).update('\0').update(o.code).update('\0');
-    for (const f of CODEC_FILES) {
+    for (const f of entry === WORLD_ENTRY ? [...CODEC_FILES, ...WORLD_VERBATIM_FILES] : CODEC_FILES) {
       const p = path.resolve(root, f);
       h.update(f).update('\0').update(existsSync(p) ? readFileSync(p) : '-').update('\0');
     }

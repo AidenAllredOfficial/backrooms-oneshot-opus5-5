@@ -162,6 +162,11 @@ describe('code hashes', () => {
       const h2 = await hashes();
       expect(h2.tile).not.toBe(h1.tile);
       expect(h2.world).not.toBe(h1.world);
+      // the handler's own world branches are outside the worldStage.ts bundle: an edit there changes both too
+      edit('src/workers/handler.ts', 'gen.findNearest(req.query, req.from, req.maxChunks)', 'gen.findNearest(req.query, req.from, req.maxChunks + 1)');
+      const h3 = await hashes();
+      expect(h3.tile).not.toBe(h2.tile);
+      expect(h3.world).not.toBe(h2.world);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

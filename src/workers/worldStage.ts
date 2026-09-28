@@ -6,7 +6,9 @@
 // (tileCache.ts). A baker-only edit therefore keeps those entries warm, while any edit that can change a layout, the
 // collision or a spawn / find answer changes this bundle. handler.ts must import these symbols from here and nowhere
 // else (tests/workers/worldStage.test.ts checks it): a world symbol imported around this module would be missing from
-// the world hash, and a stale layout could be served.
+// the world hash, and a stale layout could be served. The handler's own code around these calls (the response
+// assembly of its layout / spawn / find branches) is hashed verbatim into the world hash (tools/viteTileCache.ts
+// WORLD_VERBATIM_FILES).
 
 export { createWorldGen } from '../world/worldgen.ts';
 export { getLayout } from './layoutCache.ts';
