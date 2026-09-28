@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { QUALITY } from '../../src/core/quality.ts';
 import { createGlobals } from '../../src/materials/MaterialSystem.ts';
-import { createPlanarReflection, createReflScratch, reflectionTextureMatrix, setupReflectionCamera } from '../../src/materials/PlanarReflection.ts';
+import { createPlanarReflection, createReflScratch, MIRROR_LEVELS, reflectionTextureMatrix, setupReflectionCamera } from '../../src/materials/PlanarReflection.ts';
+import { HDR_CLAMP } from '../../src/core/constants.ts';
 
 function mainCamera(x: number, y: number, z: number, yaw: number, pitch: number): THREE.PerspectiveCamera {
   const c = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 400);
@@ -122,6 +123,46 @@ describe('WP9 planar reflection maths', () => {
   });
 });
 
+
+describe('mirror mip chain', () => {
+  it('builds MIRROR_LEVELS low-passed levels in fp32 after the mirrored render (never gl.generateMipmap)', () => {
+    const scene = new THREE.Scene();
+    const log: string[] = [];
+    let target: THREE.WebGLRenderTarget | null = null;
+    const depth = { mask: true, locked: false, setMask() {}, setLocked() {} };
+    const gl = {
+      TEXTURE_2D: 1, TEXTURE_MAX_LEVEL: 3, READ_FRAMEBUFFER: 6, DRAW_FRAMEBUFFER: 7, texParameteri() {},
+      blitFramebuffer(_a: number, _b: number, w: number, h: number) { log.push(`blit:${w}x${h}`); },
+    };
+    const renderer = {
+      shadowMap: { autoUpdate: true }, xr: { enabled: false }, autoClear: true,
+      getDrawingBufferSize: (v: THREE.Vector2) => v.set(2000, 1000), // a 1000 x 500 mirror at high
+      getRenderTarget: () => null, clear() {},
+      getContext: () => gl,
+      properties: { get: (o: object) => (o === target ? { __webglFramebuffer: Array.from({ length: 12 }, () => ({})) } : { __webglTexture: {}, __webglFramebuffer: {} }) },
+      state: { buffers: { depth }, bindTexture() {}, bindFramebuffer() {} },
+      setRenderTarget(t: THREE.WebGLRenderTarget | null) { if (t && t.texture.name === 'br-planar-reflection') target = t; },
+      render(sc: THREE.Scene) { log.push(sc === scene ? 'scene' : `quad:${((sc.children[0] as THREE.Mesh).material as THREE.Material).name}`); },
+    } as unknown as THREE.WebGLRenderer;
+    const reflection = createPlanarReflection(createGlobals(), QUALITY.high, () => true);
+    expect(reflection.materials.map((m) => m.name)).toEqual(['br-mirror-down']);
+    reflection.update(renderer, scene, mainCamera(0, 1.6, 0, 0, 0), 0);
+    const t = target as unknown as THREE.WebGLRenderTarget;
+    expect(t.texture.generateMipmaps).toBe(false);
+    expect((t.texture.mipmaps as unknown[]).length).toBe(MIRROR_LEVELS);
+    // the scene into level 0 (prepass + shading), then one downsample per level
+    const downs = log.filter((e) => e === 'quad:br-mirror-down').length;
+    expect(downs).toBe(MIRROR_LEVELS - 1);
+    expect(log.indexOf('quad:br-mirror-down')).toBeGreaterThan(log.lastIndexOf('scene'));
+    // each level blitted into the mirror's chain: 500 x 250 ... 3 x 1
+    expect(log.filter((e) => e.startsWith('blit:'))).toEqual(['blit:500x250', 'blit:250x125', 'blit:125x62', 'blit:62x31',
+      'blit:31x15', 'blit:15x7', 'blit:7x3', 'blit:3x1']);
+    // fp32 weighted means, clamped to the surfaces' HDR_CLAMP (fits a half float)
+    expect(reflection.materials[0].uniforms.uMax.value).toBe(HDR_CLAMP);
+    expect(HDR_CLAMP).toBeLessThan(65504);
+    reflection.dispose();
+  });
+});
 
 describe('reflection draw culling', () => {
   it('skips water and wholly distant props, and restores visibility and renderer state after an error', () => {
