@@ -31,7 +31,7 @@ import { acquire, status as budgetStatus, WEIGHTS, pageWeight } from '../lib/bud
 import { createGovernor, findInTree } from '../lib/procmem.mjs';
 import {
   Lane, CAPTURE_CODE_HASH, READY_TIMEOUT_MS, launchBrowser, warmGpu, withTimeout,
-  parseSize, planOrder, shotFileName, captureFileName, treeFeatures, isGameShot,
+  parseSize, planOrder, shotFileName, captureFileName, treeFeatures, isGameShot, streamsCaptureSet, needsFreshPage,
 } from '../lib/capture.mjs';
 import { ensureBuild, buildIndex, RENDER_DIR, pinnedDistHashes } from './build.mjs';
 import { memoAllowed, memoKey, laneEligible, pickJob, qualityOf, isExclusive } from './policy.mjs';
@@ -396,7 +396,7 @@ function pump() {
 function lane0InPlaceKey() {
   const l0 = lanes[0];
   if (!l0 || new Set(queue.map((j) => j.req.client)).size > 1) return null;
-  return l0.lane.warmKey ?? (l0.job?.features?.bootKeys ? l0.job.warmKey : null);
+  return l0.lane.warmKey ?? (l0.job?.inPlace ? l0.job.warmKey : null);
 }
 
 /** Lane 0 holds a heavy page (ultra, >= 1440p): a second page would take the tree past the 3.2 GB PSS cap. */
@@ -437,11 +437,14 @@ async function runLane(l) {
       // between jobs: a fresh PSS sample (the 5 s sampler misses short peaks); over the cap, this lane's warm page goes,
       // and the browser too if that is not enough and nothing else runs
       // (PSS <= RSS: only a tree RSS over the cap needs the ~100 ms PSS read)
-      const over = async () => gov.last.rssMb > RECYCLE_PSS_MB && (await gov.samplePssAsync()) > RECYCLE_PSS_MB;
-      if (gov.takeRecycle() || (await over())) {
+      // (only fresh samples decide: the timer's flag may predate a close)
+      const over = async () => { gov.step(); return gov.last.rssMb > RECYCLE_PSS_MB && (await gov.samplePssAsync()) > RECYCLE_PSS_MB; };
+      gov.takeRecycle();
+      if (await over()) {
         log(`lane ${l.id}: tree PSS ${gov.last.pssMb} MB over ${RECYCLE_PSS_MB} MB: closing its page`);
         await closeLanePage(l);
-        gov.step();
+        // let the closed page's renderer go before the next boot (a close + boot overlap reached 4.2 GB)
+        for (let i = 0; i < 15 && (gov.step(), gov.last.rssMb > RECYCLE_PSS_MB); i++) await new Promise((r) => setTimeout(r, 100));
         if ((await over()) && lanes.every((x) => !x.job)) await closeBrowser('tree PSS over the cap');
       }
       const gpu = gov.last.byClass?.gpu?.rss ?? 0;
@@ -573,6 +576,8 @@ async function handleRender(body, res) {
       const job = {
         req, shot, index: i, side: sides.indexOf(side), out: side.out, root: side.root, features: side.features, distHash: side.build.distHash, rank,
         exclusive: isExclusive(shot, req),
+        // the lane will keep this shot's page and move it in place (contract-v2 tree, capture-set streaming)
+        inPlace: !!side.features.bootKeys && streamsCaptureSet(search) && !needsFreshPage(shot) && !req.freshPages,
         warmKey: isGameShot(shot) ? `${side.root}\n${probe.keyOf(shot, search, { size: req.size, hc: req.hc, features: side.features })}` : null,
         memoKey: null,
       };

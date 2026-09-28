@@ -204,6 +204,13 @@ export function bootKey(shot, search, { size, hc = PAGE_HC, bootKeys = null } = 
   return JSON.stringify([shot.page ?? '', `${width}x${height}`, hc, ...keys.map((k) => [k, p.getAll(k).join(',')])]);
 }
 
+/**
+ * In-place moves pay off only for pages that stream the capture set (stream=capture: shoot, ab). A page with full
+ * streaming (QA keeps it, so its draw-call and tile checks see what players get) re-streams its whole radius after
+ * a move and grows to the 3.2 GB tree cap: QA zones warm took 98 s in place vs 86 s on fresh pages.
+ */
+export function streamsCaptureSet(search) { return new URLSearchParams(search).get('stream') === 'capture'; }
+
 /** Whether a shot must boot its own page even when a warm page with the same boot key exists. */
 export function needsFreshPage(shot) {
   return !isGameShot(shot) || !!shot.fresh || FRESH_PRESETS.has(shot.preset);
@@ -549,7 +556,7 @@ export class Lane {
         tainted ||= r.tainted;
         mark('qa');
       }
-      keep = this.keepPages && !o.fresh && isGameShot(shot) && !needsFreshPage(shot) && !tainted && !sink.crashed && entry.errors.length === 0 &&
+      keep = this.keepPages && !o.fresh && streamsCaptureSet(search) && isGameShot(shot) && !needsFreshPage(shot) && !tainted && !sink.crashed && entry.errors.length === 0 &&
         entry.captureGate >= 2 && info?.load === true && !this.recycleWanted;
     } catch (err) {
       entry.errors.push('SHOT ERROR: ' + (err?.message ?? String(err)));
