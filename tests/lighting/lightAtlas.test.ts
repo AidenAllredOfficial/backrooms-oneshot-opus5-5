@@ -9,7 +9,7 @@ import { CellFlag, Mood, Zone, type StoreyId } from '../../src/core/ids.ts';
 import { createEmptyLayout } from '../../src/core/layout.ts';
 import type { ChunkLayout } from '../../src/core/layout.ts';
 import type { TileRuntime, WorldQuery } from '../../src/core/runtime.ts';
-import { channelSlot, LA, LA_BIT, laMaskIndex, laSlot, LightAtlas, lightAtlasGlsl } from '../../src/lighting/LightAtlas.ts';
+import { channelSlot, LA, LA_BIT, laInWindow, laMaskIndex, laSlot, LightAtlas, lightAtlasGlsl } from '../../src/lighting/LightAtlas.ts';
 import { slotLut } from '../../src/materials/chunks/params.ts';
 
 const N = LV.NX * LV.NY * LV.NZ * 4;
@@ -116,6 +116,32 @@ describe('light atlas', () => {
     expect(cm.x).toBeCloseTo(LA.SPAN - 1, 9);
     expect(cm.y).toBe(1.6);
     expect(cm.z).toBeCloseTo(2, 9);
+  });
+
+  it('samples only inside the planned 7 x 7-tile window: a point 4 tiles off, whose wrapped slot is VALID, finds nothing', () => {
+    // camera positions: tile interiors, the wrap seam, a tile's first texel and the last metre before the seam
+    for (const [camX, camZ] of [[5, 5], [-1, LA.SPAN + 2], [3 * TILE_SIZE, -0.001], [1234.5, -987.25]]) {
+      const cm = (v: number): number => ((v % LA.SPAN) + LA.SPAN) % LA.SPAN;
+      const mx = cm(camX), mz = cm(camZ);
+      const gx0 = Math.floor(camX / TILE_SIZE), gz0 = Math.floor(camZ / TILE_SIZE);
+      for (let dt = -5; dt <= 5; dt++) {
+        for (const f of [0.02, 0.5, 0.98]) {
+          // a world point in global tile gx0 + dt (x) and gz0 - dt (z), as the shader sees it: rel + uLaCamMod
+          const wx = (gx0 + dt + f) * TILE_SIZE, wz = (gz0 - dt + f) * TILE_SIZE;
+          const inside = Math.abs(dt) <= 3; // plan(): |gt - gt0| <= (TILES - 1) / 2
+          expect(laInWindow(wx - camX + mx, wz - camZ + mz, mx, mz), `cam ${camX},${camZ} dt ${dt} f ${f}`).toBe(inside);
+          // x alone out of the window is enough
+          expect(laInWindow(wx - camX + mx, camZ - camZ + mz, mx, mz)).toBe(inside);
+        }
+      }
+    }
+    // the GLSL twin: the same window, tested before the mask
+    const g = lightAtlasGlsl();
+    const body = g.slice(g.indexOf('bool brLaSample('));
+    expect(body).toMatch(/vec2 ct = floor\( uLaCamMod\.xz \* [\d.]+ \);/);
+    expect(body).toContain(`( ct - 3.0 ) * ${TILE_SIZE}`);
+    expect(body).toContain(`( ct + 4.0 ) * ${TILE_SIZE}`);
+    expect(body.indexOf('return false;')).toBeLessThan(body.indexOf('texelFetch( uLaMask'));
   });
 
   it('plans only changed tiles, nearest first; re-queues on a version bump; clears tiles that leave, and storey switches', () => {

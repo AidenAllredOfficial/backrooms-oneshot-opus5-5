@@ -246,9 +246,11 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 export const CONCRETE_RECIPES: RecipeTable = {
-  [Mat.CONCRETE_FLOOR]: { glsl: CONCRETE_FLOOR, normalStrength: 1.0, heightScale: 0.004 },
-  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 1.0, heightScale: CONCRETE_WALL_HS },
-  [Mat.CONCRETE_CEIL]: { glsl: CONCRETE_CEIL, normalStrength: 1.0, heightScale: 0.005 },
+  // normalStrength (as the wall coverings, textures/layers/wallpaper.ts): the trowelled slab, the formwork face and the
+  // board-formed soffit had mip-0 slopes of 0.006 / 0.015 / 0.024 (0.3-1.4 degrees) and shaded flat
+  [Mat.CONCRETE_FLOOR]: { glsl: CONCRETE_FLOOR, normalStrength: 6.0, heightScale: 0.004 },
+  [Mat.CONCRETE_WALL]: { glsl: CONCRETE_WALL, normalStrength: 5.0, heightScale: CONCRETE_WALL_HS },
+  [Mat.CONCRETE_CEIL]: { glsl: CONCRETE_CEIL, normalStrength: 3.0, heightScale: 0.005 },
   [Mat.CMU_PAINTED]: { glsl: CMU_PAINTED, normalStrength: 1.0, heightScale: CMU_HS },
   [Mat.FLOOR_PAINT]: { glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0003 },
   [Mat.TERRAZZO]: { glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.001 },

@@ -161,9 +161,16 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// normalStrength: these heightScales keep the relief at its real depth (a few tenths of a millimetre: POM, cavity AO and
+// the grime masks read it), but the authored height fields are smoother than the real surfaces, whose emboss, knockdown
+// and orange peel reach 3-10 degree micro-slopes over 1-5 mm. At 1x the normals stayed under 1 degree (mip-0 tan mean
+// 0.007-0.015) and the walls shaded flat under any light; the strengths bring the Level 0 wallpaper and the drywall to
+// ~0.07-0.08 (manila and trim stay near 0.015: the linen is finer than a texel, and semi-gloss enamel is smooth). They
+// act before the mips (Toksvig and LEAN see the same slopes). Props that need a plain matte surface do not borrow these
+// layers (kraft boxes on DRYWALL read as stucco).
 export const WALL_RECIPES: RecipeTable = {
-  [Mat.WALLPAPER_L0]: { glsl: WALLPAPER_L0, normalStrength: 1.0, heightScale: 0.0008 },
-  [Mat.WALLPAPER_MANILA]: { glsl: WALLPAPER_MANILA, normalStrength: 1.0, heightScale: 0.0006 },
-  [Mat.DRYWALL]: { glsl: DRYWALL, normalStrength: 1.0, heightScale: 0.0005 },
-  [Mat.TRIM_PAINT]: { glsl: TRIM_PAINT, normalStrength: 1.0, heightScale: 0.0003 },
+  [Mat.WALLPAPER_L0]: { glsl: WALLPAPER_L0, normalStrength: 6.0, heightScale: 0.0008 },
+  [Mat.WALLPAPER_MANILA]: { glsl: WALLPAPER_MANILA, normalStrength: 6.0, heightScale: 0.0006 },
+  [Mat.DRYWALL]: { glsl: DRYWALL, normalStrength: 10.0, heightScale: 0.0005 },
+  [Mat.TRIM_PAINT]: { glsl: TRIM_PAINT, normalStrength: 4.0, heightScale: 0.0003 },
 };

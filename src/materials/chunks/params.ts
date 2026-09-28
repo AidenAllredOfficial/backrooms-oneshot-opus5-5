@@ -70,7 +70,7 @@ export const SURFACE_PHYS: Readonly<Record<MatId, SurfacePhys>> = {
   [Mat.CONCRETE_WALL]: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8 }),
   [Mat.CONCRETE_CEIL]: phys(0.6, { det: 4, detS: 0.8 }),
   [Mat.CMU_PAINTED]: phys(0.3, { pomTop: 0.8, tok: 0.6, det: 3, detS: 0.8 }),
-  [Mat.POOL_TILE]: phys(0.08, { pomTop: 0.9, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
+  [Mat.POOL_TILE]: phys(0.08, { pomTop: 0.75, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
   [Mat.POOL_MOSAIC]: phys(0.05, { pomTop: 0.7, tok: 0.3, det: 6, detS: 0.7, glaze: 0.1, roughComp: 0.7 }),
   [Mat.METAL_PAINTED]: phys(0.05, { det: 3, detS: 0.6 }),
   [Mat.METAL_RUST]: phys(0.4, { det: 4, detS: 0.6 }),
