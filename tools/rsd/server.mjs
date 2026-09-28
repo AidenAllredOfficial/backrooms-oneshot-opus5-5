@@ -29,10 +29,11 @@ import { pathToFileURL } from 'node:url';
 import { acquire, status as budgetStatus, WEIGHTS, pageWeight } from '../lib/budget.mjs';
 import { createGovernor, findInTree } from '../lib/procmem.mjs';
 import {
-  Lane, CAPTURE_CODE_HASH, LONG_PRESETS, NO_MEMO_PRESETS, READY_TIMEOUT_MS, launchBrowser, warmGpu, withTimeout,
+  Lane, CAPTURE_CODE_HASH, LONG_PRESETS, READY_TIMEOUT_MS, launchBrowser, warmGpu, withTimeout,
   parseSize, planOrder, shotFileName, captureFileName, treeFeatures, isGameShot,
 } from '../lib/capture.mjs';
 import { ensureBuild, buildIndex, RENDER_DIR, pinnedDistHashes } from './build.mjs';
+import { memoAllowed, memoKey, laneEligible, pickJob, qualityOf } from './policy.mjs';
 import { RUN_DIR, DAEMON_JSON, daemonVersion } from './client.mjs';
 
 const VERSION = daemonVersion();
@@ -73,7 +74,7 @@ let lastActivity = Date.now();
 const requests = new Map(); // id -> request
 let nextReq = 1;
 const queue = []; // jobs
-let rr = 0; // round-robin cursor over client ids
+let lastClient = null; // round robin: the client served last
 const lanes = []; // { id, lane, busy, lease, job }
 let browser = null;
 let browserP = null;
@@ -152,8 +153,15 @@ async function serveTileCache(req, res, cfg) {
   if (!hit) { res.statusCode = 404; res.end(); return; }
   const [p, fn] = hit;
   req.url = req.url.slice(p.replace(/\/$/, '').length) || '/'; // connect strips the mount path
+  if (req.method === 'GET') res.once('finish', () => noteCacheGet(res.statusCode === 200));
   fn(req, res, () => { res.statusCode = 404; res.end(); });
 }
+
+// recent tile-cache GETs: a mostly-missing cache means cold locations, where a second page only splits the
+// memory-bandwidth-bound bake between 8 workers instead of 4 (no gain, +0.6 GB), so lane 1 stays closed
+const cacheWindow = [];
+function noteCacheGet(hit) { cacheWindow.push(hit ? 1 : 0); if (cacheWindow.length > 200) cacheWindow.shift(); }
+function coldCache() { return cacheWindow.length >= 20 && cacheWindow.reduce((a, x) => a + x, 0) / cacheWindow.length < 0.75; }
 
 // one origin per tile-cache setting (the worker addresses /__tilecache/ on its own origin)
 const origins = new Map(); // `${dir}\0${mb}` -> { url, server }
@@ -273,25 +281,6 @@ function evictMemo() {
   memoStats.entries = memo.size;
 }
 
-/** Canonical form of a shot for the memo key: its final params sorted (minus autostart / noprime) and everything
- * else that changes the capture or its report. */
-function canonicalShot(shot, search, r) {
-  const p = [...new URLSearchParams(search)].filter(([k]) => k !== 'autostart' && k !== 'noprime').sort((a, b) => (a[0] + '=' + a[1] < b[0] + '=' + b[1] ? -1 : 1));
-  const { width, height } = parseSize(shot.size ?? r.size);
-  return [p, shot.page ?? '', `${width}x${height}`, shot.wait ?? r.wait ?? null, r.evals ?? [], shot.eval ?? [], shot.captures ?? null, shot.expect ?? null, shot.diff ?? null, !!r.qa,
-    new URLSearchParams(String(shot.params ?? '')).get('autostart') === '0'];
-}
-
-function memoAllowed(shot, r) {
-  if (!r.memo || shot.fresh || NO_MEMO_PRESETS.has(shot.preset)) return false;
-  if ((r.evals?.length ?? 0) > 0 || (shot.eval?.length ?? 0) > 0) return false; // evals may measure time
-  return true;
-}
-
-function memoKeyOf(distHash, shot, search, r, bkey) {
-  return createHash('sha1').update(JSON.stringify([distHash, canonicalShot(shot, search, r), r.hc, bkey, CAPTURE_CODE_HASH])).digest('hex');
-}
-
 /** Copies a memo entry's files into the job's out dir and returns the result message (null on a miss). */
 function memoGet(key, job) {
   const e = memo.get(key);
@@ -345,29 +334,13 @@ function memoPut(key, distHash, entry, qa) {
 
 // ---------------------------------------------------------------- scheduling
 
-function qualityOf(shot) { return new URLSearchParams(String(shot.params ?? '')).get('quality') ?? 'high'; }
-function isLong(job) { return job.long; }
-function laneOk(laneIdx, job) {
-  if (laneIdx === 0) return true;
-  const { width, height } = parseSize(job.shot.size ?? job.req.size);
-  return !job.long && qualityOf(job.shot) !== 'ultra' && width * height <= 1920 * 1080;
-}
-
-/** Next job for a lane: round-robin over clients; within the client prefer the lane's warm-page boot key. */
+/** Next job for a lane (policy.mjs pickJob), removed from the queue. */
 function takeJob(l) {
   if (!queue.length) return null;
-  const clients = [...new Set(queue.map((j) => j.req.client))];
-  for (let k = 0; k < clients.length; k++) {
-    const c = clients[(rr + k) % clients.length];
-    const mine = queue.filter((j) => j.req.client === c && laneOk(l.id, j) && !(isLong(j) && longRunning > 0));
-    if (!mine.length) continue;
-    const warm = l.lane.warmKey;
-    const pick = (warm && mine.find((j) => j.warmKey === warm)) || mine[0];
-    queue.splice(queue.indexOf(pick), 1);
-    rr = (rr + k + 1) % Math.max(1, clients.length);
-    return pick;
-  }
-  return null;
+  const r = pickJob(queue, l.id, { warmKey: l.lane.warmKey, longRunning, last: lastClient });
+  lastClient = r.last;
+  if (r.job) queue.splice(queue.indexOf(r.job), 1);
+  return r.job;
 }
 
 function newLaneSlot(id) {
@@ -389,7 +362,7 @@ function pump() {
   if (stopping) return;
   if (!lanes[0]) newLaneSlot(0);
   if (!lanes[0].busy && queue.length) void runLane(lanes[0]);
-  if (MAX_LANES > 1 && gov.state === 'ok' && queue.some((j) => laneOk(1, j))) {
+  if (MAX_LANES > 1 && gov.state === 'ok' && !coldCache() && queue.some((j) => laneEligible(1, j))) {
     const l1 = lanes[1] ?? newLaneSlot(1);
     // a refused second page is retried at most every 2 s
     if (!l1.busy && (lanes[0].busy || queue.length > 1) && Date.now() - (l1.refusedAt ?? 0) > 2000) void runLane(l1);
@@ -416,7 +389,7 @@ async function runLane(l) {
   try {
     for (;;) {
       if (stopping) break;
-      if (l.id > 0 && gov.state !== 'ok') break;
+      if (l.id > 0 && (gov.state !== 'ok' || coldCache())) break;
       const job = takeJob(l);
       if (!job) break;
       if (job.req.cancelled) { finishJob(job, null); continue; }
@@ -556,7 +529,7 @@ async function handleRender(body, res) {
         warmKey: isGameShot(shot) ? `${side.root}\n${probe.keyOf(shot, search, { size: req.size, hc: req.hc, features: side.features })}` : null,
         memoKey: null,
       };
-      if (bkey && memoAllowed(shot, req)) job.memoKey = memoKeyOf(side.build.distHash, shot, search, req, bkey);
+      if (bkey && memoAllowed(shot, req)) job.memoKey = memoKey({ distHash: side.build.distHash, shot, search, r: req, browserKey: bkey, codeHash: CAPTURE_CODE_HASH });
       jobs.push(job);
     });
   }
@@ -587,6 +560,7 @@ function statusObj(quick) {
     mem: { ...gov.last, state: gov.state, peak: gov.peak },
     builds: builds.size,
     memo: { ...memoStats },
+    tileCache: { recentGets: cacheWindow.length, recentHitRate: cacheWindow.length ? +(cacheWindow.reduce((a, x) => a + x, 0) / cacheWindow.length).toFixed(2) : null, cold: coldCache() },
   };
   if (!quick) s.budget = budgetStatus();
   return s;

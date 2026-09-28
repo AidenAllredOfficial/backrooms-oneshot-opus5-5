@@ -168,7 +168,7 @@ function rowPixels(a, b, dmax, S) {
   return { px, W, ch };
 }
 
-function writeSheets(out, rows, header, S) {
+function writeSheets(out, rows, header) {
   if (!rows.length) return [];
   const W = rows[0].W;
   const perSheet = Math.max(1, Math.floor((SHEET_MAX_H - LABEL_H) / (rows[0].ch + LABEL_H)));
@@ -280,7 +280,7 @@ export async function main(argv) {
     }
   }
   const header = `BASE ${base.label.slice(0, 40)} ${res.builds[0]?.distHash?.slice(0, 10) ?? ''} | TEST ${path.basename(o.test)} ${res.builds[1]?.distHash?.slice(0, 10) ?? ''} | DIFF X4, RED > 8 LEVELS`;
-  const sheets = writeSheets(out, rows, header, o.scale);
+  const sheets = writeSheets(out, rows, header);
   const report = {
     date: new Date().toISOString(), base: { ...base, build: res.builds[0] }, test: { tree: o.test, build: res.builds[1] }, size: `${width}x${height}`,
     renderMs: Math.round(tRender), totalMs: Math.round(performance.now() - T0), sheets, shots: summary,
