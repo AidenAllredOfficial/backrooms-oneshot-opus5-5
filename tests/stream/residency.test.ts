@@ -958,6 +958,38 @@ describe('automation capture gate v2 (StreamerOptions.capture)', () => {
     r.st.dispose();
   });
 
+  it('forgetPosition (load() in place): a storey switch re-targets at the next position, not at the old x/z', () => {
+    const keysOf = (js: FakeJob[]): string[] => js.map((j) => {
+      const k = (j.req as { key?: ChunkKey | TileKey }).key;
+      return k ? `${j.req.t}:${'q' in k ? tileKeyStr(k) : chunkKeyStr(k)}` : j.req.t;
+    });
+    for (const forget of [false, true]) {
+      const { r, cc, closed } = gated('capture');
+      closed.v = false;
+      r.tick(P, P); // storey 0, chunk (0, 0)
+      const n0 = r.pool.jobs.length;
+      if (forget) cc.forgetPosition();
+      r.st.switchStorey(1);
+      const atOld = keysOf(r.pool.jobs.slice(n0));
+      // stairs / lifts (no forget): the new storey streams at once around the same x/z
+      if (!forget) expect(atOld.some((k) => k.endsWith(':1:0:0') || k.includes(':1:0:0:'))).toBe(true);
+      else expect(atOld).toEqual([]);
+      if (!forget) { r.st.dispose(); continue; }
+      const X = 10 * C + C / 2;
+      closed.v = true; // the load's gate
+      r.tick(X, P);
+      const next = r.pool.pending();
+      expect(next.length).toBeGreaterThan(0);
+      for (const j of next) {
+        const k = (j.req as { key?: ChunkKey }).key;
+        if (!k) continue;
+        expect(k.s).toBe(1);
+        expect(Math.abs(k.cx - 10)).toBeLessThanOrEqual(2);
+      }
+      r.st.dispose();
+    }
+  });
+
   it('players are untouched: no capture options, no gate flags, no holding', async () => {
     const r = rig(Q);
     r.tick(P, P);

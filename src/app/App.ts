@@ -567,6 +567,8 @@ export function createApp(root: HTMLElement): App {
       // the pose exactly as a boot resolves it: from the seed's base spawn, never from the current position
       const { sp, explicit } = await resolveSpawn(core, s.streamer);
       s.spawn = { ...sp, reason: explicit ? 'explicit' : sp.reason };
+      // the streamer re-targets from the new pose at the next frame (not the new storey at the old x/z)
+      getCaptureControl(s.streamer)?.forgetPosition();
       s.streamer.switchStorey(sp.s);
       s.player.teleport(sp.s, sp.x, explicit && params.y === null ? null : sp.y, sp.z, sp.yaw, sp.pitch);
       s.player.setFly(params.fly);

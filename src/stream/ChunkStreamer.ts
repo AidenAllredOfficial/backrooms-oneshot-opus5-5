@@ -81,6 +81,11 @@ export interface CaptureControl {
   readonly scope: StreamScope;
   /** switch the desired set ('capture' after 'full' evicts the rest progressively) */
   setScope(s: StreamScope): void;
+  /** Forget the player's last position: nothing is re-targeted until the next update, which starts from its own
+   * x/z. __backrooms.load() calls it before it moves the player: switchStorey re-targets the new storey at once at
+   * the LAST x/z (right for stairs and lifts), which for a shot in place meant layouts and full builds for the
+   * previous shot's place (the first in-view jobs reach the workers before the next update can cancel them). */
+  forgetPosition(): void;
   stats(): { gateTiles: number; gateReady: number; gateChunks: number; scope: StreamScope };
 }
 const captureControls = new WeakMap<WorldStreamer, CaptureControl>();
@@ -1307,6 +1312,10 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       if (sc === scope) return;
       scope = sc;
       dirty = true; // the next update re-targets with the new scope (and starts what it wants)
+    },
+    forgetPosition() {
+      pcx = pcz = lcx = lcz = NaN;
+      dirty = true;
     },
     stats() {
       let gateTiles = 0, gateReady = 0, gateChunks = 0;

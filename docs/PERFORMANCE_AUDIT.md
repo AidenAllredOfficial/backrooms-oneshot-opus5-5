@@ -147,8 +147,12 @@ reached 3.6-3.8 GB with the ultra radius resident.
   opens would bring a cold location to the reads-only time (8.0-8.2 s instead of 8.7 s at high). A page closed
   right after its capture would lose the held entries, so the tools would have to wait for a flush first
   (a `__backrooms` flush call), and the held entries cost up to 50 MB per bake worker at high.
-- **The remaining in-place misses** (3-4 entries on a first visit to a new place, 0 on the second pass) are not
-  identified; they are computed once and cached.
+- **The remaining in-place misses** (3-4 entries on a first visit to a new place, 0 on the second pass) were a
+  storey change: `switchStorey` re-targets the new storey at once at the last x/z (right for stairs and lifts), so
+  `load()` started a layout and 3 full builds for the previous shot's place on the new storey before its first
+  frame could cancel them (up to three wasted full bakes on a cold cache). `load()` now calls
+  `getCaptureControl(streamer).forgetPosition()` first: an in-place load requests exactly the jobs a fresh page does
+  (65 of 65 on PARKING after POOLROOMS).
 
 ### Methodology
 
