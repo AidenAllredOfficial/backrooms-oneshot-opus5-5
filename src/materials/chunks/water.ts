@@ -81,6 +81,11 @@ export const WATER_SURFACE = {
   STANDIN_K1: 2.5,
   STANDIN_K: 1.15,
   STANDIN_LOD: 3,
+  /** the reference is raised to the stand-in's own surroundings (the least bright of 4 taps STANDIN_R of the screen
+   * height away, same mip: the wall around a lamp's copy, lit by the lamp), at most STANDIN_CAP x the exit scene: the
+   * exit scene alone is darker there, and the copy turned into a flat dark hole in the wall */
+  STANDIN_R: 0.04,
+  STANDIN_CAP: 2,
   /** a thing on the water (a lane-rope float) reaches this deep below the surface (m; at most half the water's
    * depth): past it the scene counts as visible again, its submerged half is not the floor */
   STRIP_DEPTH: 0.15,
@@ -364,6 +369,8 @@ export function waterVolumeGlsl(): string {
 #define BR_WSTAND_K1 ${f(W.STANDIN_K1)}
 #define BR_WSTAND_K ${f(W.STANDIN_K)}
 #define BR_WSTAND_LOD ${f(W.STANDIN_LOD)}
+#define BR_WSTAND_R ${f(W.STANDIN_R)}
+#define BR_WSTAND_CAP ${f(W.STANDIN_CAP)}
 #define BR_WSTRIP_DEPTH ${f(W.STRIP_DEPTH)}
 #define BR_WTHIN ${f(W.THIN)}
 // view-space point -> pyramid uv (the pyramid spans the whole view at any scale)
@@ -597,9 +604,10 @@ void brWSceneCol( vec2 uv, float L, int kind, out vec4 cs, out vec3 Cb ) {
 // Radiance leaving the water body toward the surface (before the interface): the scene at uvH (a stand-in by alt.w,
 // brWRefract) through the medium of the kind over the refracted path L (cosT = its cosine to the vertical), lit
 // ambiently by irr (lux). Where the screen-edge mirror or its neighbourhood (mip BR_WSTAND_LOD) is BR_WSTAND_K0..K1
-// times brighter than the scene where the ray's image left the screen (alt.xy, same mip), its luma is clamped to within
-// BR_WSTAND_K of that scene's, hue kept: a copy of a lamp and of its dark bezel fades into the stand-in's texture,
-// which stays elsewhere (a clamp everywhere drew streaks along the rays). Behind a thing on the water (alt.w = 2) the
+// times brighter than the reference (the scene where the ray's image left the screen, alt.xy, same mip, raised to the
+// stand-in's own surroundings: up to BR_WSTAND_CAP x), its luma is clamped to within BR_WSTAND_K of the reference, hue
+// kept: a copy of a lamp and of its dark bezel fades into the stand-in's texture, which stays elsewhere (a clamp
+// everywhere drew streaks along the rays). Behind a thing on the water (alt.w = 2) the
 // two sides' colours are blended by alt.z. st = the extinction (for the in-water light integrals).
 vec3 brWVolume( vec2 uvH, vec4 alt, float L, float cosT, int kind, vec3 irr, out vec3 st ) {
 	vec3 sa = BR_WM_SA[ kind ];
@@ -620,6 +628,11 @@ vec3 brWVolume( vec2 uvH, vec4 alt, float L, float cosT, int kind, vec3 irr, out
 	}
 	if ( alt.w > 0.5 && alt.w < 1.5 ) {
 		float lR = brLuma( textureLod( uSceneColor, alt.xy, BR_WSTAND_LOD ).rgb ) + 1e-4;
+		vec2 o = BR_WSTAND_R * vec2( uSceneInvSize.x / uSceneInvSize.y, 1.0 );
+		float lG = min(
+			min( brLuma( textureLod( uSceneColor, uvH + vec2( o.x, 0.0 ), BR_WSTAND_LOD ).rgb ), brLuma( textureLod( uSceneColor, uvH - vec2( o.x, 0.0 ), BR_WSTAND_LOD ).rgb ) ),
+			min( brLuma( textureLod( uSceneColor, uvH + vec2( 0.0, o.y ), BR_WSTAND_LOD ).rgb ), brLuma( textureLod( uSceneColor, uvH - vec2( 0.0, o.y ), BR_WSTAND_LOD ).rgb ) ) );
+		lR = clamp( lG, lR, BR_WSTAND_CAP * lR ); // the stand-in's own surroundings, within [1, CAP] x the exit scene
 		float lS = brLuma( cs.rgb ) + 1e-4, lB = brLuma( Cb ) + 1e-4;
 		float lD = brLuma( textureLod( uSceneColor, uvH, BR_WSTAND_LOD ).rgb ); // the stand-in's neighbourhood
 		float v = smoothstep( BR_WSTAND_K0, BR_WSTAND_K1, max( lD, lS ) / lR );
