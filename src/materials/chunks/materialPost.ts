@@ -2,8 +2,9 @@
 // fills `material`) and before lights_fragment_begin computes material.dfg, so every light path (baked direct,
 // flashlight, ambient, reflections, the MRT fallback) sees them. Fixed order: wet F0 -> glaze coverage -> sheen
 // (USE_SHEEN) -> clearcoat fields (USE_CLEARCOAT, props) -> spec AA (BR_SPEC_AA, on roughness and
-// clearcoatRoughness) last. Inputs are the main-scope values of chunks/surface.ts (brFilm, brPuddle, brCov, brAbs,
-// brWear, brPileLean, brDust); brCoat is declared here for package D (coat radiance, G-buffer routing).
+// clearcoatRoughness) -> the punctual lights' diffuse albedo (brPunctAlb, chunks/surface.ts FRAG_EMISSIVE). Inputs
+// are the main-scope values of chunks/surface.ts (brFilm, brPuddle, brCov, brAbs, brWear, brPileLean, brDust); brCoat
+// is declared here for package D (coat radiance, G-buffer routing).
 
 /** Injected after `#include <lights_physical_fragment>`. */
 export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `
@@ -22,12 +23,12 @@ export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `
 	material.specularColorBlended *= brGk;
 	material.specularF90 *= brGk;
 }
-// 3. textile sheen (Charlie lobe): fibre-tinted, lost where the pile is wet or crushed; the pile lean seen from the
-// camera narrows / widens it
+// 3. textile sheen (Charlie lobe): fibre-tinted, lost where the pile is wet or crushed (and under standing water); the
+// pile lean seen from the camera narrows / widens it
 #ifdef USE_SHEEN
 {
 	vec4 brLD = uBrLayerD[ brL ];
-	material.sheenColor = brLD.z * sqrt( max( diffuseColor.rgb, vec3( 0.0 ) ) ) * ( 1.0 - 0.85 * max( brFilm, brAbs ) ) * ( 1.0 - 0.4 * brWear );
+	material.sheenColor = brLD.z * sqrt( max( diffuseColor.rgb, vec3( 0.0 ) ) ) * ( 1.0 - 0.85 * max( brFilm, brAbs ) ) * ( 1.0 - 0.4 * brWear ) * ( 1.0 - brPuddle );
 	material.sheenRoughness = clamp( brLD.w + BR_SHEEN_LEAN_ROUGH * brPileLean, 0.07, 1.0 );
 }
 #endif
@@ -55,4 +56,9 @@ material.clearcoatF90 = 1.0;
 #endif
 }
 #endif
+// 6. punctual lights (three's lights_fragment_begin: the flashlight) see the emitter model's own diffuse albedo where it
+// sets one (brPunctAlb: a parabolic louver's blades mirror a torch at the eye away instead of glowing like white
+// paint); chunks/lighting.ts puts the room's back before the baked light
+vec3 brDiffRoom = material.diffuseContribution;
+if ( brPunctAlb >= 0.0 ) material.diffuseContribution = vec3( brPunctAlb ) * ( 1.0 - metalnessFactor );
 `;

@@ -141,6 +141,32 @@ describe('shader sources', () => {
     expect(SSR_COMPOSITE_SPECULAR).toContain('vec2 tf = vec2( p ) / uSsrP.z;');
   });
 
+  it('a texel averages its whole block and traces a normal-mapped block along the macro (depth) normal', () => {
+    // every pixel of the step x step block (ultra's 3x3 too, not a 2x2 subset)
+    expect(SSR_TRACE_FRAG).toContain('for ( int k = 1; k < uStep * uStep; k ++ )');
+    // ...of the representative's lobe only (a shore block must not blend a mirror with the wet carpet around it)
+    expect(SSR_TRACE_FRAG).toContain('if ( gk.a < 0.5 || abs( gk.b - g.b ) > BR_SSR_BLOCK_DR ) continue;');
+    // disagreeing normals (1 - |mean| over NVAR) move the traced lobe to the depth normal; the cone keeps the spread
+    expect(SSR.NVAR[0]).toBeLessThan(SSR.NVAR[1]);
+    // ...the macro normal is the mean depth normal of the texel and its 4 neighbours, used where they agree with each
+    // other and with the block's mean (one pixel's depth slope at sub-pixel geometry, far ceiling-grid T-bars, is noise:
+    // traced along it they sparkled along every far grid line); the below-surface test uses the same normal
+    expect(SSR_TRACE_FRAG).toContain('Ng += brDepthNormal( clamp( p + o, ivec2( 0 ), lim ) );');
+    expect(SSR.NCOH[0]).toBeLessThan(SSR.NCOH[1]);
+    expect(SSR.NAGREE[0]).toBeLessThan(SSR.NAGREE[1]);
+    // a corrugation's partial-period mean (up to ~35 deg off its plane) still takes the macro normal
+    expect(Math.acos(SSR.NAGREE[1]) * 180 / Math.PI).toBeGreaterThan(35);
+    expect(SSR_TRACE_FRAG).toContain('vec3 Nm = normalize( mix( N, Ng, smoothstep( BR_SSR_NCOH0, BR_SSR_NCOH1, coh ) * smoothstep( BR_SSR_NAGREE0, BR_SSR_NAGREE1, dot( N, Ng ) ) ) );');
+    expect(SSR_TRACE_FRAG).toContain('vec3 Nt = normalize( mix( N, Nm, smoothstep( BR_SSR_NVAR0, BR_SSR_NVAR1, 1.0 - nLen ) ) );');
+    expect(SSR_TRACE_FRAG).toContain('vec3 R = reflect( - V, Nt );');
+    expect(SSR_TRACE_FRAG).toContain('float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );');
+    // rays below the macro surface are left to the fallback
+    const i = SSR_TRACE_FRAG.indexOf('float up = dot( R, Nm );');
+    expect(i).toBeGreaterThan(0);
+    expect(SSR_TRACE_FRAG.indexOf('if ( up <= 0.0 ) return;')).toBeGreaterThan(i);
+    expect(SSR_TRACE_FRAG.indexOf('if ( up <= 0.0 ) return;')).toBeLessThan(SSR_TRACE_FRAG.indexOf('brSsrTrace( P + Nt'));
+  });
+
   it('half-float mips never reach the cone lookups as Inf: the pyramid is clamped, a non-finite lookup is a miss', () => {
     // gl.generateMipmap may sum a 2x2 block of an RGBA16F level in half precision (NVIDIA GL): 4 x PYR_MAX must fit
     expect(4 * PYR_MAX).toBeLessThan(65504);

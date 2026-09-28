@@ -111,6 +111,12 @@ describe('WP9 parameters', () => {
     expect(TUNE.PUDDLE_LO).toBeLessThan(0);
     expect(TUNE.PUDDLE_HI).toBeGreaterThan(0);
     expect(TUNE.PUDDLE_W0).toBeLessThan(TUNE.PUDDLE_W1);
+    // textiles: water stands over the pile only near saturation, after their film has formed (0.85 -> 0.95 at P = 1)
+    expect(TUNE.PUDDLE_PILE_W0).toBeGreaterThan(0.85);
+    expect(TUNE.PUDDLE_PILE_W0).toBeLessThan(TUNE.PUDDLE_PILE_W1);
+    expect(TUNE.PUDDLE_PILE_W1).toBeLessThan(1);
+    // a textile's film is a broad sheen: past high's SSR roughness cut-off
+    expect(TUNE.WET_FILM_ROUGH + TUNE.WET_FILM_ROUGH_POROUS + TUNE.WET_FILM_ROUGH_PILE).toBeGreaterThan(0.45);
     expect(TUNE.PUDDLE_ROUGH).toBeLessThan(TUNE.WET_FILM_ROUGH);
     expect(TUNE.WET_DARK).toBeGreaterThan(0);
     expect(TUNE.WET_DARK).toBeLessThan(1);

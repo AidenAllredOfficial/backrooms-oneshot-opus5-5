@@ -6,7 +6,9 @@
 //   - the owner's floor and ceiling planes;
 //   - occluder box faces (solids and PROP_OCCLUDERS parts) within 0.6 m;
 // plus contact AO under every COLLIDE prop footprint: strength 0.5 at (and under) the footprint edge, falling off
-// smoothly to 0 at 0.3 m beyond it. AO multiplies the indirect term only and is stored in irr.a.
+// smoothly to 0 at 0.3 m beyond it; round bases (VisGrid.contactRound: swivel chairs, bins) a disc instead, 0.5 within
+// CONTACT_CORE of its radius R, falling off smoothly to 0 at R + 0.3 m (under a chair a square read as a grey tile).
+// AO multiplies the indirect term only and is stored in irr.a.
 // Full bakes with the near-field gather (nearfield.ts, bakeNearRays > 0) leave out the prop part boxes and the
 // contact AO of footprints whose prop has a part box standing on the floor (`skipProps`, VisGrid.contactBox): the
 // traced rays see those boxes exactly. Chairs, the lounge chair and pallets (all boxes float above untraced legs,
@@ -26,6 +28,8 @@ import { MAT_PROP, rampHeight } from './visgrid.ts';
 export const aoOut = { ao: 1, wall: 1, wallDist: 10 };
 
 const K2 = 1 / (0.25 * 0.25);
+/** Round contact footprints: the full-strength core's share of the disc radius (a chair's hub and column). */
+export const CONTACT_CORE = 0.35;
 const lineD = new Float64Array(8);
 const fac = (d: number, s: number): number => 1 - s / (1 + d * d * K2);
 
@@ -242,11 +246,21 @@ export function aoAt(job: BakeJob, x: number, y: number, z: number, nx: number, 
       if (g.contactGroup[b] !== group || (skipProps && g.contactBox[b] !== 0)) continue;
       if (Math.abs(g.contactY[b] - (y - 0.02)) > 0.3) continue;
       const o = b * 4;
-      const dx = x < g.contact[o] ? g.contact[o] - x : x > g.contact[o + 2] ? x - g.contact[o + 2] : 0;
-      const dz = z < g.contact[o + 1] ? g.contact[o + 1] - z : z > g.contact[o + 3] ? z - g.contact[o + 3] : 0;
-      const d = Math.sqrt(dx * dx + dz * dz) * CELL;
-      if (d >= 0.3) continue;
-      const u = 1 - d / 0.3;
+      let u: number;
+      if (g.contactRound[b] !== 0) {
+        // a disc of radius R (the footprint's inscribed circle) around the footprint centre
+        const R = 0.5 * Math.min(g.contact[o + 2] - g.contact[o], g.contact[o + 3] - g.contact[o + 1]) * CELL;
+        const r = Math.hypot(x - 0.5 * (g.contact[o] + g.contact[o + 2]), z - 0.5 * (g.contact[o + 1] + g.contact[o + 3])) * CELL;
+        const r0 = CONTACT_CORE * R;
+        if (r >= R + 0.3) continue;
+        u = 1 - Math.max(r - r0, 0) / (R + 0.3 - r0);
+      } else {
+        const dx = x < g.contact[o] ? g.contact[o] - x : x > g.contact[o + 2] ? x - g.contact[o + 2] : 0;
+        const dz = z < g.contact[o + 1] ? g.contact[o + 1] - z : z > g.contact[o + 3] ? z - g.contact[o + 3] : 0;
+        const d = Math.sqrt(dx * dx + dz * dz) * CELL;
+        if (d >= 0.3) continue;
+        u = 1 - d / 0.3;
+      }
       ao *= 1 - 0.5 * u * u * (3 - 2 * u);
     }
   }

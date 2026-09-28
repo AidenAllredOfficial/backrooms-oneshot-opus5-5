@@ -201,11 +201,16 @@ export const TUNE = {
   WET_SAT: 0.35, // ...and raises its saturation by up to this
   WET_FILM_ROUGH: 0.07, // water film roughness on a sealed surface
   WET_FILM_ROUGH_POROUS: 0.25, // ...plus this x porosity (the film is thin and broken over open pores / pile)
+  // ...plus this on textiles (porosity >= 0.95): the fibre tips break the film into menisci, a broad faint sheen (a
+  // glossy 0.32 lobe caught the ceiling lamps through the SSR as bright blotches on soaked carpet)
+  WET_FILM_ROUGH_PILE: 0.3,
   WET_FILM_F0: 0.7, // share of the film that is optically water (F0 0.02 / F90 1; puddles: all of it)
   WET_CLUMP: 0.3, // damp (unsaturated) pile / fibre relief clumps: normal strength x (1 + this)
   SOAK_FLAT: 0.5, // a saturated film flattens porous relief by up to this
   PUDDLE_W0: 0.5, // standing water only above this wetness...
   PUDDLE_W1: 0.95, // ...and the water level reaches PUDDLE_HI here
+  PUDDLE_PILE_W0: 0.92, // textiles (porosity >= 0.95): water stands over the pile only once the floor is saturated
+  PUDDLE_PILE_W1: 0.99,
   PUDDLE_LO: -0.0012, // m, water level relative to the layer's mean relief plane at W0 (cracks, grout, joints fill)
   PUDDLE_HI: 0.0015, // m, at W1 (everything but the highest relief covered)
   PUDDLE_EDGE: 0.0002, // m, shoreline smoothing (grows with the texel footprint up to 8 texels)
@@ -392,11 +397,14 @@ export function glslConstants(): string {
 #define BR_WET_SAT ${f(TUNE.WET_SAT)}
 #define BR_WET_FILM_ROUGH ${f(TUNE.WET_FILM_ROUGH)}
 #define BR_WET_FILM_ROUGH_POROUS ${f(TUNE.WET_FILM_ROUGH_POROUS)}
+#define BR_WET_FILM_ROUGH_PILE ${f(TUNE.WET_FILM_ROUGH_PILE)}
 #define BR_WET_FILM_F0 ${f(TUNE.WET_FILM_F0)}
 #define BR_WET_CLUMP ${f(TUNE.WET_CLUMP)}
 #define BR_SOAK_FLAT ${f(TUNE.SOAK_FLAT)}
 #define BR_PUDDLE_W0 ${f(TUNE.PUDDLE_W0)}
 #define BR_PUDDLE_W1 ${f(TUNE.PUDDLE_W1)}
+#define BR_PUDDLE_PILE_W0 ${f(TUNE.PUDDLE_PILE_W0)}
+#define BR_PUDDLE_PILE_W1 ${f(TUNE.PUDDLE_PILE_W1)}
 #define BR_PUDDLE_LO ${f(TUNE.PUDDLE_LO)}
 #define BR_PUDDLE_HI ${f(TUNE.PUDDLE_HI)}
 #define BR_PUDDLE_EDGE ${f(TUNE.PUDDLE_EDGE)}

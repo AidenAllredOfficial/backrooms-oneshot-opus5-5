@@ -63,6 +63,22 @@ export const SSR = {
   ELIG_ROUGH: 0.7,
   /** horizon occlusion of the reflected direction against the unperturbed normal (squared falloff) */
   HORIZON_K: 1.1,
+  /** the trace: rays whose cosine to the depth's macro normal is below this fade out (0 and below: not traced; a
+   * grazing view of a floor still reflects at 0.03) */
+  UP_FADE: 0.03,
+  /** the trace follows the macro (depth) normal instead of the block's mean normal as 1 - |mean| grows over this range
+   * (a normal map finer than the trace grid) */
+  NVAR: [0.002, 0.02] as const,
+  /** ...where the depth is a surface: the macro normal is the mean of the depth normals at the texel and one texel
+   * left / right / below / above, used as far as their mean length lies over this range (a ceiling grid's T-bars
+   * narrower than a pixel, depth noise at the horizon and creases are no surface) */
+  NCOH: [0.85, 0.95] as const,
+  /** ...and as far as it agrees with the block's mean (cosine over this range: a corrugation's partial-period mean
+   * lies within ~35 deg of its plane; a depth normal further off is not the block's surface) */
+  NAGREE: [0.7, 0.8] as const,
+  /** a block pixel joins the representative's lobe only within this roughness of it (another surface / lobe: its
+   * own texels carry it through the upsample's roughness weight) */
+  BLOCK_DR: 0.15,
 } as const;
 
 /** Debug output of the composite (URL reflView): 0 off, 1 the reflection alone, 2 confidence (misses magenta). */
@@ -289,6 +305,14 @@ layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_NV ${f(SSR.STRETCH_NV)}
 #define BR_SSR_STRETCH ${f(SSR.STRETCH_MAX)}
 #define BR_SSR_SOFT ${f(SSR.THICK_SOFT)}
+#define BR_SSR_UP ${f(SSR.UP_FADE)}
+#define BR_SSR_NVAR0 ${f(SSR.NVAR[0])}
+#define BR_SSR_NVAR1 ${f(SSR.NVAR[1])}
+#define BR_SSR_NCOH0 ${f(SSR.NCOH[0])}
+#define BR_SSR_NCOH1 ${f(SSR.NCOH[1])}
+#define BR_SSR_NAGREE0 ${f(SSR.NAGREE[0])}
+#define BR_SSR_NAGREE1 ${f(SSR.NAGREE[1])}
+#define BR_SSR_BLOCK_DR ${f(SSR.BLOCK_DR)}
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
 ${SSR_OCT_GLSL}
 vec2 brOctEnc( vec3 n ) {
@@ -331,15 +355,17 @@ void main() {
 	vec4 s1 = texelFetch( tSpec, p, 0 );
 	vec4 g = texelFetch( tGNR, p, 0 );
 	if ( s1.a < 1e-4 || g.a < 0.5 ) return;
-	// the texel stands for its block: average the lobes of the glossy pixels of its top-left 2x2 (a normal map finer
-	// than the trace grid, corrugated metal or grout, would otherwise alias into dots); the spread of their normals
-	// widens the cone (Toksvig: alpha^2 + (1 - |n|) / |n|)
+	// the texel stands for its block: average the lobes of the glossy pixels of its whole step x step block (a normal
+	// map finer than the trace grid, corrugated metal or grout, would otherwise alias into dots); the spread of their
+	// normals widens the cone (Toksvig: alpha^2 + (1 - |n|) / |n|). Only pixels of the representative's lobe count
+	// (roughness within BLOCK_DR): a block across a puddle's shore averaged the mirror with the wet carpet around it
+	// into a middling lobe that caught the ceiling lamps as bright dots along the shore.
 	vec3 nSum = brOctDec( g.rg );
 	float rSum = g.b, cnt = 1.0;
 	ivec2 lim = ivec2( uFull ) - 1;
-	for ( int k = 1; k < 4; k ++ ) {
-		vec4 gk = texelFetch( tGNR, min( p + ivec2( k & 1, k >> 1 ), lim ), 0 );
-		if ( gk.a < 0.5 ) continue;
+	for ( int k = 1; k < uStep * uStep; k ++ ) {
+		vec4 gk = texelFetch( tGNR, min( p + ivec2( k % uStep, k / uStep ), lim ), 0 );
+		if ( gk.a < 0.5 || abs( gk.b - g.b ) > BR_SSR_BLOCK_DR ) continue;
 		nSum += brOctDec( gk.rg );
 		rSum += gk.b;
 		cnt += 1.0;
@@ -351,15 +377,37 @@ void main() {
 	vec3 P = brViewPos( d, ( vec2( p ) + 0.5 ) / uFull );
 	outMeta = vec4( - P.z, brOctEnc( N ), rough );
 	if ( rough > uMaxRough ) return;
+	// the macro surface: the depth's own normal. A block whose normals disagree (a normal map finer than the trace
+	// grid: a corrugated deck's ribs) is traced along it, the spread kept as the Toksvig cone: the mean of a partial rib
+	// period changes from block to block and beat against the grid into dashed glints beside every high-bay, crawling
+	// as the camera moved. The per-pixel weight Ws still draws the ribs in the composite. Nm: the mean depth normal of
+	// the texel and its four neighbours, where they agree with each other (a surface) and with the block's mean; one
+	// pixel's depth slope at geometry finer than a pixel (a ceiling grid's far T-bars) is noise, and rays reflected
+	// about it caught the lamps as sparkles along every far grid line.
+	vec3 Ng = brDepthNormal( p );
+	for ( int k = 0; k < 4; k ++ ) {
+		ivec2 o = ( k < 2 ? ivec2( 1, 0 ) : ivec2( 0, 1 ) ) * ( ( k & 1 ) == 0 ? - uStep : uStep );
+		Ng += brDepthNormal( clamp( p + o, ivec2( 0 ), lim ) );
+	}
+	float coh = 0.2 * length( Ng );
+	if ( coh > 1e-3 ) Ng /= 5.0 * coh; // (also false for a non-finite normal: the block's then)
+	else { Ng = N; coh = 0.0; }
+	vec3 Nm = normalize( mix( N, Ng, smoothstep( BR_SSR_NCOH0, BR_SSR_NCOH1, coh ) * smoothstep( BR_SSR_NAGREE0, BR_SSR_NAGREE1, dot( N, Ng ) ) ) );
+	vec3 Nt = normalize( mix( N, Nm, smoothstep( BR_SSR_NVAR0, BR_SSR_NVAR1, 1.0 - nLen ) ) );
 	vec3 V = - normalize( P );
-	float nv = dot( N, V );
+	float nv = dot( Nt, V );
 	if ( nv < 0.01 ) return;
-	vec3 R = reflect( - V, N );
+	vec3 R = reflect( - V, Nt );
 	if ( R.z >= BR_SSR_RZ1 ) return; // toward the camera: faded out anyway
+	// a normal map can tilt the reflected ray below the macro surface: the ray would meet that surface a cell on and
+	// copy it. What a groove reflects there is its own neighbouring flank: leave it to the fallback, whose horizon term
+	// already weighs those directions down
+	float up = dot( R, Nm );
+	if ( up <= 0.0 ) return;
 	vec2 hitUv;
 	float hitZ, hitGap, rayT;
 	// start just off the surface: its own depth must not stop the ray
-	if ( ! brSsrTrace( P + N * ( 0.002 * - P.z ), R, uProj, BR_SSR_MAX_DIST, hitUv, hitZ, hitGap, rayT ) ) return;
+	if ( ! brSsrTrace( P + Nt * ( 0.002 * - P.z ), R, uProj, BR_SSR_MAX_DIST, hitUv, hitZ, hitGap, rayT ) ) return;
 	ivec2 hp = ivec2( hitUv * uFull );
 	if ( dot( brDepthNormal( hp ), R ) > BR_SSR_FACING ) return; // the back of a surface: not what the ray sees
 	// the glossy lobe as a cone (tan = CONE alpha) over the ray length, measured in pyramid texels at the hit, stretched
@@ -368,7 +416,7 @@ void main() {
 	Ph *= hitZ / - Ph.z;
 	float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );
 	float D = max( 2.0 * BR_SSR_CONE * a * length( Ph - P ) * 0.5 * uPyrSize.y * uProj[ 1 ][ 1 ] / hitZ, 1e-3 );
-	vec2 nS = brProjPx( P + N * ( 0.01 * - P.z ) ) - brProjPx( P );
+	vec2 nS = brProjPx( P + Nt * ( 0.01 * - P.z ) ) - brProjPx( P );
 	nS = dot( nS, nS ) > 1e-10 ? normalize( nS ) : vec2( 0.0, 1.0 );
 	float s = clamp( 1.0 / max( nv, BR_SSR_NV ), 1.0, BR_SSR_STRETCH );
 	vec3 col = textureGrad( tPyr, hitUv, nS * ( D * s ) / uPyrSize, vec2( - nS.y, nS.x ) * D / uPyrSize ).rgb;
@@ -382,6 +430,7 @@ void main() {
 	conf *= 1.0 - smoothstep( 0.75, 1.0, rayT );
 	conf *= 1.0 - smoothstep( BR_SSR_RZ0, BR_SSR_RZ1, R.z );
 	conf *= 1.0 - smoothstep( 1.0 - BR_SSR_SOFT, 1.0, hitGap );
+	conf *= smoothstep( 0.0, BR_SSR_UP, up );
 	outSsr = vec4( min( max( col, vec3( 0.0 ) ), vec3( BR_HDR_CLAMP ) ) * conf, conf );
 }
 `;

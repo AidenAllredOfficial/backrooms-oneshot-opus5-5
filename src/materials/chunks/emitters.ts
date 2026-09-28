@@ -242,8 +242,13 @@ BrCell brLouverCell( BrLens F, float fp ) {
 // fixture interior (the reflector, darker along the lamps: lamp = their area-normalised row coverage), the blades
 // mirroring that interior inside the cutoff and the room past it, the painted bottom edges. A lit louver whose lamps
 // flicker or are dimmed out (FLICKER, ANOMALY) thus looks like a dead one, not like black cells.
-float brLouverAlb( BrCell C, float lamp ) {
+// punct: the albedo a punctual light at the eye (the flashlight) sees instead: the blades mirror it away from the
+// camera (only their diffuse residue BLADE_P comes back), inside the cutoff and through the cells it lights the
+// interior (the specular reflector CAV_P, the dead lamps' phosphor TUBE_P), and the painted edges as the room does.
+float brLouverAlb( BrCell C, float lamp, out float punct ) {
 	float cav = BR_LV_CAV_OFF * ( 1.0 - BR_LV_TUBE_OFF * min( lamp, 1.0 ) );
+	float cavP = mix( BR_LV_CAV_P, BR_LV_TUBE_P, min( lamp, 1.0 ) );
+	punct = mix( mix( mix( BR_LV_BLADE_P, cavP, C.spec ), cavP, C.vis ), BR_LV_EDGE_ALB, C.edge );
 	return mix( mix( mix( BR_LV_ALU, cav, C.spec ), cav, C.vis ), BR_LV_EDGE_ALB, C.edge );
 }
 
@@ -252,7 +257,7 @@ float brLouverAlb( BrCell C, float lamp ) {
 // neutral diffuse albedo 'room', brLouverAlb, lit by the baked irradiance) under the lamps' semi-specular sheen,
 // brightest toward the blade top, and a glint along the top edge near the cutoff; the blades' bottom edges draw the
 // cell grid.
-vec3 brLouver( BrLens F, BrLamps L, float fp, out float endMask, out float room ) {
+vec3 brLouver( BrLens F, BrLamps L, float fp, out float endMask, out float room, out float roomP ) {
 	fp += 1e-4;
 	BrCell C = brLouverCell( F, fp );
 	float sig = sqrt( BR_LV_SIGMA * BR_LV_SIGMA + fp * fp );
@@ -275,7 +280,7 @@ vec3 brLouver( BrLens F, BrLamps L, float fp, out float endMask, out float room 
 	float gm = dot( L.g, vec4( 1.0 ) ) / float( F.n );
 	vec3 lamp = BR_LV_REFL * gm + BR_LV_LAMP * r0;
 	endMask *= C.vis;
-	room = brLouverAlb( C, r0.g );
+	room = brLouverAlb( C, r0.g, roomP );
 	return mix( vec3( blade * gm ), lamp, C.vis ) * ( 1.0 - BR_LV_EDGE * C.edge );
 }
 
@@ -298,18 +303,20 @@ float brTubeAlongMean( float Lm, float eb ) {
 // Relative luminance of profile ep (multiplies vBrEmit * tint). variant / param: aux.z bits 5-7 / aux.x;
 // seed8: tint.a * 255; uv: material uv; Vt: view vector toward the camera in the emitter's (u, v, n) frame;
 // fpUv: pixel footprint in uv units; dyn / sh: live flicker intensity / lens shimmer. room: the neutral diffuse
-// albedo that replaces the material's (LOUVER: its aluminium mirroring the room), -1 = keep the material.
-vec3 brEmitterShape( int ep, int variant, int param, float seed8, vec2 uv, vec3 Vt, float fpUv, float t, int state, float dyn, float sh, bool dynEmit, bool shimmer, out float room ) {
+// albedo that replaces the material's (LOUVER: its aluminium mirroring the room), -1 = keep the material; roomP: the
+// one punctual lights see (brLouverAlb).
+vec3 brEmitterShape( int ep, int variant, int param, float seed8, vec2 uv, vec3 Vt, float fpUv, float t, int state, float dyn, float sh, bool dynEmit, bool shimmer, out float room, out float roomP ) {
 	vec3 L = vec3( 1.0 );
 	float endMask = 0.0;
 	room = - 1.0;
+	roomP = - 1.0;
 	bool dying = shimmer && state == BR_EP_DYING;
 	if ( ep <= BR_EP_OPAL ) {
 		BrLens F = brLensFrame( param, variant, uv, Vt );
 		float fp = fpUv * BR_LENS_TILE;
 		if ( ep == BR_EP_OPAL ) L = vec3( brOpal( F, uv, fp ) );
 		else if ( ep == BR_EP_PRISM ) L = brPrism( F, brLampSet( seed8, F.n, F.uTube, dying, sh ), fp, endMask );
-		else L = brLouver( F, brLampSet( seed8, F.n, false, dying, sh ), fp, endMask, room );
+		else L = brLouver( F, brLampSet( seed8, F.n, false, dying, sh ), fp, endMask, room, roomP );
 		float nrm = brEpNorm( ep, F.n, F.La, F.Wx );
 		L *= nrm;
 		endMask *= nrm;
@@ -374,8 +381,9 @@ float brOffLensShade( int ep, int param, int variant, vec2 uv, vec3 Vt, float fp
 	return ( 0.5 + 0.3 * ( 1.0 - 0.6 * s ) ) * mix( 0.75, 1.0, smoothstep( 0.0, BR_PR_CAV_W, F.dEdge ) );
 }
 // OFF parabolic louver: diffuse albedo (absolute, neutral) of its blade grid lit by the room (brLouverAlb, the dead
-// lamps' silhouettes blurred area-normalised like the lit images, so far cells keep their near mean).
-float brOffLouver( int param, int variant, vec2 uv, vec3 Vt, float fpUv ) {
+// lamps' silhouettes blurred area-normalised like the lit images, so far cells keep their near mean); punct: the
+// albedo punctual lights see.
+float brOffLouver( int param, int variant, vec2 uv, vec3 Vt, float fpUv, out float punct ) {
 	BrLens F = brLensFrame( param, variant, uv, Vt );
 	float fp = fpUv * BR_LENS_TILE + 1e-4;
 	BrCell C = brLouverCell( F, fp );
@@ -385,7 +393,7 @@ float brOffLouver( int param, int variant, vec2 uv, vec3 Vt, float fpUv ) {
 	float hd = BR_LV_H + BR_LV_D;
 	float sig = sqrt( BR_LV_SIGMA * BR_LV_SIGMA + fp * fp );
 	brLampRows( L, F.a - hd * C.d.x, F.x - hd * C.d.y, 0.0, sig, F.La, F.Wx / float( F.n ), BR_PR_END_IN, 0.0, rP, rM, r0, shadow );
-	return brLouverAlb( C, r0.g * BR_LV_SIGMA / sig );
+	return brLouverAlb( C, r0.g * BR_LV_SIGMA / sig, punct );
 }
 #endif
 `;

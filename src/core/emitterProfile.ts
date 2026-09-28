@@ -73,6 +73,9 @@ export const LOUVER = {
   // the room below (the mean radiance a mirror at the ceiling sees is E / pi), the painted bottom edges, and the dark
   // interior of a dead fixture (reflector and dead lamps lit only by the room light entering through the cells)
   ALU: 0.75, EDGE_ALB: 0.6, CAV_OFF: 0.18, TUBE_OFF: 0.35,
+  // the albedo a punctual light at the eye (the flashlight) sees: the blades mirror it away from the camera (their
+  // diffuse residue), the specular reflector likewise, the dead lamps' frosted phosphor scatters it back
+  BLADE_P: 0.07, CAV_P: 0.2, TUBE_P: 0.6,
   SIGMA: 0.012,
 } as const;
 /** Opal (sky panel) diffuser: slightly hot centre, faint LED grid, rim shade, mild angular falloff. */
@@ -345,7 +348,11 @@ function louverCell(F: LensFrame, fp: number): LouverCell {
  * the cells the fixture interior (darker along the lamps: lamp = their area-normalised row coverage), the blades
  * mirroring it inside the cutoff and the room past it, the bottom edges. A lit louver whose lamps flicker or are
  * dimmed out (FLICKER, ANOMALY) thus looks like a dead one. */
-function louverAlbedo(C: LouverCell, lamp: number): number {
+function louverAlbedo(C: LouverCell, lamp: number, punctual = false): number {
+  if (punctual) {
+    const cavP = mix(LOUVER.CAV_P, LOUVER.TUBE_P, Math.min(lamp, 1));
+    return mix(mix(mix(LOUVER.BLADE_P, cavP, C.spec), cavP, C.vis), LOUVER.EDGE_ALB, C.edge);
+  }
   const cav = LOUVER.CAV_OFF * (1 - LOUVER.TUBE_OFF * Math.min(lamp, 1));
   return mix(mix(mix(LOUVER.ALU, cav, C.spec), cav, C.vis), LOUVER.EDGE_ALB, C.edge);
 }
@@ -530,8 +537,9 @@ export function offLensShade(inp: ShapeInput): number {
 
 /** Diffuse albedo (absolute, neutral) of a dead parabolic louver: the blade grid, lit by the room. Through the cells
  * the dark fixture interior with the dead lamps' silhouettes; the blades mirror that interior inside the cutoff and
- * the room past it; the bottom edges draw the grid. */
-export function offLouverAlbedo(inp: ShapeInput): number {
+ * the room past it; the bottom edges draw the grid. `punctual`: the albedo a light at the eye (the flashlight) sees
+ * instead (brLouverAlb's punct: dark blades, the dead lamps lit behind the cells). */
+export function offLouverAlbedo(inp: ShapeInput, punctual = false): number {
   const F = lensFrame(inp);
   const fp = inp.fp * LENS_TILE + 1e-4;
   const C = louverCell(F, fp);
@@ -540,7 +548,7 @@ export function offLouverAlbedo(inp: ShapeInput): number {
   // the dead lamps' silhouettes blurred area-normalised like the lit images (far cells keep their near mean)
   const sig = Math.sqrt(LOUVER.SIGMA * LOUVER.SIGMA + fp * fp);
   lampRows(L, F.a - hd * C.da, F.x - hd * C.dx, 0, sig, F.La, F.Wx / F.n, PRISM.END_IN, 0, rowBuf);
-  return louverAlbedo(C, rowBuf[7] * LOUVER.SIGMA / sig);
+  return louverAlbedo(C, rowBuf[7] * LOUVER.SIGMA / sig, punctual);
 }
 
 // ------------------------------------------------------------------------------------------ nadir normalisation

@@ -13,7 +13,8 @@
 //   - COLLIDE prop footprints (contact AO; `contactBox` marks those whose prop added an occluder box standing on
 //     the floor, which the near-field gather traces instead; props whose part boxes all float above it -- chair
 //     seats over their star bases, the lounge chair frame, the pallet deck -- keep the analytic contact AO for the
-//     untraced legs and bases) and ceiling leaks (surface mask).
+//     untraced legs and bases; `contactRound` marks the round ones, core/props.ts PROP_ROUND_CONTACT) and ceiling
+//     leaks (surface mask).
 
 import { CELL, CHUNK_CELLS } from '../core/constants.ts';
 import { cellIdx, exIdx, ezIdx, type TileKey } from '../core/grid.ts';
@@ -21,7 +22,7 @@ import { EDGE_OCCLUDES } from '../core/edges.ts';
 import { hash4 } from '../core/rng.ts';
 import { CellFlag, EdgeKind, PropFlag, SolidFlag, StructureKind } from '../core/ids.ts';
 import type { ChunkLayout } from '../core/layout.ts';
-import { PROP_DEFS, PROP_OCCLUDERS_ALIGNED, propOccluders, quarterAligned, type Box6 } from '../core/props.ts';
+import { PROP_DEFS, PROP_OCCLUDERS_ALIGNED, PROP_ROUND_CONTACT, propOccluders, quarterAligned, type Box6 } from '../core/props.ts';
 import type { LayoutNeighborhood } from '../core/world.ts';
 import { expandPeriodicProps, expandPeriodicSolids } from '../mesh/periodic.ts';
 import { HALO, HALO_OFF, INV_CELL, growF64, growI32, quant } from './util.ts';
@@ -94,6 +95,8 @@ export interface VisGrid {
   /** per contact footprint: 1 when its prop added at least one occluder box standing on the floor (bottom within
    * CONTACT_GROUND of the base: the near-field gather traces it, so it skips the footprint's analytic contact AO) */
   contactBox: Uint8Array;
+  /** per contact footprint: 1 for a round base (core/props.ts PROP_ROUND_CONTACT: the AO falls off radially) */
+  contactRound: Uint8Array;
   contactStart: Int32Array; // per cell (footprint + 0.3 m margin)
   contactList: Int32Array;
   // ---- leaks (x y z strength) and their world-stable ids (hash of chunk + position: tile-independent patterns)
@@ -264,7 +267,7 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
   // ---- occluders, contact footprints, leaks
   const bb: BoxBuild = { n: 0, box: new Float64Array(6 * 64), rampY: new Float64Array(3 * 64), group: new Int32Array(64), mat: new Int32Array(64), ramp: new Int32Array(64) };
   let contact = new Float64Array(4 * 32), contactY = new Float64Array(32), contactGroup = new Int32Array(32);
-  let contactBox = new Int32Array(32);
+  let contactBox = new Int32Array(32), contactRound = new Int32Array(32);
   let nContact = 0;
   let leak = new Float64Array(4 * 8);
   let leakId = new Int32Array(8);
@@ -330,8 +333,10 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
         contactY = growF64(contactY, nContact + 1);
         contactGroup = growI32(contactGroup, nContact + 1);
         contactBox = growI32(contactBox, nContact + 1);
+        contactRound = growI32(contactRound, nContact + 1);
         contact[nContact * 4] = x0; contact[nContact * 4 + 1] = z0; contact[nContact * 4 + 2] = x1; contact[nContact * 4 + 3] = z1;
         contactY[nContact] = p.y; contactGroup[nContact] = g; contactBox[nContact] = added;
+        contactRound[nContact] = PROP_ROUND_CONTACT.has(p.kind) ? 1 : 0;
         nContact++;
       }
     }
@@ -409,7 +414,8 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
     nBox, box: bb.box.slice(0, nBox * 6), boxGroup: bb.group.slice(0, nBox), boxMat, boxRamp, rampY: bb.rampY.slice(0, nBox * 3),
     boxStart, boxList, cBoxLo, cBoxHi, ddaCell, ddaGroup, boxStamp: new Int32Array(nBox), stamp: 0,
     nContact, contact: contact.slice(0, nContact * 4), contactY: contactY.slice(0, nContact), contactGroup: contactGroup.slice(0, nContact),
-    contactBox: Uint8Array.from(contactBox.subarray(0, nContact)), contactStart, contactList,
+    contactBox: Uint8Array.from(contactBox.subarray(0, nContact)), contactRound: Uint8Array.from(contactRound.subarray(0, nContact)),
+    contactStart, contactList,
     nLeak, leak: leak.slice(0, nLeak * 4), leakId: leakId.slice(0, nLeak),
   };
 }

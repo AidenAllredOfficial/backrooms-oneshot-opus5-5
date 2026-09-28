@@ -119,12 +119,51 @@ describe('GLSL twins', () => {
   it('applies SSAO to the indirect terms only and the contact shadow to the baked directional term only', () => {
     const src = FRAG_LIGHTS_GLSL;
     const direct = src.slice(src.indexOf('if ( brW > 0.0 ) {'), src.indexOf('RE_Direct('));
-    expect(direct).toContain('brContactShadow( geometryPosition, brNg, brLv, brW )');
+    // marched once before the branch, in uniform control flow (the quad mean takes derivatives), then only the
+    // directional term's visibility starts from it
+    const pre = src.slice(src.indexOf('vec3 brLv = '), src.indexOf('if ( brW > 0.0 ) {'));
+    expect(pre).toContain('brCs = brQuadMean( brContactShadow( geometryPosition, brNg, brLv, brW ) )');
+    expect(pre).not.toMatch(/\bif \( brW/);
+    expect(direct).toContain('float brDirVis = brCs;');
     expect(src.split('brContactShadow(').length).toBe(2); // only there
     expect(direct).not.toMatch(/brSs[KC]?\b/);
     expect(src).toContain('iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC );');
     expect(src).toContain('vec3 brEnvRad = ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;'); // radiance, or D's G-buffer
     expect(src).toContain('brDL.color = brW * brE / brNgL * brDirVis;');
     expect(FRAG_AO_REFL_GLSL).toContain('computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav, material.roughness )');
+  });
+
+  /** brQuadMean line by line over one pixel quad, lanes [hx + 2 hy] at hardware place (hx, hy); flip: the quad's
+   * first pixel sits on an odd column / row; ref: the lane coarse derivatives difference from (null: fine). */
+  const quadMean = (v: number[], flip: [number, number], ref: [number, number] | null): number[] => {
+    const lanes = [0, 1, 2, 3];
+    const dx = (s: number[]): number[] => lanes.map((i) => { const y = ref ? ref[1] : i >> 1; return s[1 + 2 * y] - s[2 * y]; });
+    const dy = (s: number[]): number[] => lanes.map((i) => { const x = ref ? ref[0] : i & 1; return s[x + 2] - s[x]; });
+    const ax = lanes.map((i) => (i & 1) ^ flip[0]), ay = lanes.map((i) => (i >> 1) ^ flip[1]);
+    const dax = dx(ax), day = dy(ay);
+    const hx = lanes.map((i) => 0.5 - (0.5 - ax[i]) * dax[i]), hy = lanes.map((i) => 0.5 - (0.5 - ay[i]) * day[i]);
+    const fq = lanes.map((i) => hx[i] * hy[i]);
+    const dfx = dx(fq), dfy = dy(fq);
+    const m0 = lanes.map((i) => Math.abs(dfx[i] - hy[i]) + Math.abs(dfy[i] - hx[i]));
+    const mx = dx(m0), my = dy(m0);
+    const m = lanes.map((i) => m0[i] + Math.abs(mx[i]) + Math.abs(my[i]));
+    const vdx = dx(v);
+    const vx = lanes.map((i) => v[i] + vdx[i] * (0.5 - hx[i]));
+    const vdy = dy(vx);
+    return lanes.map((i) => (m[i] > 0.5 ? v[i] : Math.min(Math.max(vx[i] + vdy[i] * (0.5 - hy[i]), 0), 1)));
+  };
+  it('brQuadMean: the quad mean with fine derivatives (either pair parity), v untouched with coarse ones', () => {
+    for (const v of [[0, 1, 1, 0], [0.2, 0.9, 0.4, 1], [1, 1, 1, 0.1]]) {
+      const mean = v.reduce((s, x) => s + x, 0) / 4;
+      for (const flip of [[0, 0], [1, 0], [0, 1], [1, 1]] as [number, number][]) {
+        for (const r of quadMean(v, flip, null)) expect(r).toBeCloseTo(mean, 12);
+        // coarse derivatives from any lane: the naive mean would give e.g. 1, 1, 1, 0 for 0, 1, 1, 0
+        for (const ref of [[0, 0], [1, 0], [0, 1], [1, 1]] as [number, number][]) expect(quadMean(v, flip, ref)).toEqual(v);
+      }
+    }
+    for (const s of ['vec2 h = 0.5 - ( 0.5 - a ) * vec2( dFdx( a.x ), dFdy( a.y ) );', 'float f = h.x * h.y;',
+      'float m = abs( dFdx( f ) - h.y ) + abs( dFdy( f ) - h.x );', 'm += abs( dFdx( m ) ) + abs( dFdy( m ) );',
+      'float vx = v + dFdx( v ) * ( 0.5 - h.x );', 'float vq = vx + dFdy( vx ) * ( 0.5 - h.y );',
+      'return m > 0.5 ? v : clamp( vq, 0.0, 1.0 );']) expect(SCREENSPACE_GLSL).toContain(s);
   });
 });

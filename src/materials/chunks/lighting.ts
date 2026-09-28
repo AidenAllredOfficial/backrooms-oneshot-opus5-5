@@ -115,6 +115,7 @@ export const FRAG_LIGHTS_GLSL = /* glsl */ `
 #undef getSpotLightInfo
 #define BR_SSR_ELIG_ROUGH ${f(SSR.ELIG_ROUGH)}
 // ==== WP9 baked lighting
+material.diffuseContribution = brDiffRoom; // after the punctual lights (chunks/materialPost.ts brPunctAlb)
 vec4 brLmA;
 vec4 brLmB;
 vec4 brFl;
@@ -242,18 +243,17 @@ if ( uBrReflPass < 0.5 && uBrProbeOn > 0.5 && ! brUnderW ) {
 #endif
 // r186 only initialises this when punctual lights exist; set it exactly as lights_fragment_begin does
 material.multiScatteringCompensation = 1.0 + material.specularColorBlended * ( 1.0 / ( material.dfg.x + material.dfg.y ) - 1.0 );
+vec3 brLv = normalize( ( viewMatrix * vec4( brLw, 0.0 ) ).xyz );
+#ifdef BR_CS_STEPS
+// contact shadow of the baked directional light (package A), marched in uniform control flow (1 where w is too small
+// to cast one) so the pixel quad can average its four IGN-jittered marches (brQuadMean)
+if ( uSsaoP.x > 0.5 && uCsOn > 0.5 && uBrReflPass < 0.5 ) brCs = brQuadMean( brContactShadow( geometryPosition, brNg, brLv, brW ) );
+#endif
 if ( brW > 0.0 ) {
 	// directional part through RE_Direct: dividing by the unperturbed cosine lets the normal map re-shade it
-	vec3 brLv = normalize( ( viewMatrix * vec4( brLw, 0.0 ) ).xyz );
 	float brNgL = max( dot( brNg, brLv ), BR_NG_MIN );
 	// visibility of the baked directional light: contact shadow (package A), then package B's block
-	float brDirVis = 1.0;
-#ifdef BR_CS_STEPS
-	if ( uSsaoP.x > 0.5 && uCsOn > 0.5 && uBrReflPass < 0.5 ) {
-		brCs = brContactShadow( geometryPosition, brNg, brLv, brW );
-		brDirVis *= brCs;
-	}
-#endif
+	float brDirVis = brCs;
 ${FRAG_DIRVIS_GLSL}
 	IncidentLight brDL;
 	brDL.color = brW * brE / brNgL * brDirVis;
