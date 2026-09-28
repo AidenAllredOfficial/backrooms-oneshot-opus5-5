@@ -335,7 +335,9 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   function computeChunkPrio(c: ChunkRec): void {
     const x0 = c.key.cx * CHUNK_SIZE, z0 = c.key.cz * CHUNK_SIZE;
     let gate = false;
-    if (!isPrefetchChunk(c) && !Number.isNaN(pcx)) {
+    // radius chunks that scope 'capture' does not desire (yet) are measured like desired ones: turning the view can
+    // bring capture tiles into them
+    if ((!isPrefetchChunk(c) || (c.inRadius && c.s === storey)) && !Number.isNaN(pcx)) {
       const ring = chebyshev(c.key.cx, c.key.cz, pcx, pcz);
       c.ring = ring;
       c.prio = basePriority(ring, inView(x0, z0, CHUNK_SIZE), rectDistance(px, pz, x0, z0, x0 + CHUNK_SIZE, z0 + CHUNK_SIZE));
@@ -724,15 +726,21 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     return Math.max(0, used - budget - disposeQ.length * perTile);
   }
 
+  const emptyChunk = (c: ChunkRec): boolean =>
+    !c.data && !c.layoutJob && c.tiles.every((t) => !t.gpu && !t.staging && !t.mesh && !t.buildJob && !t.bakeJob);
+
   function sweep(now: number): void {
     const R = quality.streamRadius;
     let n = 0;
     for (let i = 0; i < chunkList.length && n < MAX_EVICT_CHUNKS_PER_FRAME; i++) {
       const c = chunkList[i];
       const alive = c.keepUntil > now;
-      // scope 'capture' keeps no hysteresis ring: what the capture set does not hold goes
+      // scope 'capture' keeps no hysteresis ring: what the capture set does not hold goes (empty records of the
+      // radius stay: the view may bring capture tiles into them)
       const keep = c.s === storey
-        ? c.desired || alive || (scope === 'full' && !Number.isNaN(lcx) && keepResident(c.key.cx, c.key.cz, lcx, lcz, pcx, pcz, R))
+        ? c.desired || alive || (scope === 'full'
+          ? !Number.isNaN(lcx) && keepResident(c.key.cx, c.key.cz, lcx, lcz, pcx, pcz, R)
+          : c.inRadius && emptyChunk(c))
         : alive;
       if (!keep) evictScratch[n++] = c;
     }
@@ -985,6 +993,9 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       const closed = cap !== null && cap.gateClosed();
       const closing = closed && !gateClosed, opening = !closed && gateClosed;
       gateClosed = closed;
+      // scope 'capture': which radius chunks hold capture tiles moves with the view, and chunks it dropped were
+      // evicted, so every priority refresh re-targets (re-creating their records)
+      if (scope === 'capture' && (gateClosed || frame - lastPrioFrame >= PRIORITY_REFRESH_FRAMES || frame < lastPrioFrame)) dirty = true;
       let retargeted = false;
       if (dirty || ncx !== pcx || ncz !== pcz || nlx !== lcx || nlz !== lcz || tStorey !== storey || tRadius !== quality.streamRadius) {
         pcx = ncx; pcz = ncz; lcx = nlx; lcz = nlz;

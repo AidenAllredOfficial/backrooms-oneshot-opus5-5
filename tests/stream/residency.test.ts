@@ -913,6 +913,25 @@ describe('automation capture gate v2 (StreamerOptions.capture)', () => {
     r.st.dispose();
   });
 
+  it('scope capture follows the view: a chunk that gains capture tiles becomes desired and streams', async () => {
+    const { r, cc, closed } = gated('capture', { ...QUALITY.low, streamRadius: 3 });
+    closed.v = false;
+    // near the +z edge of chunk (0, 0): chunks at cz = 3 (78 m away) hold view-band tiles only
+    const Z = 37;
+    const look = (vz: number): void => { r.frame++; r.st.update(P, Z, 0, vz, null as unknown as THREE.Camera, r.frame); };
+    look(-1);
+    const layouts = (): Set<string> => new Set(r.pool.pending('layout').map((j) => chunkKeyStr((j.req as Extract<WorkerRequest, { t: 'layout' }>).key)));
+    const before = new Set(r.pool.pending('build').map((j) => ks(buildKey(j))));
+    expect([...layouts()].some((k) => k.endsWith(':3'))).toBe(false);
+    for (let i = 0; i < 10; i++) look(1); // turn around: +z
+    const added = r.pool.pending('build').filter((j) => !before.has(ks(buildKey(j))));
+    expect(added.length).toBeGreaterThan(0);
+    for (const j of added) expect(buildKey(j).cz).toBeGreaterThan(0);
+    expect([...layouts()].some((k) => k.endsWith(':3'))).toBe(true);
+    expect(cc.scope).toBe('capture');
+    r.st.dispose();
+  });
+
   it('players are untouched: no capture options, no gate flags, no holding', async () => {
     const r = rig(Q);
     r.tick(P, P);
