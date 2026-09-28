@@ -584,6 +584,11 @@ export function createApp(root: HTMLElement): App {
       const ms = performance.now() - t0;
       performance.measure('br:load', { start: t0, end: t0 + ms });
       return { ok: true, ms };
+    } catch (e) {
+      // a failed world reset or spawn query: report it and keep the page running (the caller boots a fresh page)
+      core.fail(e);
+      if (!lost && frameLoop && core.renderer && innerWidth > 0 && innerHeight > 0) core.renderer.setAnimationLoop(frameLoop);
+      throw e;
     } finally {
       loadingShot = false;
     }
