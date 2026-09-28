@@ -53,8 +53,8 @@ export function laneEligible(laneId, job) {
  * Next job for a lane: round-robin over the clients with queued work (client ids in sorted order, starting after
  * `last`, the client served last); within the chosen client prefer a job matching the lane's warm-page key, else
  * its first queued job. Nothing starts while an exclusive job runs, and an exclusive job starts only when no other
- * lane is busy. `avoidKey` (lane 1): skip jobs of that boot key, which lane 0 moves through in place (a second
- * page of the same key only competes for the bandwidth-bound tile uploads: 4 % faster for 1.3 GB on D2).
+ * lane is busy. `avoidKey` (lane 1, one client queued): skip jobs of the boot key lane 0 moves through in place (a
+ * second page of the same key only competes for the bandwidth-bound tile uploads: 4 % faster for 1.3 GB on D2).
  * Returns { job, last } (job null when nothing fits) without mutating `queue`.
  */
 export function pickJob(queue, laneId, { warmKey = null, avoidKey = null, exclusiveRunning = false, othersBusy = false, last = null } = {}) {

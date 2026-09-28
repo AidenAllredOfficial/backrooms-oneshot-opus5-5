@@ -388,10 +388,14 @@ function pump() {
   }
 }
 
-/** Boot key lane 0 moves through in place: its warm page's, or its running job's on a contract-v2 tree. */
+/**
+ * Boot key lane 0 moves through in place (its warm page's, or its running job's on a contract-v2 tree), when a single
+ * client has work queued: then a second page of that key only competes for tile uploads. With several clients lane 0
+ * switches keys between them, and lane 1 taking the same key does help (4 clients x 3 shots: 16.9-17.9 s vs 20.8 s).
+ */
 function lane0InPlaceKey() {
   const l0 = lanes[0];
-  if (!l0) return null;
+  if (!l0 || new Set(queue.map((j) => j.req.client)).size > 1) return null;
   return l0.lane.warmKey ?? (l0.job?.features?.bootKeys ? l0.job.warmKey : null);
 }
 
