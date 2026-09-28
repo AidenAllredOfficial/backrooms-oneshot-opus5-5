@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { QUALITY } from '../../src/core/quality.ts';
 import {
   compositeSpecular, HIZ_FRAG, hiZLayout, hiZSpan, lobeCones, lobeFootprint, SSR, SSR_COMPOSITE_SPECULAR, SSR_FILTER_FRAG,
-  SSR_TRACE_FRAG, SSR_TRACE_GLSL,
+  SSR_TRACE_FRAG, SSR_TRACE_GLSL, symAxis,
 } from '../../src/post/ssr/ssrGlsl.ts';
 import { MRT_COMPOSITE_FRAG } from '../../src/post/frame/MrtComposite.ts';
 import { MIP_DOWN_FRAG, PYR_MAX } from '../../src/post/frame/ColorPyramid.ts';
@@ -152,6 +152,32 @@ describe('glossy lobe footprint', () => {
     // the ellipse's axis ratio stays within the pyramid's anisotropy
     const r = len(fp.gI) / len(fp.gO);
     expect(Math.max(r, 1 / r)).toBeLessThanOrEqual(SSR.PYR_ANISO + 1e-9);
+  });
+
+  it('the lookup, symmetric about the hit, never reaches past the nearer end of an oblique footprint', () => {
+    // the grazing floor's lobe on a ceiling: its edge rays meet it at very different lengths, so the hit lies far off
+    // the footprint's middle on screen
+    const P: [number, number, number] = [0, -1.6, -Math.sqrt(64 - 1.6 * 1.6)];
+    const v = new THREE.Vector3(...P).normalize();
+    const R: [number, number, number] = [v.x, -v.y, v.z];
+    const t = (1.2 - P[1]) / R[1];
+    const Ph: [number, number, number] = [0, 1.2, P[2] + R[2] * t];
+    const fp = lobeFootprint(P, R, [0, 1, 0], 0.2, Ph, [0, -1, 0], 0.2, project);
+    const p0 = project(Ph);
+    const a = project(fp.edges[0]), b = project(fp.edges[1]);
+    const ax = [a[0] - b[0], a[1] - b[1]], l = Math.hypot(ax[0], ax[1]);
+    const along = (q: readonly [number, number]): number => Math.abs(((q[0] - p0[0]) * ax[0] + (q[1] - p0[1]) * ax[1]) / l);
+    const near = Math.min(along(a), along(b)), far = Math.max(along(a), along(b));
+    expect(far / near).toBeGreaterThan(2.5); // an axis of |a - b| centred on the hit would overshoot the near end
+    expect(len(fp.gI) / 2).toBeLessThanOrEqual(near + 1e-6);
+    expect(len(fp.gI) / 2).toBeGreaterThan(0.99 * near);
+    // a symmetric footprint (a wall facing the ray) keeps its full axes
+    expect(symAxis([10, 0], [-10, 0], [0, 0])).toEqual([20, 0]);
+    expect(symAxis([10, 0], [-30, 0], [0, 0])).toEqual([20, 0]);
+    expect(symAxis([0, 0], [0, 0], [5, 5])).toEqual([0, 0]);
+    // the shader does the same to both axes
+    expect(SSR_TRACE_FRAG).toContain('gI = brSymAxis( brFootPx( P, R + eI, Nh, hd, L0 ), brFootPx( P, R - eI, Nh, hd, L0 ), p0 ) / uFull;');
+    expect(SSR_TRACE_FRAG).toContain('gO = brSymAxis( brFootPx( P, R + eO, Nh, hd, L0 ), brFootPx( P, R - eO, Nh, hd, L0 ), p0 ) / uFull;');
   });
 
   it('the trace looks the core and the tail up in the pyramid, centred on the hit', () => {
