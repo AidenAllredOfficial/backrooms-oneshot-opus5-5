@@ -73,12 +73,40 @@ describe('lightmap normalisation (brProbeNorm)', () => {
     // a corner at 1/10 of the probe: clamped to NORM_MIN, applied by NORM_MIX_ROUGH at rough 0.5+
     const dark = probeNorm([10, 10, 10], probe, 0.6);
     expect(dark).toBeCloseTo(1 + (PROBE.NORM_MIN - 1) * PROBE.NORM_MIX_ROUGH, 9);
-    // mirror-like lobes keep most of the image
+    // a dark glossy receiver takes the ratio at NORM_MIX_DARK (it does not see the anchor's lamps)
     const darkGloss = probeNorm([10, 10, 10], probe, 0.05);
-    expect(darkGloss).toBeCloseTo(1 + (PROBE.NORM_MIN - 1) * PROBE.NORM_MIX_GLOSS, 9);
-    expect(probeNorm([1e4, 1e4, 1e4], probe, 0.6)).toBeCloseTo(1 + (PROBE.NORM_MAX - 1) * PROBE.NORM_MIX_ROUGH, 9);
+    expect(darkGloss).toBeCloseTo(1 + (PROBE.NORM_MIN - 1) * PROBE.NORM_MIX_DARK, 9);
     // a black probe (nothing captured yet) cannot blow up
     expect(Number.isFinite(probeNorm(e, [0, 0, 0], 0.4))).toBe(true);
+  });
+
+  it('only darkens: a receiver lit more than the anchor keeps the probe as captured', () => {
+    const probe: V = [100 / Math.PI, 100 / Math.PI, 100 / Math.PI];
+    expect(PROBE.NORM_MAX).toBe(1);
+    for (const r of [0, 0.05, 0.2, 0.4, 0.6]) {
+      expect(probeNorm([1e4, 1e4, 1e4], probe, r)).toBe(1);
+      expect(probeNorm([150, 150, 150], probe, r)).toBe(1);
+    }
+  });
+
+  it('is monotonic in the ratio at every roughness, and the glossy share grows as the receiver darkens', () => {
+    const probe: V = [100 / Math.PI, 100 / Math.PI, 100 / Math.PI];
+    for (const r of [0, 0.05, 0.1, 0.2, 0.3, 0.45, 0.6]) {
+      let prev = -Infinity;
+      for (let e = 5; e <= 120; e += 1) {
+        const v = probeNorm([e, e, e], probe, r);
+        expect(v).toBeGreaterThanOrEqual(prev - 1e-12);
+        expect(v).toBeLessThanOrEqual(1);
+        expect(v).toBeGreaterThanOrEqual(PROBE.NORM_MIN - 1e-12);
+        prev = v;
+      }
+    }
+    // glossy: the share applied, (1 - f) / (1 - k), rises from NORM_MIX_GLOSS near k = 1 to NORM_MIX_DARK at NORM_MIN
+    const share = (k: number): number => (1 - probeNorm([100 * k, 100 * k, 100 * k], probe, 0)) / (1 - k);
+    expect(share(0.999)).toBeCloseTo(PROBE.NORM_MIX_GLOSS, 2);
+    expect(share(0.5)).toBeGreaterThan(PROBE.NORM_MIX_GLOSS);
+    expect(share(0.5)).toBeLessThan(PROBE.NORM_MIX_DARK);
+    expect(share(PROBE.NORM_MIN)).toBeCloseTo(PROBE.NORM_MIX_DARK, 9);
   });
 });
 

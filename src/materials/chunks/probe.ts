@@ -13,8 +13,10 @@
 //    from all over the box, where one projected point means little.
 //  - brProbeNorm: lightmap normalisation. The probe saw the room from the anchor; a fragment under a desk or in a
 //    corner receives less. The ratio of the fragment's baked irradiance to the probe's own irradiance estimate along
-//    the normal (its roughest mip, x pi) scales the reflection, clamped to NORM_MIN..NORM_MAX, and applies partly to
-//    mirror-like lobes (the image stays right there) and mostly to rough ones.
+//    the normal (its roughest mip, x pi) scales the reflection, clamped to NORM_MIN..1: it only darkens (a receiver
+//    lit more than the anchor does not see a brighter room; up to 2x brightened walls near lamps, and the reflection
+//    brightened wherever the SSR faded to this fallback). Rough lobes take 90 % of it; glossy ones 35 % at k = 1,
+//    growing to 90 % at NORM_MIN (a dark, occluded glossy receiver kept 70 % of the anchor's lamps).
 // chunks/lighting.ts mixes it in (FRAG_LIGHTS_GLSL): brPrW = weight x (1 - smoothstep(ROUGH0, ROUGH1, roughness)); the
 // baked dominant-direction lobe fades out by (1 - brPrW) (the probe holds the lamps it stands for), and the uniform
 // environment is mixed toward the probe radiance. Clearcoat lobes take the probe at their own roughness.
@@ -30,10 +32,14 @@ export const PROBE = {
    * ceiling tile keep the per-texel baked lobe, which is closer for them) */
   ROUGH0: 0.5,
   ROUGH1: 0.65,
-  /** lightmap normalisation clamp and its share at low / high roughness */
+  /** lightmap normalisation: the ratio k is clamped to NORM_MIN..NORM_MAX (1: it only darkens; reflected radiance does
+   * not grow because the receiver is lit more than the anchor) and applied at a share that is NORM_MIX_ROUGH on rough
+   * lobes and, on glossy ones, grows from NORM_MIX_GLOSS at k = 1 to NORM_MIX_DARK at k = NORM_MIN (a dark, occluded
+   * glossy receiver does not see the anchor's lamps) */
   NORM_MIN: 0.15,
-  NORM_MAX: 2.0,
+  NORM_MAX: 1.0,
   NORM_MIX_GLOSS: 0.35,
+  NORM_MIX_DARK: 0.9,
   NORM_MIX_ROUGH: 0.9,
   /** m: the anchor follows the eye when it moves farther than this (or leaves the box) */
   ANCHOR_MOVE: 2,
@@ -74,11 +80,13 @@ vec3 brProbeDir( vec3 pc, vec3 r, float rough ) {
 	float t = max( min( min( tf.x, tf.y ), tf.z ), 0.0 );
 	return mix( normalize( pc + r * t - uBrProbePos ), r, rough * rough );
 }
-// normalisation of the probe radiance to the local baked irradiance eLocal at world normal nW
+// normalisation of the probe radiance to the local baked irradiance eLocal at world normal nW: darkening only, at a
+// glossy share that grows as the receiver gets darker than the anchor (monotonic in k, never above 1)
 float brProbeNorm( vec3 nW, vec3 eLocal, float rough ) {
 	float ep = BR_PI * brLuma( textureLod( uBrProbe, nW, uBrProbeLod ).rgb );
 	float k = clamp( brLuma( eLocal ) / max( ep, 1e-2 ), ${f(PROBE.NORM_MIN)}, ${f(PROBE.NORM_MAX)} );
-	return mix( 1.0, k, mix( ${f(PROBE.NORM_MIX_GLOSS)}, ${f(PROBE.NORM_MIX_ROUGH)}, smoothstep( 0.1, 0.5, rough ) ) );
+	float gloss = mix( ${f(PROBE.NORM_MIX_DARK)}, ${f(PROBE.NORM_MIX_GLOSS)}, ( k - ${f(PROBE.NORM_MIN)} ) / ${f(1 - PROBE.NORM_MIN)} );
+	return mix( 1.0, k, mix( gloss, ${f(PROBE.NORM_MIX_ROUGH)}, smoothstep( 0.1, 0.5, rough ) ) );
 }
 // the normalised probe radiance along world reflection vector rW for a lobe of perceptual roughness rough
 vec3 brProbeRad( vec3 pc, vec3 rW, float rough, vec3 nW, vec3 eLocal ) {
@@ -181,7 +189,8 @@ export function probeDir(pc: V3, r: V3, rough: number, min: V3, max: V3, pos: V3
 export function probeNorm(eLocal: V3, probeRough: V3, rough: number): number {
   const ep = Math.PI * luma(probeRough);
   const k = Math.min(PROBE.NORM_MAX, Math.max(PROBE.NORM_MIN, luma(eLocal) / Math.max(ep, 1e-2)));
-  const m = PROBE.NORM_MIX_GLOSS + (PROBE.NORM_MIX_ROUGH - PROBE.NORM_MIX_GLOSS) * smoothstep(0.1, 0.5, rough);
+  const gloss = PROBE.NORM_MIX_DARK + (PROBE.NORM_MIX_GLOSS - PROBE.NORM_MIX_DARK) * (k - PROBE.NORM_MIN) / (1 - PROBE.NORM_MIN);
+  const m = gloss + (PROBE.NORM_MIX_ROUGH - gloss) * smoothstep(0.1, 0.5, rough);
   return 1 + (k - 1) * m;
 }
 
