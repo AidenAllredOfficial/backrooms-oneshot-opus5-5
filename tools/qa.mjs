@@ -2,22 +2,23 @@
 // Headless QA runner (WP14, §7.4 presets + §8.2 thresholds).
 //
 // Usage:
-//   node tools/qa.mjs [--preset name[,name...]] [--out shots] [--url http://localhost:5173] [--wait ms]
-//                     [--size 1600x900] [--baseline dir] [--only regex] [--list]
+//   node tools/qa.mjs [--preset name[,name...]] [--out shots] [--wait ms] [--size 1600x900] [--baseline dir]
+//                     [--only regex] [--list] [--memo] [--draft] [--direct] [--url http://localhost:5173]
 //   npm run qa [-- --preset spawn,leak,zones]
 //
-// Runs preset shots through the same browser code as tools/shoot.mjs (imported helpers). After each shot it
-// evaluates __backrooms.imageStats() and stats(), applies the §8.2 thresholds (plus per-shot `expect`, `captures`
-// + `diff`, `diffWith` and eval-returned {fail, warn} lists), writes <out>/qa-report.json and exits non-zero on
-// any failure. `--baseline dir` compares a 64x36 downsample of every screenshot with the same file name in `dir`
-// (reported only, never fails). `--only regex` keeps only the shots whose name matches (e.g. to split the 36-shot
-// `zones` preset into shorter runs).
+// Runs preset shots through the same capture code as tools/shoot.mjs (tools/lib/capture.mjs; by default in the
+// capture daemon, tools/rsd). After each shot it evaluates __backrooms.imageStats() and stats(), applies the §8.2
+// thresholds (plus per-shot `expect`, `captures` + `diff`, `diffWith` and eval-returned {fail, warn} lists), writes
+// <out>/qa-report.json and exits non-zero on any failure. `--baseline dir` compares every screenshot with the same
+// file name in `dir`: full-resolution changed pixels, pixels > 8 levels off, the largest difference, and the 64x36
+// MAD (reported only, never fails). `--only regex` keeps only the shots whose name matches (e.g. to split the
+// 36-shot `zones` preset into shorter runs). `--memo` serves unchanged shots from the capture memo (off by default:
+// QA re-renders; readiness-time checks never apply to memo hits). `--draft` renders with preview lighting (fast,
+// approximate; refuses --baseline). `--direct` / `--url` capture in this process instead of the daemon.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { inflateSync } from 'node:zlib';
-import {
-  PRESETS_FILE, launchBrowser, loadPresets, parseArgs, runShot, startVite, stopVite, warmGpu,
-} from './shoot.mjs';
+import { decodePNG, downsample, mad, pixelDiff } from './lib/png.mjs';
+import { PRESETS_FILE, loadPresets, parseArgs, runDirect, progressLine, REPO } from './shoot.mjs';
 
 // ---------------------------------------------------------------- thresholds (§8.2)
 export const THRESHOLDS = {
@@ -39,88 +40,8 @@ export const THRESHOLDS = {
   },
 };
 
-// ---------------------------------------------------------------- PNG decode (8-bit RGB/RGBA/grey, non-interlaced)
-export function decodePNG(buf) {
-  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
-  for (let i = 0; i < 8; i++) if (buf[i] !== sig[i]) throw new Error('not a PNG');
-  let off = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0;
-  const idat = [];
-  while (off < buf.length) {
-    const len = buf.readUInt32BE(off);
-    const type = buf.toString('latin1', off + 4, off + 8);
-    const data = buf.subarray(off + 8, off + 8 + len);
-    if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); depth = data[8]; ctype = data[9]; interlace = data[12]; }
-    else if (type === 'IDAT') idat.push(data);
-    else if (type === 'IEND') break;
-    off += 12 + len;
-  }
-  if (depth !== 8 || interlace !== 0) throw new Error(`unsupported PNG (depth ${depth}, interlace ${interlace})`);
-  const ch = ctype === 6 ? 4 : ctype === 2 ? 3 : ctype === 4 ? 2 : ctype === 0 ? 1 : 0;
-  if (!ch) throw new Error(`unsupported PNG colour type ${ctype}`);
-  const raw = inflateSync(Buffer.concat(idat));
-  const stride = w * ch;
-  const px = new Uint8Array(stride * h);
-  for (let y = 0; y < h; y++) {
-    const f = raw[y * (stride + 1)];
-    const src = y * (stride + 1) + 1;
-    const dst = y * stride;
-    for (let x = 0; x < stride; x++) {
-      const a = x >= ch ? px[dst + x - ch] : 0;
-      const b = y > 0 ? px[dst - stride + x] : 0;
-      const c = x >= ch && y > 0 ? px[dst - stride + x - ch] : 0;
-      let v = raw[src + x];
-      if (f === 1) v += a;
-      else if (f === 2) v += b;
-      else if (f === 3) v += (a + b) >> 1;
-      else if (f === 4) { const p = a + b - c; const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
-      px[dst + x] = v & 255;
-    }
-  }
-  const rgba = new Uint8Array(w * h * 4);
-  for (let i = 0; i < w * h; i++) {
-    const s = i * ch;
-    if (ch >= 3) { rgba[i * 4] = px[s]; rgba[i * 4 + 1] = px[s + 1]; rgba[i * 4 + 2] = px[s + 2]; }
-    else { rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = px[s]; }
-    rgba[i * 4 + 3] = ch === 4 ? px[s + 3] : ch === 2 ? px[s + 1] : 255;
-  }
-  return { w, h, rgba };
-}
-
-/** Box-filter downsample to W x H (RGB, float 0..1). */
-export function downsample(img, W = 64, H = 36) {
-  const out = new Float32Array(W * H * 3);
-  for (let y = 0; y < H; y++) {
-    const y0 = Math.floor((y * img.h) / H), y1 = Math.max(y0 + 1, Math.floor(((y + 1) * img.h) / H));
-    for (let x = 0; x < W; x++) {
-      const x0 = Math.floor((x * img.w) / W), x1 = Math.max(x0 + 1, Math.floor(((x + 1) * img.w) / W));
-      let r = 0, g = 0, b = 0, n = 0;
-      for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) {
-        const k = (yy * img.w + xx) * 4;
-        r += img.rgba[k]; g += img.rgba[k + 1]; b += img.rgba[k + 2]; n++;
-      }
-      const o = (y * W + x) * 3;
-      out[o] = r / n / 255; out[o + 1] = g / n / 255; out[o + 2] = b / n / 255;
-    }
-  }
-  return out;
-}
-
-/** Mean absolute RGB difference (0..1) of two decoded images of equal size (or of two downsamples). */
-export function mad(a, b) {
-  if (a.rgba && b.rgba) {
-    if (a.w !== b.w || a.h !== b.h) return 1;
-    let s = 0;
-    const n = a.w * a.h;
-    for (let i = 0; i < n; i++) {
-      const k = i * 4;
-      s += Math.abs(a.rgba[k] - b.rgba[k]) + Math.abs(a.rgba[k + 1] - b.rgba[k + 1]) + Math.abs(a.rgba[k + 2] - b.rgba[k + 2]);
-    }
-    return s / (n * 3 * 255);
-  }
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
-  return s / a.length;
-}
+// PNG codec and image metrics live in tools/lib/png.mjs (re-exported for older scripts)
+export { decodePNG, downsample, mad } from './lib/png.mjs';
 
 // ---------------------------------------------------------------- checks
 
@@ -145,7 +66,8 @@ export function checkShot(shot, entry, qa) {
   const allow = (shot.allowWarnings ?? []).map((r) => new RegExp(r));
   if (entry.errors.length) fails.push(`${entry.errors.length} console/page error(s): ${entry.errors.slice(0, 3).join(' | ').slice(0, 400)}`);
   if (entry.readyMs === null) fails.push('never became ready');
-  else if (entry.readyMs > (shot.expect?.readyMs ?? THRESHOLDS.readyMs)) fails.push(`readyMs ${entry.readyMs} > ${shot.expect?.readyMs ?? THRESHOLDS.readyMs}`);
+  // timing checks apply to fresh renders only, never to capture-memo hits
+  else if (!entry.memo && entry.readyMs > (shot.expect?.readyMs ?? THRESHOLDS.readyMs)) fails.push(`readyMs ${entry.readyMs} > ${shot.expect?.readyMs ?? THRESHOLDS.readyMs}`);
   const st = entry.stats && typeof entry.stats === 'object' ? entry.stats : null;
   if (st && Array.isArray(st.warnings)) {
     const w = st.warnings.filter((x) => !allow.some((r) => r.test(x)));
@@ -217,49 +139,25 @@ export function checkShot(shot, entry, qa) {
 
 // ---------------------------------------------------------------- main
 
-async function qaExtras(page, shot, entry, out, index) {
-  const qa = { imageStats: null, rects: [], steps: [], diffs: [], captures: [] };
-  const isGame = !shot.page;
-  qa.imageStats = await page.evaluate(async () => {
-    const b = window.__backrooms;
-    if (!b || typeof b.imageStats !== 'function') return null;
-    try { return await b.imageStats(); } catch (e) { return 'imageStats threw: ' + e.message; }
-  });
-  for (const r of shot.expect?.rects ?? []) {
-    const stats = await page.evaluate(async (rect) => {
-      try { return await window.__backrooms.imageStats(rect); } catch (e) { return 'imageStats threw: ' + e.message; }
-    }, r.rect);
-    qa.rects.push({ ...r, stats });
-  }
-  const shots = [];
-  for (let k = 0; k < (shot.captures ?? []).length; k++) {
-    const c = shot.captures[k];
-    let result = null;
-    if (c.eval) { try { result = await page.evaluate(c.eval); } catch (e) { result = 'EVAL ERROR: ' + e.message; } }
-    if (c.wait) await page.waitForTimeout(c.wait);
-    const file = path.join(out, `${String(index).padStart(2, '0')}-${(shot.name ?? 'shot').replace(/[^a-z0-9]+/gi, '_')}-c${k}-${(c.name ?? k).toString().replace(/[^a-z0-9]+/gi, '_')}.png`);
-    const png = c.screenshot === false ? null : await page.screenshot({ path: file });
-    qa.steps.push({ name: c.name ?? String(k), result, file: png ? file : null });
-    shots.push(png ? decodePNG(png) : null);
-  }
-  for (const [a, b] of shot.diff?.pairs ?? []) {
-    if (!shots[a] || !shots[b]) { qa.diffs.push({ label: `${a}-${b}`, mad: 1, max: shot.diff.maxMAD, warnOnly: shot.diff.warnOnly }); continue; }
-    qa.diffs.push({ label: `${shot.captures[a].name}->${shot.captures[b].name}`, mad: mad(shots[a], shots[b]), max: shot.diff.maxMAD, warnOnly: !!shot.diff.warnOnly });
-  }
-  if (isGame) {
-    entry.stats = await page.evaluate(() => { try { return window.__backrooms?.stats?.() ?? null; } catch (e) { return 'stats() threw: ' + e.message; } });
-  }
-  return qa;
+/** For each shot index, whether its PNG must be decoded (diffWith target or --baseline), and after which shot index
+ * a decoded image can be dropped. */
+export function decodePlan(shots, baseline) {
+  const lastRef = new Map(); // shot name -> last index whose diffWith references it
+  shots.forEach((s, i) => { if (s.diffWith?.shot) lastRef.set(s.diffWith.shot, i); });
+  const need = shots.map((s) => !!baseline || (!!s.name && lastRef.has(s.name)) || !!s.diffWith);
+  return { need, lastRef };
 }
 
 export async function main(argv) {
   const opt = parseArgs(argv);
   const baseline = opt.extra.baseline ?? null;
-  if (opt.help || argv.includes('--list')) {
+  if (opt.help || opt.flags.has('list')) {
     const all = JSON.parse(readFileSync(PRESETS_FILE, 'utf8'));
     for (const [k, v] of Object.entries(all)) if (Array.isArray(v)) console.log(`${k.padEnd(10)} ${v.length} shot(s): ${v.map((s) => s.name).join(', ')}`);
     return 0;
   }
+  const draft = opt.flags.has('draft');
+  if (draft && baseline) { console.error('qa: --draft renders approximate lighting; it cannot be compared with --baseline'); return 2; }
   const names = opt.presets.length ? opt.presets : ['all'];
   let shots = loadPresets(names);
   if (opt.extra.only) {
@@ -268,55 +166,83 @@ export async function main(argv) {
     if (!shots.length) { console.error(`qa: --only ${opt.extra.only} matches no shot`); return 2; }
   }
   mkdirSync(opt.out, { recursive: true });
-  let vite = null;
-  const root = opt.url ?? (vite = await startVite()).url;
-  const browser = await launchBrowser();
   const results = [];
-  const pngs = new Map();
+  const decoded = new Map(); // shot name -> decoded image, while a later diffWith needs it
+  const plan = decodePlan(shots, baseline);
   const t0 = Date.now();
-  try {
-    await warmGpu(browser);
-    for (let i = 0; i < shots.length; i++) {
-      const shot = shots[i];
-      let qa = null;
-      const { entry, png } = await runShot(browser, root, shot, { index: i, out: opt.out, wait: opt.wait, size: opt.size, evals: opt.evals },
-        async (page, e) => { qa = await qaExtras(page, shot, e, opt.out, i); });
-      qa ??= { imageStats: null, rects: [], steps: [], diffs: [] };
-      const decoded = png ? decodePNG(png) : null;
-      if (decoded && shot.name) pngs.set(shot.name, decoded);
-      if (shot.diffWith) {
-        const other = pngs.get(shot.diffWith.shot);
-        qa.diffs.push({ label: `vs ${shot.diffWith.shot}`, mad: other && decoded ? mad(other, decoded) : 1, max: shot.diffWith.maxMAD, warnOnly: !!shot.diffWith.warnOnly });
-      }
-      let baselineMAD = null;
-      if (baseline && decoded && entry.file) {
-        const bf = path.join(baseline, path.basename(entry.file));
-        if (existsSync(bf)) {
-          try { baselineMAD = mad(downsample(decodePNG(readFileSync(bf))), downsample(decoded)); } catch { baselineMAD = null; }
-        }
-      }
-      const verdict = checkShot(shot, entry, qa);
-      const r = {
-        name: shot.name ?? entry.params, preset: shot.preset, ok: verdict.ok, class: verdict.class, fails: verdict.fails, notes: verdict.notes,
-        file: entry.file, params: entry.params, page: shot.page ?? null, readyMs: entry.readyMs, imageStats: qa.imageStats,
-        rects: qa.rects.map((x) => ({ label: x.label, stats: x.stats })), diffs: qa.diffs, steps: qa.steps, baselineMAD,
-        evalResults: entry.evalResults, stats: entry.stats, errors: entry.errors, consoleWarnings: entry.warnings,
-      };
-      results.push(r);
-      const tag = r.ok ? 'PASS' : 'FAIL';
-      console.log(`${tag} ${String(i).padStart(3)} ${r.preset}/${r.name}  ready ${r.readyMs ?? '-'} ms` +
-        `${qa.imageStats && typeof qa.imageStats === 'object' ? `  lum ${qa.imageStats.meanLum.toFixed(3)} hue ${qa.imageStats.hueDeg.toFixed(0)} sat ${qa.imageStats.sat.toFixed(2)}` : ''}` +
-        `${baselineMAD !== null ? `  baseline ${(baselineMAD * 100).toFixed(2)}%` : ''}`);
-      for (const f of r.fails) console.log(`       - ${f}`);
-      for (const n of r.notes) console.log(`       ~ ${n}`);
+  const arrived = new Map();
+  let next = 0;
+  let done = 0;
+
+  // results arrive in execution order (grouped by boot key, possibly two lanes); they are checked in list order
+  const check = (i, { entry, qa }) => {
+    const shot = shots[i];
+    qa ??= { imageStats: null, rects: [], steps: [], diffs: [] };
+    let img = null;
+    if (plan.need[i] && entry.file && existsSync(entry.file)) { try { img = decodePNG(readFileSync(entry.file)); } catch { img = null; } }
+    if (img && shot.name && plan.lastRef.get(shot.name) > i) decoded.set(shot.name, img);
+    if (shot.diffWith) {
+      const other = decoded.get(shot.diffWith.shot);
+      qa.diffs.push({ label: `vs ${shot.diffWith.shot}`, mad: other && img ? mad(other, img) : 1, max: shot.diffWith.maxMAD, warnOnly: !!shot.diffWith.warnOnly });
     }
-  } finally {
-    await browser.close();
-    stopVite(vite);
+    let baselineMAD = null;
+    let baselineDiff = null;
+    if (baseline && img && entry.file) {
+      const bf = path.join(baseline, path.basename(entry.file));
+      if (existsSync(bf)) {
+        try {
+          const b = decodePNG(readFileSync(bf));
+          baselineMAD = mad(downsample(b), downsample(img));
+          baselineDiff = pixelDiff(b, img);
+        } catch { baselineMAD = null; }
+      }
+    }
+    for (const [name, last] of plan.lastRef) if (last <= i) decoded.delete(name);
+    const verdict = checkShot(shot, entry, qa);
+    const r = {
+      name: shot.name ?? entry.params, preset: shot.preset, ok: verdict.ok, class: verdict.class, fails: verdict.fails, notes: verdict.notes,
+      file: entry.file, params: entry.params, page: shot.page ?? null, readyMs: entry.readyMs, imageStats: qa.imageStats,
+      rects: qa.rects.map((x) => ({ label: x.label, stats: x.stats })), diffs: qa.diffs, steps: qa.steps, baselineMAD, baselineDiff,
+      evalResults: entry.evalResults, stats: entry.stats, errors: entry.errors, consoleWarnings: entry.warnings,
+      ...(entry.memo ? { memo: true } : {}), ...(entry.inPlace ? { inPlace: true } : {}), ...(entry.draft ? { draft: true } : {}), t: entry.t,
+    };
+    results.push(r);
+    const tag = r.ok ? 'PASS' : 'FAIL';
+    console.log(`${tag} ${String(i).padStart(3)} ${r.preset}/${r.name}  ready ${r.readyMs ?? '-'} ms${entry.memo ? ' (memo)' : ''}` +
+      `${qa.imageStats && typeof qa.imageStats === 'object' ? `  lum ${qa.imageStats.meanLum.toFixed(3)} hue ${qa.imageStats.hueDeg.toFixed(0)} sat ${qa.imageStats.sat.toFixed(2)}` : ''}` +
+      `${baselineDiff ? `  baseline ${(baselineMAD * 100).toFixed(2)}% (${baselineDiff.px} px, ${baselineDiff.px8} > 8, max ${baselineDiff.max})` : baselineMAD !== null ? `  baseline ${(baselineMAD * 100).toFixed(2)}%` : ''}`);
+    for (const f of r.fails) console.log(`       - ${f}`);
+    for (const n of r.notes) console.log(`       ~ ${n}`);
+  };
+  const onResult = (i, r) => {
+    arrived.set(i, r);
+    if (opt.flags.has('progress')) console.error(progressLine('qa', ++done, shots.length, r.entry));
+    while (arrived.has(next)) { const x = arrived.get(next); arrived.delete(next); check(next, x); next++; }
+  };
+
+  const common = { out: opt.out, wait: Number.isFinite(opt.wait) ? opt.wait : null, size: opt.size, evals: opt.evals, draft, streamCapture: false, qa: true };
+  const direct = opt.flags.has('direct') || !!opt.url || process.env.BACKROOMS_RSD === '0';
+  if (direct) {
+    await runDirect(shots, { ...common, url: opt.url, tool: 'qa', onResult });
+  } else {
+    const { render } = await import('./rsd/client.mjs');
+    const res = await render({
+      tool: 'qa', tree: REPO, shots, ...common, out: path.resolve(opt.out), memo: opt.flags.has('memo'), fresh: false,
+      onResult: (i, r) => {
+        r.entry.file &&= path.join(opt.out, path.basename(r.entry.file));
+        for (const s of r.qa?.steps ?? []) s.file &&= path.join(opt.out, path.basename(s.file));
+        onResult(i, r);
+      },
+    });
+    if (res.build) console.error(`[qa] build ${res.build.distHash.slice(0, 12)} (${res.build.cached ? 'cached' : `built in ${(res.build.ms / 1000).toFixed(2)} s`})`);
+  }
+  // shots that never reported (daemon connection lost) are failures, not silently missing
+  for (let i = next; i < shots.length; i++) {
+    check(i, arrived.get(i) ?? { entry: { file: '', params: shots[i].params, readyMs: null, stats: null, evalResults: [], errors: ['no result from the capture service'], warnings: [] }, qa: null });
   }
   const failed = results.filter((r) => !r.ok);
   const report = {
-    date: new Date().toISOString(), seconds: Math.round((Date.now() - t0) / 1000), presets: names, baseline,
+    date: new Date().toISOString(), seconds: Math.round((Date.now() - t0) / 1000), presets: names, baseline, draft,
     thresholds: THRESHOLDS, total: results.length, passed: results.length - failed.length, failed: failed.length, results,
   };
   const file = path.join(opt.out, 'qa-report.json');
