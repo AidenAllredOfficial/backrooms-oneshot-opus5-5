@@ -100,6 +100,29 @@ describe('buildChunkCollision', () => {
     expect(bs.some((b) => near(b[0], 20 * CELL) && near(b[4], 0.9))).toBe(true);
     expect(bs.some((b) => near(b[0], 22 * CELL) && b[4] > 2)).toBe(true);
     expect(bs.some((b) => near(b[0], 24 * CELL) && near(b[4], -6))).toBe(true);
+    // the NOWALK column and the VOID catch floor have no rendered surface: VIRTUAL (still colliding); the rendered
+    // SOLID mass and the blocker are not
+    const flagOf = (pred: (b: Box) => boolean): number => c.boxFlags[bs.findIndex(pred)];
+    const nowalk = flagOf((b) => near(b[0], 22 * CELL) && b[4] > 2);
+    const pit = flagOf((b) => near(b[0], 24 * CELL) && near(b[4], -6));
+    expect(nowalk & (SolidFlag.COLLIDE | SolidFlag.VIRTUAL)).toBe(SolidFlag.COLLIDE | SolidFlag.VIRTUAL);
+    expect(pit & (SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP | SolidFlag.VIRTUAL)).toBe(SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP | SolidFlag.VIRTUAL);
+    expect(flagOf((b) => b === solid[0]) & SolidFlag.VIRTUAL).toBe(0);
+    expect(flagOf((b) => near(b[0], 20 * CELL) && near(b[4], 0.9)) & SolidFlag.VIRTUAL).toBe(0);
+  });
+
+  it('flags collide-only (unrendered) solid boxes VIRTUAL, rendered ones not', () => {
+    const l = openLayout();
+    const add = (id: number, x: number, flags: number): void => {
+      l.solids.push({ kind: 'box', id, min: [x, 0, 6], max: [x + 0.5, 1, 6.5], mat: 0 as never, flags, bakeGroup: 0 });
+    };
+    add(1, 6, SolidFlag.COLLIDE | SolidFlag.OCCLUDE | SolidFlag.RENDER);
+    add(2, 9, SolidFlag.COLLIDE);
+    const c = buildChunkCollision(l);
+    const bs = boxesOf(c);
+    const at = (x: number): number => c.boxFlags[bs.findIndex((b) => near(b[0], x) && near(b[2], 6))];
+    expect(at(6) & SolidFlag.VIRTUAL).toBe(0);
+    expect(at(9) & (SolidFlag.COLLIDE | SolidFlag.VIRTUAL)).toBe(SolidFlag.COLLIDE | SolidFlag.VIRTUAL);
   });
 
   it('uses PROP_DEFS footprints with yaw snapped to 90 degrees; skips non-colliding and ceiling props', () => {

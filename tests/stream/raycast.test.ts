@@ -121,6 +121,48 @@ describe('WorldQuery.raycast', () => {
     expect(h.t).toBeCloseTo(24 - WALL_T / 2 - 22, 5);
   });
 
+  it('looks through the virtual keep-out column of deep-water NOWALK cells to the pool floor and walls', () => {
+    const l = room();
+    // a 4 x 4-cell deep pool (x 14.4..19.2, z 12..16.8), floor 1.8 m below the deck, water 0.3 m below it
+    for (let lj = 10; lj < 14; lj++) for (let li = 12; li < 16; li++) {
+      const c = cellIdx(li, lj);
+      l.flags[c] |= CellFlag.NOWALK;
+      l.floorCm[c] = -180;
+      l.waterCm[c] = -30;
+      l.floorMat[c] = Mat.POOL_TILE;
+    }
+    const col = buildChunkCollision(l);
+    // the column is still there for the player (collision), flagged VIRTUAL
+    let columns = 0;
+    for (let i = 0; i < col.boxFlags.length; i++) {
+      if ((col.boxFlags[i] & SolidFlag.VIRTUAL) !== 0 && col.boxes[i * 6 + 4] > 2) columns++;
+    }
+    expect(columns).toBe(16);
+    const q2 = query(l);
+    // from the deck, 1.6 m up, 1.4 m before the pool edge: a 45-degree ray lands on the pool floor, not on the edge
+    const s = Math.SQRT1_2;
+    expect(q2.raycast!(13, 1.6, 14.4, s, -s, 0, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(3.4 * Math.SQRT2, 5);
+    expect([h.nx, h.ny, h.nz]).toEqual([0, 1, 0]);
+    expect([h.r, h.g, h.b]).toEqual([...albedo(Mat.POOL_TILE)]);
+    // a flatter ray crosses the whole pool and hits its far wall (the deck's riser face at x = 19.2) below the deck
+    const n = Math.hypot(1, 0.5);
+    expect(q2.raycast!(13, 1.6, 14.4, 1 / n, -0.5 / n, 0, 40, h)).toBe(true);
+    expect(h.t / n).toBeCloseTo(19.2 - 13, 5);
+    expect(h.nx).toBe(-1);
+    expect(1.6 - 0.5 * (h.t / n)).toBeLessThan(0);
+    // a level ray from the deck crosses the pool and the deck beyond it and leaves the chunk (nothing to light)
+    expect(q2.raycast!(13, 1.0, 13.8, 1, 0, 0, 40, h)).toBe(false);
+    // the unchanged builder output with the flag cleared: the ray stops at the invisible column (the old defect)
+    const opaque = { ...col, boxFlags: col.boxFlags.map((f) => f & ~SolidFlag.VIRTUAL) };
+    const s0 = new StoreyData();
+    s0.set(createChunkData(l, opaque));
+    const data = [s0, new StoreyData(), new StoreyData()];
+    const q3 = createWorldQuery({ storey: () => 0 as StoreyId, data: (i) => data[i] });
+    expect(q3.raycast!(13, 1.0, 13.8, 1, 0, 0, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(14.4 - 13, 5);
+  });
+
   it('a FILLED ramp is hit on its sides and ends below its walking surface; an open flight only on its top', () => {
     const l = room();
     // two 1.2 m-high flights ascending +x over x 12..14.4: filled at z 18..19.2, open at z 21.6..22.8

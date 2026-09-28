@@ -2,7 +2,9 @@
 //
 // Output (chunk-local metres, see core/mesh.ts ChunkCollision):
 //   boxes     n*6  x0,y0,z0,x1,y1,z1
-//   boxFlags  n    SolidFlag bits (COLLIDE always; WALKABLE_TOP where the top is a floor the player may stand on)
+//   boxFlags  n    SolidFlag bits (COLLIDE always; WALKABLE_TOP where the top is a floor the player may stand on;
+//                  VIRTUAL on keep-out boxes with no rendered surface: NOWALK columns, pit catch floors, collide-only
+//                  solids. Collision treats them like any box; WorldQuery.raycast looks through them.)
 //   cellStart 1025 CSR prefix offsets into cellBoxes
 //   cellBoxes      indices of boxes whose XZ footprint, expanded by PLAYER.radius, overlaps the cell
 //   ramps     n*8  x0,z0,x1,z1,y0,y1,dir,filled (walkable inclined planes: stair flights; filled = 1 for a
@@ -22,7 +24,9 @@
 //     floor] (WALKABLE_TOP) so floor steps block exactly like boxes (> stepMax blocks, <= stepMax is climbed); a
 //     cell whose ceiling is below a neighbour's gets a "soffit" box [ceil, highest neighbour ceil] when the
 //     ceiling is low enough to matter. Cells on the chunk border cannot see their out-of-chunk neighbour, so
-//     they assume the worst case across any edge that is not a full wall (the boxes are harmless otherwise).
+//     they assume the worst case across any edge that is not a full wall (the boxes are harmless otherwise). Risers
+//     and soffits stay visible to rays: their faces toward a lower floor / higher ceiling are the rendered step and
+//     bulkhead faces, and the worst-case parts lie under the neighbour's floor or above its ceiling.
 //
 // Duplicate boxes from neighbouring chunks (core addSolid rule) are harmless: each chunk is queried on its own.
 
@@ -156,12 +160,13 @@ export function buildChunkCollision(l: ChunkLayout): ChunkCollision {
       const f = floorM(l, c), ce = ceilM(l, c);
       if (flags & CellFlag.VOID) {
         // pits: there is no floor; a catch floor at the pit bottom keeps a player that is not warped away bounded
-        B.add(x0, -TOWER_SPAN - 0.2, z0, x1, -TOWER_SPAN, z1, F_WALK);
+        B.add(x0, -TOWER_SPAN - 0.2, z0, x1, -TOWER_SPAN, z1, F_WALK | SolidFlag.VIRTUAL);
         continue;
       }
       if (flags & CellFlag.NOWALK) {
-        // deep-water edge: a virtual box over the whole cell (never enter)
-        B.add(x0, Math.min(f, SOLID_Y0), z0, x1, Math.max(ce, f + PLAYER.height + 1), z1, F_COLLIDE);
+        // deep-water edge: a virtual box over the whole cell (never enter). Nothing is rendered there, so rays
+        // (WorldQuery.raycast: the flashlight bounce) pass through it to the pool floor and walls
+        B.add(x0, Math.min(f, SOLID_Y0), z0, x1, Math.max(ce, f + PLAYER.height + 1), z1, F_COLLIDE | SolidFlag.VIRTUAL);
         continue;
       }
       if (l.blockCm[c] > 0) B.add(x0, f, z0, x1, f + l.blockCm[c] / 100, z1, F_WALK);
@@ -193,7 +198,8 @@ export function buildChunkCollision(l: ChunkLayout): ChunkCollision {
   for (const s of expandPeriodicSolids(l)) {
     if (s.kind === 'box') {
       if (!(s.flags & SolidFlag.COLLIDE)) continue;
-      B.add(s.min[0], s.min[1], s.min[2], s.max[0], s.max[1], s.max[2], (s.flags & SolidFlag.WALKABLE_TOP) ? F_WALK : F_COLLIDE);
+      const virt = (s.flags & SolidFlag.RENDER) === 0 ? SolidFlag.VIRTUAL : 0; // a collide-only keep-out volume
+      B.add(s.min[0], s.min[1], s.min[2], s.max[0], s.max[1], s.max[2], ((s.flags & SolidFlag.WALKABLE_TOP) ? F_WALK : F_COLLIDE) | virt);
     } else if (s.kind === 'ramp') {
       if (!(s.flags & (SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP))) continue;
       ramps.push(Math.min(s.x0, s.x1), Math.min(s.z0, s.z1), Math.max(s.x0, s.x1), Math.max(s.z0, s.z1), s.y0, s.y1, s.dir, (s.flags & SolidFlag.FILLED) !== 0 ? 1 : 0);

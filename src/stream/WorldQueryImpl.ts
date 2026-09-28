@@ -10,7 +10,8 @@
 // and intersects, per cell, the floor and ceiling planes, the collision boxes listed in the cell (walls, jambs and
 // posts WITH their thickness, SOLID masses, blockers, risers and soffits, colliding props) and the chunk's ramps. The
 // nearest hit inside a cell's span is final: a box crossing the ray there is listed in that cell too (the cell lists
-// are expanded by PLAYER.radius).
+// are expanded by PLAYER.radius). It finds rendered surfaces: SolidFlag.VIRTUAL boxes (the keep-out column over a
+// deep-water NOWALK cell, a pit's catch floor) are skipped, and a NOWALK cell keeps its floor plane (the pool bottom).
 
 import { CELL, CHUNK_CELLS, CHUNK_SIZE, PLAYER, STD_CEIL_CM, STOREY_PITCH, TOWER_SPAN, WALL_T } from '../core/constants.ts';
 import { EDGE_SOUND, edgeOccludesAt } from '../core/edges.ts';
@@ -800,6 +801,8 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
           const i = col.cellBoxes[k];
           if (st[i] === stampId) continue;
           st[i] = stampId;
+          // keep-out boxes with no rendered surface (NOWALK water columns, pit catch floors) light nothing
+          if ((col.boxFlags[i] & SolidFlag.VIRTUAL) !== 0) continue;
           rayBox(d, i * 6, x, y, z, dx, dy, dz);
         }
         if (d !== rampChunk) { rampChunk = d; rayRamps(d, x, y, z, dx, dy, dz); }
