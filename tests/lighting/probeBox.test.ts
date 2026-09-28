@@ -94,6 +94,30 @@ describe('probeBox', () => {
     expect(b[3]).toBeCloseTo(30, 1);
   });
 
+  it('a +-30 deg ray that leaves through an opening in a side wall does not push the box through the far wall', () => {
+    // a 10 x 6 room with a 1.5 m doorway in its +z wall (x 7.5-9) into a 40 x 24 hall; from (3, 3) the +30 deg ray
+    // crosses the side plane z = 6 at x 8.2, inside the doorway, and runs on to the ray length
+    const w = world([[0, 10, 0, 6], [7.5, 9, 5.9, 6.1], [0, 40, 6.1, 30]]);
+    expect(w.rayDistance(3, 1.62, 3, Math.cos(Math.PI / 6), Math.sin(Math.PI / 6), PROBE_BOX.MAX)).toBeGreaterThan(30);
+    const b = probeBox(w, 3, 1.62, 3, 0, box());
+    expect(b[3]).toBeCloseTo(10, 1); // +x: the real far wall (the escaped ray used to set it 34.6 m out)
+    expect(b[0]).toBeCloseTo(0, 1);
+    expect(b[2]).toBeCloseTo(0, 1);
+    expect(b[5]).toBeCloseTo(6, 1);
+    // the same room without the doorway gives the same box
+    const closed = probeBox(world([[0, 10, 0, 6]]), 3, 1.62, 3, 0, box());
+    for (let i = 0; i < 6; i++) expect(b[i]).toBeCloseTo(closed[i], 1);
+  });
+
+  it('a corridor\'s side opening bounds its axis up to where the ray crossed the side plane', () => {
+    // 30 x 2.4 m with an opening in the +z wall at x 6-7 into a hall: the +30 deg ray from (5, 1.2) crosses z = 2.4 at
+    // x 7.08 (inside it), so it only says the corridor reaches that far; the parallel rays still find its end
+    const w = world([[0, 30, 0, 2.4], [6, 7.2, 2.3, 2.5], [0, 30, 2.5, 20]]);
+    const b = probeBox(w, 5, 1.62, 1.2, 0, box());
+    expect(b[3]).toBeCloseTo(30, 1);
+    expect(b[5]).toBeCloseTo(2.4, 1);
+  });
+
   it('a pillar on a corridor\'s axis: the parallel rays pass it', () => {
     const w = world([[0, 10, 0, 2.4], [10.4, 30, 0, 2.4], [10, 10.4, 0, 1.0], [10, 10.4, 1.4, 2.4]]);
     const b = probeBox(w, 5, 1.62, 1.2, 0, box());
