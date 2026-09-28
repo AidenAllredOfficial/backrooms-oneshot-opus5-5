@@ -431,7 +431,9 @@ export class Lane {
     });
     page.on('pageerror', (e) => { const s = this.sink; if (s && s.page === page) s.errors.push('PAGEERROR: ' + (e.stack ?? e.message)); });
     page.on('crash', () => { const s = this.sink; if (s && s.page === page) { s.crashed = true; s.errors.push('SHOT ERROR: Page crashed'); } });
-    page.on('framenavigated', (f) => { if (f === page.mainFrame()) page.__navs++; });
+    // document loads only: load() moves the page with history.replaceState, a same-document navigation that
+    // Playwright also reports as 'framenavigated'
+    page.on('load', () => { page.__navs++; });
     return page;
   }
 
@@ -494,7 +496,8 @@ export class Lane {
           info = { captureGate: Number(await page.evaluate(() => window.__backrooms.captureGate ?? 0).catch(() => 0)), load: true };
           entry.readyMs = Math.round(performance.now() - T0);
         } else {
-          this.log(`load() refused shot ${o.index} (${r?.reason ?? 'error'}${r?.keys ? ': ' + r.keys.join(',') : ''}); booting a fresh page`);
+          const why = r?.ok ? 'the page reloaded' : `${r?.reason ?? 'no result'}${r?.keys?.length ? ': ' + r.keys.join(',') : ''}`;
+          this.log(`load() did not take shot ${o.index} in place (${why}); booting a fresh page`);
           await this.closePage();
           page = null;
         }

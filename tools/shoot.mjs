@@ -22,6 +22,7 @@
 // --draft          bake=preview: fast approximate lighting (report entries get draft:true; not for baselines).
 // --fresh          render even if the memo has the shot; --no-memo also stores nothing.
 // --stream full    do not add stream=capture (default for game shots without --eval when the tree supports it).
+// --tree <path>    render another source tree (a worktree, a checkout) through the daemon; default: this tree.
 //
 // The helpers are exported for tools/qa.mjs and tools/showcase.mjs; the CLI runs only when this file is executed.
 import { spawn } from 'node:child_process';
@@ -270,7 +271,7 @@ export async function main(argv) {
   } else {
     const { render } = await import('./rsd/client.mjs');
     const res = await render({
-      tool: 'shoot', tree: REPO, shots, ...common, out: path.resolve(opt.out),
+      tool: 'shoot', tree: opt.extra.tree ? path.resolve(opt.extra.tree) : REPO, shots, ...common, out: path.resolve(opt.out),
       memo: !opt.flags.has('no-memo'), fresh: opt.flags.has('fresh') || opt.flags.has('no-memo'),
       onResult: (i, r) => { r.entry.file &&= path.join(opt.out, path.basename(r.entry.file)); onResult(i, r); },
     });

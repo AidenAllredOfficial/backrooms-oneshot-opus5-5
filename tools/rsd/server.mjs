@@ -160,8 +160,15 @@ async function serveTileCache(req, res, cfg) {
 // recent tile-cache GETs: a mostly-missing cache means cold locations, where a second page only splits the
 // memory-bandwidth-bound bake between 8 workers instead of 4 (no gain, +0.6 GB), so lane 1 stays closed
 const cacheWindow = [];
-function noteCacheGet(hit) { cacheWindow.push(hit ? 1 : 0); if (cacheWindow.length > 200) cacheWindow.shift(); }
-function coldCache() { return cacheWindow.length >= 20 && cacheWindow.reduce((a, x) => a + x, 0) / cacheWindow.length < 0.75; }
+let warmPump = null;
+function noteCacheGet(hit) {
+  cacheWindow.push(hit ? 1 : 0);
+  if (cacheWindow.length > 200) cacheWindow.shift();
+  // the cache just proved warm while work is queued: let lane 1 start
+  if (!coldCache() && queue.length && !warmPump) warmPump = setTimeout(() => { warmPump = null; pump(); }, 100);
+}
+/** Not known to be warm: fewer than 20 recent GETs, or under 75 % hits. */
+function coldCache() { return cacheWindow.length < 20 || cacheWindow.reduce((a, x) => a + x, 0) / cacheWindow.length < 0.75; }
 
 // one origin per tile-cache setting (the worker addresses /__tilecache/ on its own origin)
 const origins = new Map(); // `${dir}\0${mb}` -> { url, server }
