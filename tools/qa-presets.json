@@ -1,5 +1,5 @@
 {
-  "$doc": "WP14 QA presets (§7.4). Each preset is a list of shots {name, page?, params, size?, wait?, eval?[], expect?, captures?, diff?, diffWith?, allowWarnings?}. expect.class: lit | dark | darkFlash | mixed | none (default: derived from params; an unforced lit shot standing in a naturally DARK district becomes mixed); expect.level0: false skips the Level 0 hue/sat rule. Evals may return {fail: [...], warn: [...]}. Run: npm run qa [-- --preset a,b] [--only regex] [--baseline dir]. Preset 'ui' walks the title / settings / enter / pause flow (autostart=0 overrides the appended autostart=1: the first value wins).",
+  "$doc": "WP14 QA presets (§7.4). Each preset is a list of shots {name, page?, params, size?, wait?, eval?[], expect?, captures?, diff?, diffWith?, allowWarnings?, fresh?}. fresh: true boots the shot on its own page (never moved in place from another shot, never served from the capture memo), so spawn-determinism still tests boot determinism. expect.class: lit | dark | darkFlash | mixed | none (default: derived from params; an unforced lit shot standing in a naturally DARK district becomes mixed); expect.level0: false skips the Level 0 hue/sat rule. Evals may return {fail: [...], warn: [...]}. Run: npm run qa [-- --preset a,b] [--only regex] [--baseline dir]. Preset 'ui' walks the title / settings / enter / pause flow (autostart=0 overrides the appended autostart=1: the first value wins).",
   "zones": [
     {
       "name": "zone-LOBBY",
@@ -272,6 +272,7 @@
     {
       "name": "spawn-determinism",
       "params": "seed=1&time=10&noaudio=1",
+      "fresh": true,
       "diffWith": {
         "shot": "spawn",
         "maxMAD": 0.005
