@@ -8,7 +8,8 @@
 //   RECIPE_MAIN    evaluates gen at the texel (or 4 sub-samples) and writes HEIGHT / ALBEDO / ORMH per `uOut`
 //
 // Conventions for recipe authors:
-//   - uv in [0,1) spans FRAME metres (repeat x layerRepeatY). `m = uv * FRAME` gives metres.
+//   - uv in [0,1) spans FRAME metres (the generator frame: RecipeBody.frame, default repeat x layerRepeatY).
+//     `m = uv * FRAME` gives metres.
 //   - Surf.albedo is LINEAR; write sRGB byte constants through srgb8(r, g, b) / srgbToLinear().
 //   - Surf.height is unitless 0..1 (0.5 rest); heightScale (metres per unit) turns it into relief for the normal
 //     pass and the cavity AO. Surf.ao is the recipe's own occlusion (the generator multiplies in cavity AO).

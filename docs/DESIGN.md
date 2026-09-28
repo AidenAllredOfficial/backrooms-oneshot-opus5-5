@@ -4172,7 +4172,7 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
   `BR_L_DETTINT`, `BR_L_DETSO`, `BR_L_DIRT`, `BR_L_WEAR`, `BR_L_RELIEF`, `BR_AUX_KIND`, `BR_L_AUX2`), not uniforms.
 - **Generator frame.** `frame?: [w, h]` metres is generator-only (the recipe `FRAME`, the normal pass's texel metres,
   the cavity metric) and defaults to `[repeat, repeatY]`; the mesher's UVs still follow `LAYER_DEFS`, so a floor layer
-  can be authored square while its tower walls keep `repeatY` 3.0.
+  can be authored square while its tower walls keep `repeatY` 3.0. Hence `w` = `repeat` and `h` = `repeat` or `repeatY`.
 - **Channels.** `Surf` gains `float aux` and `vec2 lean`. ormh.a follows the layer's aux kind (`AuxKind`): `none` 0 (every
   layer before v2 but the two below), `emissive` Surf.emissive (PANEL_LENS, SIGNAGE), `detailMask` Surf.aux (default 1;
   multiplies the detail strength), `wear` Surf.aux as a rank-normalised threshold field (P(W < x) = x), `mask` Surf.aux

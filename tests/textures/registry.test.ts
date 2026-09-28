@@ -7,9 +7,9 @@ import { LAYER_DEFS, layerRepeatY } from '../../src/core/materials.ts';
 import {
   AUX_DEFINES, buildRecipeFragment, buildStandaloneFragment, COMMON_GLSL, HEIGHT_PACK_GLSL, NORMAL_FRAGMENT, RECIPE_MAIN,
 } from '../../src/textures/glsl/common.ts';
-import { AUX_KIND_ID } from '../../src/textures/layers/types.ts';
+import { AUX_KIND_ID, phys } from '../../src/textures/layers/types.ts';
 import { NOISE_GLSL } from '../../src/textures/glsl/noise.ts';
-import { LAYER_RECIPES, LAYER_RECIPES_FULL } from '../../src/textures/registry.ts';
+import { LAYER_RECIPES, LAYER_RECIPES_FULL, resolveRecipe } from '../../src/textures/registry.ts';
 import { SIGN_ASPECT, signSlotRect, STENCIL_SLOTS } from '../../src/textures/signage.ts';
 import { GRIME_GLSL } from '../../src/textures/grime.ts';
 import { WATER_NORMALS_GLSL, WATER_SLOPE_K, WATER_SLOPE_SCALE } from '../../src/textures/waterNormals.ts';
@@ -89,10 +89,10 @@ describe('LAYER_RECIPES', () => {
     }
   });
 
-  it('metric pitches divide the layer frame (repeat x repeatY), so geometry tiles', () => {
-    for (const r of LAYER_RECIPES) {
+  it('metric pitches divide the layer frame (the generator frame: repeat x repeatY by default), so geometry tiles', () => {
+    for (const r of LAYER_RECIPES_FULL) {
       const d = LAYER_DEFS[r.layer];
-      const frame = { x: d.repeat, y: layerRepeatY(d) };
+      const frame = { x: r.frame[0], y: r.frame[1] };
       const g = stripComments(r.glsl);
       for (const m of g.matchAll(/(?:distLines|mod)\(\s*m\.([xy])\s*,\s*([0-9.]+)\s*\)|floor\(\s*m\.([xy])\s*\/\s*([0-9.]+)\s*\)/g)) {
         const axis = (m[1] ?? m[3]) as 'x' | 'y';
@@ -119,13 +119,22 @@ describe('texture realism v2 recipe rows', () => {
     for (const r of LAYER_RECIPES_FULL) {
       const d = LAYER_DEFS[r.layer];
       expect(r.frame.length, d.name).toBe(2);
-      expect(r.frame.every((x) => x > 0), d.name).toBe(true);
+      // the mesher maps u over `repeat` metres on every face and v over `repeat` (horizontal) or `repeatY` (vertical):
+      // a generator frame can only choose which of the two v spans the texture is authored for
+      expect(r.frame[0], d.name).toBe(d.repeat);
+      expect([d.repeat, layerRepeatY(d)], d.name).toContain(r.frame[1]);
       expect(Object.keys(AUX_KIND_ID)).toContain(r.aux);
       expect(typeof r.aux2).toBe('boolean');
       expect(r.phys, d.name).toBeDefined();
     }
+    // the defaults, on a bare body (the lanes set their own rows' trim / aux / frame, so no live row is pinned here)
     const d = LAYER_DEFS[Mat.CONCRETE_FLOOR];
-    expect(LAYER_RECIPES_FULL[Mat.CONCRETE_FLOOR].frame).toEqual([d.repeat, layerRepeatY(d)]);
+    const bare = { glsl: 'void gen(vec2 uv, inout Surf s) {}', normalStrength: 1, heightScale: 0.001, phys: phys(0) };
+    expect(resolveRecipe(Mat.CONCRETE_FLOOR, bare)).toMatchObject({
+      layer: Mat.CONCRETE_FLOOR, trim: [1, 1, 1], aux: 'none', aux2: false, frame: [d.repeat, layerRepeatY(d)],
+    });
+    const set = { ...bare, trim: [1.1, 1, 0.9] as const, aux: 'lean' as const, aux2: true, frame: [2.4, 2.4] as const };
+    expect(resolveRecipe(Mat.CONCRETE_FLOOR, set)).toMatchObject({ trim: set.trim, aux: 'lean', aux2: true, frame: [2.4, 2.4] });
   });
 
   it('reserves CMU_RAW (28) and METAL_BARE (29) with placeholder recipes', () => {
@@ -133,7 +142,7 @@ describe('texture realism v2 recipe rows', () => {
     expect(LAYER_DEFS[Mat.CMU_RAW].name).toBe('CMU_RAW');
     expect(LAYER_DEFS[Mat.METAL_BARE].name).toBe('METAL_BARE');
     expect(LAYER_DEFS[Mat.METAL_BARE].metal).toBe(1);
-    expect(LAYER_RECIPES_FULL[Mat.CMU_RAW].heightScale).toBe(LAYER_RECIPES_FULL[Mat.CMU_PAINTED].heightScale);
+    for (const m of [Mat.CMU_RAW, Mat.METAL_BARE]) expect(LAYER_RECIPES_FULL[m].layer).toBe(m); // a recipe row each (lanes C, E)
   });
 
   it('the aux channels a recipe writes match its aux kind', () => {
@@ -180,7 +189,7 @@ describe('GLSL assembly', () => {
       const src = buildRecipeFragment({ layer: r.layer, frame: r.frame, albedo: d.albedoMean, rough: d.roughness, metal: d.metal, trim: r.trim }, r.glsl);
       expect(src).toMatch(/uniform int uOut;/);
       expect(src).not.toMatch(/#define\s+uOut/);
-      expect(src).toContain(`#define FRAME vec2(${d.repeat.toFixed(6)}, ${layerRepeatY(d).toFixed(6)})`);
+      expect(src).toContain(`#define FRAME vec2(${r.frame[0].toFixed(6)}, ${r.frame[1].toFixed(6)})`);
       expect(balanced(src)).toBe(true);
       expect(src.indexOf('void gen(')).toBeLessThan(src.indexOf('void main()'));
     }

@@ -39,6 +39,23 @@ const TABLES: readonly RecipeTable[] = [
   MISC_RECIPES, SIGNAGE_RECIPES, DECAL_RECIPES,
 ];
 
+/** A family file's recipe row with every optional field resolved to its default (trim 1, aux 'none', no aux2, the
+ * generator frame repeat x repeatY). */
+export function resolveRecipe(id: MatId, body: RecipeBody): LayerRecipeFull {
+  const d = LAYER_DEFS[id];
+  return {
+    layer: id,
+    glsl: body.glsl,
+    normalStrength: body.normalStrength,
+    heightScale: body.heightScale,
+    trim: body.trim ?? [1, 1, 1],
+    phys: body.phys,
+    aux: body.aux ?? 'none',
+    aux2: body.aux2 ?? false,
+    frame: body.frame ?? [d.repeat, layerRepeatY(d)],
+  };
+}
+
 function build(): LayerRecipeFull[] {
   const out: LayerRecipeFull[] = [];
   for (let id = 0; id < MAT_COUNT; id++) {
@@ -51,18 +68,7 @@ function build(): LayerRecipeFull[] {
       }
     }
     if (!body) throw new Error(`textures/registry: no recipe for layer ${id} (${LAYER_DEFS[id].name})`);
-    const d = LAYER_DEFS[id];
-    out.push({
-      layer: id as MatId,
-      glsl: body.glsl,
-      normalStrength: body.normalStrength,
-      heightScale: body.heightScale,
-      trim: body.trim ?? [1, 1, 1],
-      phys: body.phys,
-      aux: body.aux ?? 'none',
-      aux2: body.aux2 ?? false,
-      frame: body.frame ?? [d.repeat, layerRepeatY(d)],
-    });
+    out.push(resolveRecipe(id as MatId, body));
   }
   return out;
 }

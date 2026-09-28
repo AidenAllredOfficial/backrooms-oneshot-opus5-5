@@ -34,6 +34,9 @@ v2 conventions").
   (`src/materials/chunks/family/*.ts`; each point starts with the marker `// ---- family hooks: <point>`, present even
   when no family has code there, and every hook's code ends a line). No new uniforms or samplers; the five layer
   uniform arrays grow with MAT_COUNT (+10 vec4).
+- **Generator frame invariant:** `frame[0]` is the layer's `repeat` and `frame[1]` its `repeat` or `repeatY` (the
+  mesher maps u over `repeat` on every face, v over `repeat` on horizontal and `repeatY` on vertical faces), checked by
+  tests/textures/registry.test.ts.
 - **Consumers affected:** every v2 lane (they code against these); `src/world/testScenes.ts` (the `materials` scene keeps
   its 28 layers); `tests/materials/factory.test.ts` (layer table length from MAT_COUNT).
 
