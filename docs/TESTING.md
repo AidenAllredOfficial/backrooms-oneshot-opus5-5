@@ -171,12 +171,21 @@ Two `npm test` started 4 s apart got 4 and 2 forks. Together they peaked at 3.3 
 below 6.3 GB. `tests/audio/engine.test.ts` passed 5 times in a row at load 11-13. Three full runs with
 `--sequence.shuffle` (seeds 11, 22 and 33) passed.
 
+A review re-ran the paired comparison at 2 forks with a browser and other agents running (load average 9-10). The
+old config took 317.7 s with 2 tests failing on the 5 s default timeout; this config took 177.0 s as first delivered
+and 139.9 s after `validateLayout` was switched back on for generated chunks (load noise hides its cost). The quick
+tier took 67.6 s at 2 forks and 1.1 GB. `test:related` took 3.2 s for `src/post/PostStack.ts`, 27.0 s for
+`src/bake/direct.ts` and 54.4 s for `src/world/zones/parking.ts`, at 1.8 GB or less. A shuffled full run (seed 4242)
+passed.
+
 Correctness checks:
 
 - `npx vitest list --no-staticParse` lists the 1428 test ids from before minus the 5 of the old pipeline file, plus
-  the 12 of its three shards (smoke tests included), 5 `BufferBank` idle tests and 11 fork-sizing tests: 1451 in all.
-  `--tags-filter=sweep` lists 53 of them and `--tags-filter='!sweep'` the other 1398.
+  the 12 of its three shards (smoke tests included), 5 `BufferBank` idle tests, 12 fork-sizing tests and the
+  chunkgen validation check: 1453 in all. `--tags-filter=sweep` lists 53 of them and `--tags-filter='!sweep'` the
+  other 1400.
 - Flipping the same expected value in the old and the new version of 18 guarded loops, across 11 files, makes each
   one fail with the same message in both.
 - The production bundle is byte-identical before and after the `import.meta.env` guard in
-  `src/materials/warmup.ts`, and a development-mode build keeps the sampler-budget check.
+  `src/materials/warmup.ts`, and a development-mode build keeps the sampler-budget check. The same holds for the
+  vitest env fallback in `src/world/chunkgen.ts` (all four JS bundles; only the hidden source maps change).
