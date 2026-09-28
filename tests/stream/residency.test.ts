@@ -13,7 +13,11 @@ import { emptyMeshBuffers, type ChunkCollision, type LightmapData, type MeshBuff
 import { bakeQualityOf, QUALITY, type QualityConfig } from '../../src/core/quality.ts';
 import type { DynamicMeshHandle, TileMaterials, WorldStreamer } from '../../src/core/runtime.ts';
 import type { WorkerInit, WorkerRequest, WorkerResponse } from '../../src/core/worker.ts';
-import { createStreamerCore, LEFT_STOREY_KEEPALIVE_MS, MAX_DISPOSE_PER_FRAME, PREFETCH_KEEPALIVE_MS, RESIDENT_BUDGET_BYTES, type StreamerCoreOptions } from '../../src/stream/ChunkStreamer.ts';
+import {
+  createStreamerCore, getCaptureControl, LEFT_STOREY_KEEPALIVE_MS, MAX_DISPOSE_PER_FRAME, PREFETCH_KEEPALIVE_MS, RESIDENT_BUDGET_BYTES,
+  type CaptureControl, type StreamerCoreOptions, type StreamScope,
+} from '../../src/stream/ChunkStreamer.ts';
+import { CAPTURE_NEAR_M, fogEnd, rectChebyshev, rectDistance } from '../../src/stream/priorities.ts';
 import type { TileGpu, TileUploader } from '../../src/stream/TileObject.ts';
 import type { JobHandle, WorkerPool } from '../../src/stream/WorkerPool.ts';
 
@@ -756,5 +760,166 @@ describe('automation gate ring (fullBakeRing) and burst uploads', () => {
     const s = r.st.stats();
     expect(s.tilesResident).toBe(36);
     expect(s.fadingIn).toBe(0);
+  });
+});
+
+describe('automation capture gate v2 (StreamerOptions.capture)', () => {
+  const Q: QualityConfig = { ...QUALITY.low, streamRadius: 2 };
+  const P = C / 2; // the player at the centre of chunk (0, 0)
+  const FE = fogEnd(Q.streamRadius);
+  const ringOf = (k: TileKey): number => Math.max(Math.abs(k.cx), Math.abs(k.cz));
+  const rect = (k: TileKey): [number, number, number, number] => {
+    const x0 = k.cx * C + (k.q & 1) * TILE_SIZE, z0 = k.cz * C + (k.q >> 1) * TILE_SIZE;
+    return [x0, z0, x0 + TILE_SIZE, z0 + TILE_SIZE];
+  };
+  const dist = (k: TileKey): number => rectDistance(P, P, ...rect(k));
+  const cheb = (k: TileKey): number => rectChebyshev(P, P, ...rect(k));
+  const buildKey = (j: FakeJob): TileKey => (j.req as Extract<WorkerRequest, { t: 'build' }>).key;
+  const allTiles = (): TileKey[] => {
+    const out: TileKey[] = [];
+    for (let cz = -2; cz <= 2; cz++) for (let cx = -2; cx <= 2; cx++) for (let q = 0; q < 4; q++) out.push({ s: 0, cx, cz, q: q as TileKey['q'] });
+    return out;
+  };
+  const ks = (k: TileKey): string => tileKeyStr(k);
+
+  function gated(scope: StreamScope = 'full', q: QualityConfig = Q): { r: Rig; cc: CaptureControl; closed: { v: boolean } } {
+    const closed = { v: true };
+    const r = rig(q, 0, { capture: { gateClosed: () => closed.v, scope } });
+    const cc = getCaptureControl(r.st);
+    if (!cc) throw new Error('no capture control');
+    return { r, cc, closed };
+  }
+  async function settleAll(r: Rig, cc: CaptureControl): Promise<void> {
+    await r.answerLayouts();
+    await r.answerBuilds();
+    for (let i = 0; i < 600 && !cc.isCaptureReady(); i++) r.tick(P, P);
+  }
+
+  it('while the gate is closed: only the capture set, built with full lighting; the rest follows when it opens', async () => {
+    const { r, cc, closed } = gated();
+    r.tick(P, P);
+    const builds = r.pool.pending('build');
+    const built = new Set(builds.map((j) => ks(buildKey(j))));
+    for (const j of builds) {
+      const k = buildKey(j);
+      expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting, ks(k)).toBe('full');
+      expect(ringOf(k) <= 1 || dist(k) <= FE, `${ks(k)} beyond the fog end`).toBe(true);
+    }
+    // every tile the probe cube / light atlas reaches, and ring 1, is in; tiles outside the set wait
+    for (const k of allTiles()) {
+      if (ringOf(k) <= 1 || (dist(k) <= FE && cheb(k) <= CAPTURE_NEAR_M + 1)) expect(built.has(ks(k)), ks(k)).toBe(true);
+    }
+    const gateTiles = cc.stats().gateTiles;
+    expect(gateTiles).toBe(builds.length);
+    expect(gateTiles).toBeGreaterThan(36);
+    expect(gateTiles).toBeLessThan(100);
+    // layouts only for chunks that hold a gate tile
+    const withGate = new Set(builds.map((j) => chunkKeyStr({ s: 0, cx: buildKey(j).cx, cz: buildKey(j).cz })));
+    for (const j of r.pool.pending('layout')) expect(withGate.has(chunkKeyStr((j.req as Extract<WorkerRequest, { t: 'layout' }>).key))).toBe(true);
+    expect(r.pool.pending('layout').length).toBe(withGate.size);
+    // gate work goes first: every gate build ahead of any layout of a chunk without one (there are none yet)
+    expect(cc.isCaptureReady()).toBe(false);
+    await settleAll(r, cc);
+    expect(cc.isCaptureReady()).toBe(true);
+    expect(cc.stats()).toMatchObject({ gateTiles, gateReady: gateTiles, scope: 'full' });
+    expect(r.pool.pending()).toHaveLength(0); // nothing else was submitted while closed
+    // the gate opens: the rest of the radius streams (previews, then bakes)
+    closed.v = false;
+    r.tick(P, P);
+    const rest = r.pool.pending('build');
+    expect(rest.length).toBe(100 - gateTiles);
+    for (const j of rest) expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting).toBeUndefined();
+    expect(r.pool.pending('layout').length).toBe(25 - withGate.size);
+    r.st.dispose();
+  });
+
+  it('isCaptureReady waits for the layouts of every chunk holding a gate tile', async () => {
+    const { r, cc } = gated();
+    r.tick(P, P);
+    await r.answerBuilds();
+    for (let i = 0; i < 600; i++) r.tick(P, P);
+    expect(r.st.stats().tilesFull).toBe(cc.stats().gateTiles);
+    expect(cc.isCaptureReady()).toBe(false);
+    await r.answerLayouts();
+    r.tick(P, P);
+    expect(cc.isCaptureReady()).toBe(true);
+    r.st.dispose();
+  });
+
+  it('a closing gate drops the queued work outside its capture set (a new shot does not wait behind the last)', async () => {
+    const { r, cc, closed } = gated();
+    closed.v = false;
+    r.tick(P, P);
+    expect(r.pool.pending('build').length).toBe(100);
+    closed.v = true;
+    r.tick(P, P);
+    const left = r.pool.pending('build');
+    expect(left.length).toBe(cc.stats().gateTiles);
+    for (const j of left) expect(ringOf(buildKey(j)) <= 1 || dist(buildKey(j)) <= FE).toBe(true);
+    // and they come back once it opens again
+    closed.v = false;
+    r.tick(P, P);
+    expect(r.pool.pending('build').length).toBe(100);
+    r.st.dispose();
+  });
+
+  it('while closed, the capture set follows the view: tiles that come into view get full-lit builds at once', async () => {
+    // radius 3 (ultra): the in-view band runs from the probe reach (60 m) to the fog end (92 m)
+    const { r, cc } = gated('full', { ...QUALITY.low, streamRadius: 3 });
+    r.tick(P, P); // looking toward -z
+    const before = new Set(r.pool.pending('build').map((j) => ks(buildKey(j))));
+    // turn around (+z): the in-view band between the probe reach and the fog end moves to the other side
+    r.frame++;
+    r.st.update(P, P, 0, 1, null as unknown as THREE.Camera, r.frame);
+    const after = r.pool.pending('build');
+    const added = after.filter((j) => !before.has(ks(buildKey(j))));
+    expect(added.length).toBeGreaterThan(0);
+    for (const j of added) {
+      expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting).toBe('full');
+      expect(buildKey(j).cz).toBeGreaterThan(0); // behind the old view, in front of the new one
+    }
+    // tiles that left the set keep their jobs while the gate stays closed (only a closing gate drops work)
+    expect(after.length).toBe(before.size + added.length);
+    expect(cc.stats().gateTiles).toBeLessThanOrEqual(after.length);
+    r.st.dispose();
+  });
+
+  it('scope capture: only capture chunks are desired, nothing else streams after ready, the rest is evicted', async () => {
+    const { r, cc, closed } = gated('capture');
+    closed.v = false; // even with the gate open
+    r.tick(P, P);
+    const gateTiles = cc.stats().gateTiles;
+    expect(r.pool.pending('build').length).toBe(gateTiles);
+    await settleAll(r, cc);
+    for (let i = 0; i < 20; i++) r.tick(P, P);
+    expect(r.pool.pending()).toHaveLength(0);
+    expect(r.st.stats().tilesResident).toBeLessThanOrEqual(r.st.stats().chunksResident * 4);
+    // the whole radius once the scope widens
+    cc.setScope('full');
+    r.tick(P, P);
+    expect(r.pool.pending('build').length).toBe(100 - gateTiles);
+    await r.answerLayouts();
+    await r.answerBuilds();
+    await r.answerBakes();
+    for (let i = 0; i < 800 && !r.st.isIdle(); i++) { r.tick(P, P); if (i % 50 === 0) await r.answerBakes(); }
+    expect(r.st.stats().tilesResident).toBe(100);
+    // back to the capture scope: no hysteresis ring, chunks without capture tiles go
+    cc.setScope('capture');
+    for (let i = 0; i < 60; i++) r.tick(P, P);
+    const s = r.st.stats();
+    expect(s.tilesResident).toBeLessThan(100);
+    expect(s.tilesResident).toBeGreaterThanOrEqual(gateTiles);
+    expect(cc.isCaptureReady()).toBe(true);
+    r.st.dispose();
+  });
+
+  it('players are untouched: no capture options, no gate flags, no holding', async () => {
+    const r = rig(Q);
+    r.tick(P, P);
+    expect(r.pool.pending('build').length).toBe(100);
+    for (const j of r.pool.pending('build')) expect((j.req as Extract<WorkerRequest, { t: 'build' }>).lighting).toBeUndefined();
+    const cc = getCaptureControl(r.st);
+    expect(cc?.stats().gateTiles).toBe(0);
+    r.st.dispose();
   });
 });

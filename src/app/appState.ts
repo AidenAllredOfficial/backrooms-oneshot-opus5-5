@@ -81,8 +81,9 @@ export interface InputDriver {
 export type FrameHook = (frameMs: number) => boolean;
 
 export interface GateOptions {
-  /** 'boot' applies the launch toggles (§6.1 step 7) once the stream is ready */
-  reason: 'boot' | 'seed' | 'teleport' | 'quality';
+  /** 'boot', 'seed' and 'load' (__backrooms.load, a whole shot in place) apply the launch toggles (§6.1 step 7) once
+   * the stream is ready */
+  reason: 'boot' | 'seed' | 'teleport' | 'quality' | 'load';
   /** snap an explicit position that lies inside a wall to the nearest walkable cell (x/z teleports) */
   snapToWalkable: boolean;
   /** also snap a position given without y to standable floor: out of prop footprints (a desk top), under a ceiling

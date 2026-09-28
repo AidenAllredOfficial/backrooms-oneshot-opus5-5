@@ -1,5 +1,21 @@
 // src/app/loop.ts (WP14) — the frame loop (§6.2, renderer.setAnimationLoop), the ready gate (§6.1 steps 6-7 and
 // "teleport and goto after ready") and teleports. Steps 1-11 do not allocate (scratch objects are preallocated).
+//
+// Two ready gates:
+//  - players (bake 'interactive' / 'preview'): the preview-lit tiles near and in front of the player, the exposure
+//    snapped, then READY_FRAMES frames (unchanged since R2).
+//  - automation (bake 'full', gate v2, "capture contract v2"): readiness is defined by position and view, never by
+//    wall-clock time. (0) A launch gate (boot, seed, load) freezes the clock at time= when it OPENS, so nothing that
+//    runs on simulation time (flicker, ripples and drips, anomalies, breathing) depends on how long the stream took.
+//    (1) The capture set (ChunkStreamer / priorities.ts inCaptureSet: every tile that can change a still capture) is
+//    fully baked and uploaded, with its chunks' layouts. (2) The launch toggles apply (view, exposure lock, post...),
+//    and the reflection probe re-captures every face under them. (3) SETTLE: QUIET_FRAMES consecutive frames with no
+//    upload step, no light-atlas slot left to upload and the reflection probe settled (captured, prefiltered, box
+//    current). (4) The exposure settles: metered
+//    every frame from a fixed start until PostStack's SNAP_MEASUREMENTS readings of quiet frames are applied
+//    (post/PostStack.ts settleExposure). (5) Ready, performance mark 'br:settled'. A settle longer than
+//    SETTLE_MAX_FRAMES warns (QA fails on warnings) and goes ready anyway. The capture at ready then equals the one
+//    after full idle, whatever the cache state, shot order, or fresh vs in-place page.
 
 import { cellIdx, worldToCell, worldToChunk } from '../core/grid.ts';
 import { CellFlag } from '../core/ids.ts';
@@ -7,14 +23,21 @@ import type { TeleportTarget } from '../core/debug.ts';
 import type { GameEvents } from '../core/events.ts';
 import type { MoodId, StoreyId, ZoneId } from '../core/ids.ts';
 import type { PlayerInput } from '../core/player.ts';
-import { setFlashlightBounce } from '../lighting/LightingRuntime.ts';
+import { atlasPending, setFlashlightBounce } from '../lighting/LightingRuntime.ts';
 import { DEFAULT_CONTROLLER, type PlayerInputExt } from '../player/controller.ts';
 import { nearestWaterPlane } from '../materials/water/rippleSources.ts';
+import { exposureSettled, settleExposure } from '../post/PostStack.ts';
+import { getCaptureControl } from '../stream/ChunkStreamer.ts';
 import type { AppCore, GateOptions, ReadyGate } from './appState.ts';
 import { applyLaunchToggles } from './boot.ts';
 
-/** §6.1 / STATUS 2026-09-24: 10 rendered frames after the boot gate and after every teleport. */
+/** §6.1 / STATUS 2026-09-24: 10 rendered frames after the boot gate and after every teleport (players' gates). */
 export const READY_FRAMES = 10;
+/** Automation settle: consecutive calm frames (no upload step, atlas uploaded, probe settled) before the exposure
+ * is metered. */
+export const QUIET_FRAMES = 3;
+/** Automation settle: frames after stream-ready before it gives up (warning) and goes ready anyway. */
+export const SETTLE_MAX_FRAMES = 180;
 /** Give up waiting for the stream after this long (reported as a warning, which fails headless QA). */
 export const GATE_TIMEOUT_MS = 45_000;
 /** Attract mode speed cap (m/s, §5 WP14 title: 0.6-1.0 m/s). */
@@ -52,23 +75,69 @@ export const READY_VIEW_M = 40;
 export interface GateStream {
   isReady(radiusChunks: number, needFull: boolean): boolean;
   isReadyNear(nearM: number, viewM: number, needFull: boolean): boolean;
+  /** automation gate v2: the capture set is complete (ChunkStreamer getCaptureControl) */
+  isCaptureReady?(): boolean;
 }
 
 /** The stream condition of the ready gate for a `bake` launch mode (§6.1, R2 B9). 'full' (automation default:
- * deterministic screenshots) waits for every ring-1 tile fully baked; players ('interactive', 'preview') wait only
- * for the preview-lit tiles around and in front of them. */
+ * deterministic screenshots) waits for the whole capture set fully baked (ring 1 on streamers without one);
+ * players ('interactive', 'preview') wait only for the preview-lit tiles around and in front of them. */
 export function streamReadyFor(bake: 'preview' | 'full' | 'interactive', st: GateStream): { pre: boolean; full: boolean } {
   if (bake === 'full') {
     const pre = st.isReady(1, false);
-    return { pre, full: pre && st.isReady(1, true) };
+    return { pre, full: pre && (st.isCaptureReady ? st.isCaptureReady() : st.isReady(1, true)) };
   }
   return { pre: st.isReadyNear(READY_NEAR_M, READY_VIEW_M, false), full: true };
 }
 
+// ---------------------------------------------------------------- automation settle (gate v2)
+
+/** What the settle looks at, once per frame after rendering. */
+export interface SettleInput {
+  /** the capture set is still complete (a late re-target restarts the settle) */
+  captureReady: boolean;
+  /** residency steps the streamer did this frame */
+  uploads: number;
+  /** light-atlas slots still to upload */
+  atlasPending: number;
+  /** the reflection probe has nothing left to capture or filter */
+  probeSettled: boolean;
+  /** the settle mode's exposure readings are applied */
+  exposureSettled: boolean;
+}
+export interface SettleState { phase: 'quiet' | 'exposure'; quiet: number; frames: number }
+/** 'snap': start the exposure settle now (PostStack settleExposure); 'ready': done; 'timeout': give up (warn). */
+export type SettleStep = 'wait' | 'snap' | 'ready' | 'timeout';
+export const createSettle = (): SettleState => ({ phase: 'quiet', quiet: 0, frames: 0 });
+
+/** One frame of the automation settle (pure). QUIET_FRAMES calm frames, then 'snap'; once the exposure has settled
+ * on calm frames, 'ready'. Anything that breaks the calm while the exposure settles starts the quiet count over (and
+ * a new snap). SETTLE_MAX_FRAMES frames without 'ready' give 'timeout'. */
+export function settleStep(s: SettleState, i: SettleInput): SettleStep {
+  s.frames++;
+  const calm = i.captureReady && i.uploads === 0 && i.atlasPending === 0 && i.probeSettled;
+  if (s.phase === 'exposure') {
+    if (!calm) { s.phase = 'quiet'; s.quiet = 0; }
+    else if (i.exposureSettled) return 'ready';
+  }
+  if (s.phase === 'quiet') {
+    s.quiet = calm ? s.quiet + 1 : 0;
+    if (s.quiet >= QUIET_FRAMES) {
+      s.phase = 'exposure';
+      return 'snap';
+    }
+  }
+  return s.frames >= SETTLE_MAX_FRAMES ? 'timeout' : 'wait';
+}
+
+/** Whether a gate uses the automation contract (gate v2): launches with bake=full (shoot / qa / ab). */
+export const automationGate = (core: AppCore): boolean => core.params.bake === 'full';
+
 export function createGate(core: AppCore): ReadyGate {
   let active = false;
   let reason: GateOptions['reason'] = 'boot';
-  let phase: 'stream' | 'frames' = 'stream';
+  let phase: 'stream' | 'settle' | 'frames' = 'stream';
+  let settle = createSettle();
   let frames = 0;
   let startMs = 0;
   let snap: 'none' | 'waitChunk' | 'busy' = 'none';
@@ -101,7 +170,7 @@ export function createGate(core: AppCore): ReadyGate {
       const still = now.s === fromS && Math.hypot(now.x - fromX, now.z - fromZ) <= SNAP_STILL_M;
       const moved = sp !== null && (Math.abs(sp.x - fromX) > 1e-3 || Math.abs(sp.z - fromZ) > 1e-3 || sp.s !== fromS);
       // a URL position without yaw= faces the spot's most open direction (not a wall at yaw 0)
-      const aim = (reason === 'boot' || reason === 'seed') && core.params.x !== null && core.params.yaw === null;
+      const aim = (reason === 'boot' || reason === 'seed' || reason === 'load') && core.params.x !== null && core.params.yaw === null;
       if (sp && still && (moved || aim)) {
         s.player.teleport(sp.s, sp.x, null, sp.z, aim ? sp.yaw : yaw, pitch);
         core.bus.emit('teleport', { s: sp.s, x: sp.x, y: s.player.state.y, z: sp.z });
@@ -120,38 +189,71 @@ export function createGate(core: AppCore): ReadyGate {
       gen++;
       core.debug.ready = false;
       core.debug.readyPhase = 'chunks';
-      if (!active || o.reason === 'boot' || o.reason === 'seed') reason = o.reason;
-      if (o.reason === 'boot' || o.reason === 'seed') togglesPending = true;
+      const launch = o.reason === 'boot' || o.reason === 'seed' || o.reason === 'load';
+      if (!active || launch) reason = o.reason;
+      if (launch) togglesPending = true;
+      // automation: time= holds from the first frame of the gate (applyLaunchToggles sets it again at stream-ready)
+      if (launch && automationGate(core) && core.params.time !== null) core.clock.set(core.params.time);
       active = true;
       phase = 'stream';
       frames = 0;
       startMs = performance.now();
       snap = o.snapToWalkable ? 'waitChunk' : 'none';
-      snapFloor = o.snapToWalkable && (o.snapFloor ?? ((o.reason === 'boot' || o.reason === 'seed') && core.params.y === null));
+      snapFloor = o.snapToWalkable && (o.snapFloor ?? (launch && core.params.y === null));
       return new Promise<void>((resolve) => { waiters.push(resolve); });
     },
     tick() {
       if (!active) return;
       const s = core.sys;
       if (!s) return;
+      const auto = automationGate(core);
+      const cc = auto ? getCaptureControl(s.streamer) : null;
       if (phase === 'stream') {
         if (snap === 'waitChunk') snapCheck();
-        const { pre, full } = streamReadyFor(core.params.bake, s.streamer);
-        core.debug.readyPhase = !pre ? 'chunks' : !full ? 'bake' : 'frames';
+        const gs: GateStream = cc ? { isReady: (r, f) => s.streamer.isReady(r, f), isReadyNear: (n, v, f) => s.streamer.isReadyNear(n, v, f), isCaptureReady: () => cc.isCaptureReady() } : s.streamer;
+        const { pre, full } = streamReadyFor(core.params.bake, gs);
+        core.debug.readyPhase = !pre ? 'chunks' : !full ? 'bake' : auto ? 'settle' : 'frames';
         const timedOut = performance.now() - startMs > GATE_TIMEOUT_MS;
         if (!(pre && full && snap === 'none') && !timedOut) return;
         if (timedOut) {
           core.warn(`ready gate (${reason}): stream not ready after ${GATE_TIMEOUT_MS / 1000} s ` +
             `(radius-1 ${pre ? 'uploaded' : 'not uploaded'}, ${full ? 'baked' : 'not full-baked'}); continuing`);
         }
-        s.post.snapExposure();
+        const toggled = togglesPending;
         if (togglesPending) { togglesPending = false; applyLaunchToggles(core); }
+        if (auto) {
+          if (toggled) s.probe.refresh(); // faces captured before the toggles saw the old state
+          phase = 'settle';
+          settle = createSettle();
+          core.debug.readyPhase = 'settle';
+          return;
+        }
+        s.post.snapExposure();
         phase = 'frames';
         frames = 0;
         core.debug.readyPhase = 'frames';
         return;
       }
-      if (++frames < READY_FRAMES) return;
+      if (phase === 'settle') {
+        const step = settleStep(settle, {
+          captureReady: cc ? cc.isCaptureReady() : true,
+          uploads: cc ? cc.stepsLastFrame : 0,
+          atlasPending: atlasPending(s.lighting),
+          probeSettled: s.probe.info.settled || !s.features.probe,
+          exposureSettled: exposureSettled(s.post),
+        });
+        if (step === 'snap') { settleExposure(s.post); return; }
+        if (step === 'wait') return;
+        if (step === 'timeout') {
+          const why = [
+            cc && !cc.isCaptureReady() ? 'capture set incomplete' : '', cc && cc.stepsLastFrame > 0 ? 'uploads' : '',
+            atlasPending(s.lighting) > 0 ? 'light atlas' : '', s.probe.info.settled || !s.features.probe ? '' : 'probe',
+            exposureSettled(s.post) ? '' : 'exposure',
+          ].filter(Boolean).join(', ');
+          core.warn(`ready gate (${reason}): not settled after ${SETTLE_MAX_FRAMES} frames (${why || 'restarted'}); continuing`);
+        }
+        performance.mark('br:settled', { detail: reason });
+      } else if (++frames < READY_FRAMES) return;
       active = false;
       core.debug.ready = true;
       core.debug.readyPhase = 'ready';
@@ -249,10 +351,15 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       if (input.flashlightPressed) s.lighting.flashlight.set(!s.lighting.flashlight.on);
       // 2. player (real dt so autowalk/walk work under time=; frozenTime freezes bob/breath)
       if (!clock.paused) s.player.update(realDt * timeScale, input, query, core.bus, clock.frozen);
-      // 3. streaming
+      // 3. streaming (an automation gate's capture set is computed from this frame's view, not the last one's: the
+      // camera is placed before the streamer reads its frustum)
+      const burst = core.gate.active && core.params.bake === 'full';
+      if (burst) {
+        s.player.applyToCamera(core.camera, core.fov());
+        core.camera.updateMatrixWorld();
+      }
       s.streamer.update(st.x, st.z, -Math.sin(st.camYaw), -Math.cos(st.camYaw), core.camera, core.frame);
       // 4. uploads
-      const burst = core.gate.active && core.params.bake === 'full';
       s.streamer.processUploads(r, burst ? BURST_UPLOAD_MS : s.q.uploadBudgetMs, burst);
       // 5. lighting (package F reads its URL toggle bounce= from the launch features)
       setFlashlightBounce(s.lighting, s.features.bounce);
@@ -265,8 +372,9 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       s.player.applyToCamera(core.camera, core.fov());
       // 9. audio
       s.audio.update(t, dt, st, query, s.lighting);
-      // 10. reflection probe, planar reflection
-      if (core.frame % WATER_SCAN_INTERVAL === 0) scanWater();
+      // 10. reflection probe, planar reflection (every frame while an automation gate is closed: the mirror plane
+      // at ready must not depend on which frame the gate opened at)
+      if (burst || core.frame % WATER_SCAN_INTERVAL === 0) scanWater();
       core.gpu?.begin();
       s.ripples.update(r, dt, t, st, query); // package E: ripple window and fixed steps (inside the GPU timer)
       s.probe.update(r, core.scene, core.camera, query, st, s.features.probe); // package D: one cube face per frame

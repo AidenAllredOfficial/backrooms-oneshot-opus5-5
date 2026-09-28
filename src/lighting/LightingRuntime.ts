@@ -457,6 +457,7 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
     // the motes compile here too: a ShaderMaterial on points and on the warm-up triangle gets the same program
     get passMaterials() { return fog ? [...fog.materials, ...(motes ? [motes.material] : [])] : []; },
     setVolumetrics(on: boolean) { volOn = on; },
+    get atlasPending() { return atlas && volOn ? atlas.queued : 0; },
   });
   return rt;
 }
@@ -469,6 +470,7 @@ interface LightingInfo {
   readonly hooks: readonly FrameHook[];
   readonly passMaterials: THREE.ShaderMaterial[];
   setVolumetrics(on: boolean): void;
+  readonly atlasPending: number;
 }
 const lightingInfo = new WeakMap<LightingRuntime, LightingInfo>();
 /** Debug counters of a runtime created by createLightingRuntime (WP14 F3 overlay / stats). */
@@ -489,6 +491,11 @@ export function lightingPassMaterials(rt: LightingRuntime): THREE.ShaderMaterial
 /** URL vol=0 / Systems.features.vol: the froxel volumetrics and dust motes off (the analytic haze; on by default). */
 export function setVolumetricsEnabled(rt: LightingRuntime, on: boolean): void {
   lightingInfo.get(rt)?.setVolumetrics(on);
+}
+/** Light-atlas slots planned but not uploaded yet (0 without volumetrics, or with vol=0: then nothing samples the
+ * atlas). The automation ready gate waits for 0 (loop.ts settle). */
+export function atlasPending(rt: LightingRuntime): number {
+  return lightingInfo.get(rt)?.atlasPending ?? 0;
 }
 /** URL bounce=0 / Systems.features.bounce: enable or disable the flashlight bounce VPLs (on by default). */
 export function setFlashlightBounce(rt: LightingRuntime, on: boolean): void {

@@ -25,6 +25,7 @@ import { createWaterRipples } from '../materials/water/WaterRipples.ts';
 import { createLightingRuntime, lightingFrameHooks, lightingPassMaterials, setVolumetricsEnabled } from '../lighting/LightingRuntime.ts';
 import { createAnomalyDirector } from '../lighting/anomalyDirector.ts';
 import { createPostStack, postInternals } from '../post/PostStack.ts';
+import type { PostStack } from '../core/runtime.ts';
 import { createScreenSpaceReflections } from '../post/ssr/SsrTrace.ts';
 import { collectPassMaterials, warmPassMaterials } from '../materials/warmup.ts';
 import { createDynamicResolution } from '../post/DynamicResolution.ts';
@@ -84,7 +85,46 @@ export function featuresOf(p: LaunchParams): FeatureToggles {
   return { ssr: p.ssr, probe: p.probe, cs: p.cs, bounce: p.bounce, vol: p.vol, reflView: p.reflView };
 }
 
-/** §6.1 step 7.2-7.4: time/freeze, exposure lock, view / flashlight / post toggles. Applied once, at the boot gate. */
+/** The post stack's enable set as boot left it, before any launch toggle (restored by resetLaunchToggles). */
+type PostEnabled = ReturnType<NonNullable<ReturnType<typeof postInternals>>['enabled']>;
+const bootPostEnabled = new WeakMap<PostStack, PostEnabled>();
+/** Record `post`'s boot-time enable set (bootSystems does; tests with a fake post stack too). */
+export function rememberBootPost(post: PostStack, enabled: PostEnabled): void {
+  bootPostEnabled.set(post, { ...enabled });
+}
+
+/**
+ * Everything applyLaunchToggles or the debug API (setView, setTime, setExposure, setFlashlight, setPost, setFlicker,
+ * probe.enable) can change, back to the state bootSystems leaves it in for the same preset: clock running, no
+ * exposure lock, the final view, flashlight off, the boot-time post enable set, default feature toggles (ssr, probe,
+ * contact shadows, bounce, volumetrics on; no reflection debug view), flicker mode from the launch or the settings, fly
+ * off. __backrooms.load() calls it before the next shot's gate applies that shot's toggles.
+ */
+export function resetLaunchToggles(core: AppCore): void {
+  const s = core.sys;
+  if (!s) return;
+  core.clock.set(null);
+  s.post.setExposureLock(null);
+  s.materials.setDebugView(0);
+  s.lighting.flashlight.set(false);
+  const enabled = bootPostEnabled.get(s.post);
+  if (enabled) s.post.setEnabled(enabled);
+  Object.assign(s.features, DEFAULT_FEATURES);
+  s.post.setReflectionDebug?.('off');
+  s.materials.globals.csOn.value = 1;
+  setVolumetricsEnabled(s.lighting, true);
+  const flicker = core.params.flicker ?? core.settings.get().flicker;
+  core.flickerMode = flicker;
+  s.lighting.setFlickerMode(flicker);
+  s.audio.setFlickerMode(flicker);
+  s.player.setFly(false);
+}
+
+/** Feature toggles of a launch without any feature parameter (urlParams.ts defaults). */
+export const DEFAULT_FEATURES: Readonly<FeatureToggles> = { ssr: true, probe: true, cs: true, bounce: true, vol: true, reflView: 'off' };
+
+/** §6.1 step 7.2-7.4: time/freeze, exposure lock, view / flashlight / post toggles. Applied once, at the boot gate
+ * (and at the gate of every __backrooms.load(), after resetLaunchToggles). */
 export function applyLaunchToggles(core: AppCore): void {
   const s = core.sys;
   if (!s) return;
@@ -195,7 +235,8 @@ export function workerInitOf(p: LaunchParams, q: QualityConfig): WorkerInit {
       seed: hashString(p.seedText), seedText: p.seedText, forceZone: p.forceZone, forceMood: p.forceMood,
       forceLandmark: p.forceLandmark, testScene: p.testScene, lights: p.lights,
     },
-    bake: bakeQualityOf(q), bakeTerm: p.bakeTerm, validate: import.meta.env.DEV,
+    // Node (tests, native type stripping) has no import.meta.env: validate there
+    bake: bakeQualityOf(q), bakeTerm: p.bakeTerm, validate: import.meta.env ? import.meta.env.DEV : true,
   };
 }
 
@@ -280,6 +321,8 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const lighting = createLightingRuntime(core.scene, materials.globals, textures, q, settings, core.bus);
   lighting.setFlickerMode(core.flickerMode);
   const post = createPostStack(r, core.scene, core.camera, q, settings);
+  const bootEnabled = postInternals(post)?.enabled();
+  if (bootEnabled) rememberBootPost(post, bootEnabled);
   // the frame graph publishes the pyramid and the pre-shade SSAO into the material globals; presets with split
   // frames compile its quad programs now, not at the first frame with water in view
   const frame = postInternals(post)?.scenePass;
@@ -311,9 +354,11 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const startup = await startupP;
   const pool = startup.pool;
   const startS: StoreyId = p.s ?? 0;
-  // bake 'full' (automation): the ready gate waits for ring 1 fully baked, so those bakes go ahead of the far ring
+  // bake 'full' (automation, gate v2): the capture set is built with full lighting ahead of everything else, and
+  // nothing else is submitted while the ready gate is closed (stream=capture: not after it either)
   const streamer = createChunkStreamer({
-    renderer: r, materials, quality: q, init, bus: core.bus, pool, startStorey: startS, fullBakeRing: p.bake === 'full' ? 1 : -1,
+    renderer: r, materials, quality: q, init, bus: core.bus, pool, startStorey: startS,
+    capture: p.bake === 'full' ? { gateClosed: () => core.gate.active, scope: p.stream } : undefined,
   });
   core.scene.add(streamer.scene);
   const { sp: spawn, explicit } = await spawnP;

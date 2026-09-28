@@ -15,9 +15,14 @@
 // * Discovery: first-play controls strip, camcorder captions on zone / storey changes and the first entry into a
 //   landmark, a per-seed tape log on the pause screen (continueStore.ts), display names for the location line.
 // * Esc on the pause menu shows 'Click to resume' at once (a key cannot take pointer lock after Esc).
+//
+// Capture contract v2: __backrooms.load(search) applies a whole automation shot in place (load() below): same boot
+// parameters (urlParams.ts BOOT_PARAM_KEYS) or it refuses; everything the debug API can change is reset; the world
+// resets only when a world parameter changed; the pose is resolved from the seed's base spawn exactly as a boot does;
+// no curtain, loading screen or title transition (the DOM stays that of a fresh autostart page at ready).
 
 import * as THREE from 'three';
-import type { BackroomsDebugAPI, TeleportTarget } from '../core/debug.ts';
+import type { BackroomsDebugAPI, LoadResult, TeleportTarget } from '../core/debug.ts';
 import { EventBus } from '../core/events.ts';
 import type { GameEvents } from '../core/events.ts';
 import { CHUNK_CELLS, STOREY_COUNT } from '../core/constants.ts';
@@ -38,7 +43,7 @@ import { createUI } from '../ui/ui.ts';
 import type { UI } from '../ui/ui.ts';
 import { LAYER_LATE } from '../materials/shared.ts';
 import type { AppCore, AppMode } from './appState.ts';
-import { applyQuality, bootSystems, buildQuality, filmOf, resolveSpawn, startEarlyPool, workerInitOf } from './boot.ts';
+import { applyQuality, bootSystems, buildQuality, filmOf, resetLaunchToggles, resolveSpawn, startEarlyPool, workerInitOf } from './boot.ts';
 import type { LoadPhase } from './boot.ts';
 import { createClock } from './clock.ts';
 import { createContinueStore, createTapeLogStore } from './continueStore.ts';
@@ -49,7 +54,9 @@ import { isIntegratedRenderer, rendererString, resolveQuality, resolveQualityNam
 import { UnsupportedError, createRenderer, pixelRatioFor, primeGpuContext } from './renderer.ts';
 import { createSettingsStore } from './settingsStore.ts';
 import type { SettingsStore } from './settingsStore.ts';
-import { locationSearch, parseLaunchParams } from './urlParams.ts';
+import { loadRefusal, locationSearch, parseLaunchParams, worldChanged } from './urlParams.ts';
+import { createDynamicResolution } from '../post/DynamicResolution.ts';
+import { getCaptureControl } from '../stream/ChunkStreamer.ts';
 
 export interface App { readonly debug: BackroomsDebugAPI; start(): Promise<void> }
 
@@ -187,6 +194,7 @@ export function createApp(root: HTMLElement): App {
     setQuality: (name: QualityName) => queueQuality(() => buildQuality(name, settings.get(), params)),
     setFlicker,
     newSeed: (seed) => changeTape(`?seed=${encodeURIComponent(seed)}`),
+    load: (search) => loadShot(search),
   });
   core.debug = handle.api;
   logEvent = handle.log;
@@ -510,6 +518,74 @@ export function createApp(root: HTMLElement): App {
       throw e;
     } finally {
       changingTape = false;
+    }
+  };
+
+  // ---------------------------------------------------------------- __backrooms.load (capture contract v2)
+  let loadingShot = false;
+  let bootQualityName: QualityName | null = null; // the preset boot resolved (setQuality in place changes s.q)
+  const loadShot = async (search: string): Promise<LoadResult> => {
+    const t0 = performance.now();
+    const raw = search.startsWith('?') ? search.slice(1) : search;
+    const next = parseLaunchParams(`?${raw}`, settings.get(), randomSeedText());
+    const keys = loadRefusal(params, next, bootQualityName, core.sys?.q.name ?? null);
+    if (keys.length > 0) return { ok: false, reason: 'boot-param', keys };
+    if (loadingShot || changingTape) return { ok: false, reason: 'busy', keys: [] };
+    if (lost) return { ok: false, reason: 'lost', keys: [] };
+    loadingShot = true;
+    try {
+      await bootDone;
+      await qualityChain;
+      await readyOnce.catch(() => undefined);
+      const s = core.sys, r = core.renderer;
+      if (!s || !r || lost) return { ok: false, reason: 'lost', keys: [] };
+      r.setAnimationLoop(null);
+      core.debug.ready = false;
+      core.debug.readyPhase = 'spawn';
+      const newWorld = worldChanged(params, next);
+      Object.assign(params, next); // the new shot's params, warnings included (stats().warnings is per shot)
+      core.warnings.length = 0;
+      core.errors.length = 0;
+      handle.resetLog();
+      // everything the debug API and evals can change, as a fresh boot of this preset has it
+      core.driver = null;
+      core.attract = null;
+      core.hooks.length = 0;
+      resetLaunchToggles(core);
+      s.anomaly.reset();
+      s.lighting.reset();
+      s.audio.reset();
+      s.post.glitch(0, 0);
+      s.dynRes = createDynamicResolution(s.post, r, s.q); // the preset's render scale (its windows drift on long pages)
+      playSeconds = autosaveT = 0;
+      ui.hud.hideTransient();
+      getCaptureControl(s.streamer)?.setScope(params.stream);
+      if (newWorld) {
+        s.init = workerInitOf(params, s.q);
+        await s.streamer.reset(s.init);
+      }
+      // the pose exactly as a boot resolves it: from the seed's base spawn, never from the current position
+      const { sp, explicit } = await resolveSpawn(core, s.streamer);
+      s.spawn = { ...sp, reason: explicit ? 'explicit' : sp.reason };
+      s.streamer.switchStorey(sp.s);
+      s.player.teleport(sp.s, sp.x, explicit && params.y === null ? null : sp.y, sp.z, sp.yaw, sp.pitch);
+      s.player.setFly(params.fly);
+      bus.emit('teleport', { s: sp.s, x: sp.x, y: s.player.state.y, z: sp.z });
+      s.player.applyToCamera(camera, core.fov());
+      core.clock.set(0); core.clock.set(null);
+      core.frameStats.reset();
+      frameLoop = createLoop(core, onFrame); // clears the water-plane and zone caches
+      history.replaceState(null, '', `?${raw}`);
+      const ready = core.gate.open({ reason: 'load', snapToWalkable: explicit });
+      readyOnce = ready;
+      if (innerWidth > 0 && innerHeight > 0) r.setAnimationLoop(frameLoop);
+      else sizeSuspended = true;
+      await ready;
+      const ms = performance.now() - t0;
+      performance.measure('br:load', { start: t0, end: t0 + ms });
+      return { ok: true, ms };
+    } finally {
+      loadingShot = false;
     }
   };
 
@@ -868,6 +944,7 @@ export function createApp(root: HTMLElement): App {
     // steps 3-5
     const sys = await bootSystems(core, q, { phase: onPhase, progress: onProgress }, early);
     core.sys = sys;
+    bootQualityName = sys.q.name;
     if (params.autostart) { audioGain = 1; audioGainTarget = 1; }
     // Settings changed on the title while the systems booted have not reached them yet: apply the current state
     // once (film, flicker, input, volumes scaled by the title's audio gain, and a queued quality change if the
@@ -886,7 +963,7 @@ export function createApp(root: HTMLElement): App {
       const st = sys.streamer.stats();
       const need = 36; // radius-1 tiles (3 x 3 chunks x 4)
       ui.phases.setProgress('world', Math.min(1, st.tilesResident / need));
-      if (core.debug.readyPhase === 'bake' || core.debug.readyPhase === 'frames') {
+      if (core.debug.readyPhase === 'bake' || core.debug.readyPhase === 'frames' || core.debug.readyPhase === 'settle') {
         ui.phases.setProgress('world', 1);
         ui.phases.setProgress('lighting', params.bake === 'full' ? Math.min(0.95, st.tilesFull / need) : 0.95);
       }

@@ -1,5 +1,8 @@
 // src/core/debug.ts — automation contract: URL launch params and window.__backrooms (installed by WP14).
 // tools/shoot.mjs appends `autostart=1` and waits for window.__backrooms.ready === true (60 s timeout).
+// Capture contract v2 (captureGate: 2): with bake=full, ready means the capture set is baked and uploaded and the
+// frame has settled (app/loop.ts): a capture at ready needs no wall-clock wait. whenReady() resolves at the next
+// ready; load(search) applies a whole shot in place (same boot parameters: BOOT_PARAM_KEYS in app/urlParams.ts).
 
 import type { QualityName } from './quality.ts';
 import type { FlickerMode } from './settings.ts';
@@ -53,8 +56,15 @@ export interface LaunchParams {
   // 'noprime=1' => false: skip the wait for Chromium's first-context loss (app/renderer.ts primeGpuContext); the
   // play launcher passes it when it runs the browser under XWayland, where that loss does not happen
   prime: boolean;
+  // 'stream=capture' (with bake=full only): stream the capture set alone, before and after ready (shoot / ab); default
+  // 'full': the whole stream radius once ready (players, QA)
+  stream: 'capture' | 'full';
   warnings: string[];
 }
+
+/** __backrooms.load(search): the shot was applied in place and is ready, or a boot parameter differs (the caller
+ * boots a fresh page instead). */
+export type LoadResult = { ok: true; ms: number } | { ok: false; reason: 'boot-param'; keys: string[] } | { ok: false; reason: 'busy' | 'lost'; keys: string[] };
 
 export interface ImageStats {
   width: number; height: number; // readback size (160x90 unless rect given)
@@ -102,7 +112,11 @@ export interface DebugStats {
   fps: number; frameMs: { avg: number; p95: number; max: number; max5s: number }; cpuMs: number; gpuMs: number | null;
   render: { drawCalls: number; triangles: number; programs: number; textures: number; texturesPooled: number; geometries: number };
   chunks: { resident: number; desired: number; layoutsPending: number };
-  tiles: { resident: number; preview: number; full: number; queued: number; inFlight: number; uploadsPending: number; fadingIn: number; otherStoreys: number };
+  tiles: {
+    resident: number; preview: number; full: number; queued: number; inFlight: number; uploadsPending: number; fadingIn: number; otherStoreys: number;
+    /** automation (bake=full): tiles in the capture set, how many of them are ready, the stream scope */
+    gate?: number; gateReady?: number; scope?: 'capture' | 'full';
+  };
   workers: { count: number; busy: number };
   bake: { lastMs: number; avgMs: number; buildAvgMs: number };
   player: {
@@ -169,6 +183,16 @@ export interface BackroomsDebugAPI {
    * deterministic before/after pair: `high` = steady (before its next burst after `after`), `low` = inside that
    * burst (its last, LOW slot). null when no such light is resident or the flicker mode is 'off'. */
   flickerWindow?(after?: number): { x: number; y: number; z: number; high: number; low: number; lowLevel: number } | null;
+  /** Capture contract version: 2 = gate v2 (position-defined capture set, frame-counted settle, exposure settled;
+   * no wall-clock wait needed after ready), whenReady(), load(), frames(), stream=capture. Absent on older builds. */
+  readonly captureGate?: number;
+  /** Resolves at ready (at once when ready now). */
+  whenReady?(): Promise<void>;
+  /** Apply a whole shot (a URL search string) in place, resolving once it is ready, or refuse when a boot parameter
+   * (BOOT_PARAM_KEYS) differs from this page's. Resets everything the debug API and evals can change. */
+  load?(search: string): Promise<LoadResult>;
+  /** Resolves after n more rendered frames. */
+  frames?(n: number): Promise<void>;
 }
 
 /** Minimal surface set by the harness pages (§7.3); shoot.mjs only needs ready/isReady/stats. */
