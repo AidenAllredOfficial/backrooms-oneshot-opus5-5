@@ -220,7 +220,7 @@ export async function main(argv) {
     while (arrived.has(next)) { const x = arrived.get(next); arrived.delete(next); check(next, x); next++; }
   };
 
-  const common = { out: opt.out, wait: Number.isFinite(opt.wait) ? opt.wait : null, size: opt.size, evals: opt.evals, draft, streamCapture: false, qa: true };
+  const common = { out: opt.out, wait: Number.isFinite(opt.wait) ? opt.wait : null, size: opt.size, evals: opt.evals, draft, streamCapture: false, qa: true, freshPages: opt.flags.has('fresh-pages') };
   const direct = opt.flags.has('direct') || !!opt.url || process.env.BACKROOMS_RSD === '0';
   if (direct) {
     await runDirect(shots, { ...common, url: opt.url, tool: 'qa', onResult });

@@ -549,7 +549,7 @@ export class Lane {
         tainted ||= r.tainted;
         mark('qa');
       }
-      keep = this.keepPages && isGameShot(shot) && !needsFreshPage(shot) && !tainted && !sink.crashed && entry.errors.length === 0 &&
+      keep = this.keepPages && !o.fresh && isGameShot(shot) && !needsFreshPage(shot) && !tainted && !sink.crashed && entry.errors.length === 0 &&
         entry.captureGate >= 2 && info?.load === true && !this.recycleWanted;
     } catch (err) {
       entry.errors.push('SHOT ERROR: ' + (err?.message ?? String(err)));

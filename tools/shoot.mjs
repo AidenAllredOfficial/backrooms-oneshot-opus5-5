@@ -23,6 +23,7 @@
 // --fresh          render even if the memo has the shot; --no-memo also stores nothing.
 // --stream full    do not add stream=capture (default for game shots without --eval when the tree supports it).
 // --tree <path>    render another source tree (a worktree, a checkout) through the daemon; default: this tree.
+// --fresh-pages    boot every shot on its own page (never move a page in place with load()).
 //
 // The helpers are exported for tools/qa.mjs and tools/showcase.mjs; the CLI runs only when this file is executed.
 import { spawn } from 'node:child_process';
@@ -65,7 +66,7 @@ export function releaseSlot() {
 
 export function parseArgs(argv) {
   const opt = { params: [], out: 'shots', wait: null, size: '1600x900', url: null, evals: [], page: '', presets: [], extra: {}, flags: new Set() };
-  const FLAGS = new Set(['direct', 'draft', 'fresh', 'no-memo', 'memo', 'list', 'json', 'progress']);
+  const FLAGS = new Set(['direct', 'draft', 'fresh', 'fresh-pages', 'no-memo', 'memo', 'list', 'json', 'progress']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const v = argv[i + 1];
@@ -261,7 +262,7 @@ export async function main(argv) {
   const direct = opt.flags.has('direct') || !!opt.url || process.env.BACKROOMS_RSD === '0';
   const common = {
     out: opt.out, wait: Number.isFinite(opt.wait) ? opt.wait : null, size: opt.size, evals: opt.evals,
-    draft: opt.flags.has('draft'), streamCapture: opt.extra.stream !== 'full',
+    draft: opt.flags.has('draft'), streamCapture: opt.extra.stream !== 'full', freshPages: opt.flags.has('fresh-pages'),
   };
   const report = new Array(shots.length);
   let done = 0;

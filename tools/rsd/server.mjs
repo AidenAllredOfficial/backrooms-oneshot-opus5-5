@@ -445,6 +445,7 @@ async function runJob(l, job) {
     const r = await withTimeout(l.lane.run(shot, {
       index: job.index, out: job.out, wait: req.wait ?? null, size: req.size, evals: req.evals ?? [], qa: !!req.qa,
       streamCapture: !!req.streamCapture, draft: !!req.draft, root: job.root, features: job.features, hc: req.hc, evalTimeoutMs: req.evalTimeoutMs,
+      fresh: req.freshPages || undefined,
     }), timeout, 'capture job').catch(async (e) => {
       log(`lane ${l.id}: ${e.message}; closing its page`);
       await withTimeout(l.lane.closePage(), 15000, 'page.close').catch(async () => { killBrowser(); await closeBrowser('wedged page'); });
@@ -496,7 +497,7 @@ async function handleRender(body, res) {
     id: nextReq++, client: String(body.client ?? 'anon'), res, t0: performance.now(), pending: 0, ended: false, cancelled: false, memoHits: 0,
     size: body.size ?? '1600x900', wait: Number.isFinite(body.wait) ? body.wait : null, evals: body.evals ?? [], qa: !!body.qa,
     streamCapture: !!body.streamCapture, draft: !!body.draft, memo: body.memo !== false, fresh: !!body.fresh, hc: Number(body.hc ?? 8),
-    evalTimeoutMs: Number(body.evalTimeoutMs ?? 900000), class: body.class ?? null,
+    evalTimeoutMs: Number(body.evalTimeoutMs ?? 900000), class: body.class ?? null, freshPages: !!body.freshPages,
   };
   requests.set(req.id, req);
   res.on('close', () => {
