@@ -13,6 +13,11 @@ const { decodePNG, encodePNG, pixelDiff, mad } = await load('lib/png.mjs');
 const { decodePlan, checkShot } = await load('qa.mjs');
 
 describe('gameSearch: the launch params a tool adds', () => {
+  it('keeps the players\' boot (priming) for shots with evals', () => {
+    expect(gameSearch({ params: 'seed=1', eval: ['1'] }, { warmed: true })).toBe('seed=1&autostart=1');
+    expect(gameSearch({ params: 'seed=1' }, { warmed: true, evals: true })).toBe('seed=1&autostart=1');
+  });
+
   it('adds noprime=1 only to game pages of a warmed browser, and autostart=1 last', () => {
     expect(gameSearch({ params: 'seed=1' }, { warmed: true })).toBe('seed=1&noprime=1&autostart=1');
     expect(gameSearch({ params: 'seed=1' }, { warmed: false })).toBe('seed=1&autostart=1');

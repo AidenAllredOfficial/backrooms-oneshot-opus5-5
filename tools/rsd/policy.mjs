@@ -2,7 +2,7 @@
 // which shots may be served from the capture memo and under which key, which lane may take a job, and which job a
 // lane takes next.
 import { createHash } from 'node:crypto';
-import { NO_MEMO_PRESETS, parseSize } from '../lib/capture.mjs';
+import { LONG_PRESETS, NO_MEMO_PRESETS, parseSize } from '../lib/capture.mjs';
 
 /**
  * Canonical form of a shot for the memo key: its final launch params sorted (minus autostart / noprime, which do not
@@ -34,25 +34,34 @@ export function memoKey({ distHash, shot, search, r, browserKey, codeHash }) {
 
 export function qualityOf(shot) { return new URLSearchParams(String(shot.params ?? '')).get('quality') ?? 'high'; }
 
-/** Lane 0 takes anything; lane 1 only non-long shots at quality <= high and <= 1920x1080. */
+/**
+ * Shots that must have the browser to themselves: the long presets (they measure wall-clock time) and every shot
+ * with evals (behaviour and frame-time checks: a second page booting in the same browser adds 15-35 ms frames).
+ */
+export function isExclusive(shot, r) {
+  return LONG_PRESETS.has(shot.preset) || (shot.eval?.length ?? 0) > 0 || (r.evals?.length ?? 0) > 0 || r.class === 'long';
+}
+
+/** Lane 0 takes anything; lane 1 only non-exclusive shots at quality <= high and <= 1920x1080. */
 export function laneEligible(laneId, job) {
   if (laneId === 0) return true;
   const { width, height } = parseSize(job.shot.size ?? job.req.size);
-  return !job.long && qualityOf(job.shot) !== 'ultra' && width * height <= 1920 * 1080;
+  return !job.exclusive && qualityOf(job.shot) !== 'ultra' && width * height <= 1920 * 1080;
 }
 
 /**
  * Next job for a lane: round-robin over the clients with queued work (client ids in sorted order, starting after
  * `last`, the client served last); within the chosen client prefer a job matching the lane's warm-page key, else
- * its first queued job. At most one 'long' job runs at a time. Returns { job, last } (job null when nothing fits)
- * without mutating `queue`.
+ * its first queued job. Nothing starts while an exclusive job runs, and an exclusive job starts only when no other
+ * lane is busy. Returns { job, last } (job null when nothing fits) without mutating `queue`.
  */
-export function pickJob(queue, laneId, { warmKey = null, longRunning = 0, last = null } = {}) {
+export function pickJob(queue, laneId, { warmKey = null, exclusiveRunning = false, othersBusy = false, last = null } = {}) {
+  if (exclusiveRunning) return { job: null, last };
   const clients = [...new Set(queue.map((j) => j.req.client))].sort();
   const start = last === null ? 0 : Math.max(0, clients.findIndex((c) => c > last));
   for (let k = 0; k < clients.length; k++) {
     const c = clients[(start + k) % clients.length];
-    const mine = queue.filter((j) => j.req.client === c && laneEligible(laneId, j) && !(j.long && longRunning > 0));
+    const mine = queue.filter((j) => j.req.client === c && laneEligible(laneId, j) && !(j.exclusive && othersBusy));
     if (!mine.length) continue;
     const job = (warmKey && mine.find((j) => j.warmKey === warmKey)) || mine[0];
     return { job, last: c };

@@ -6,8 +6,9 @@
 // the tile-cache middleware of tools/viteTileCache.ts, and runs capture jobs from any number of clients:
 //   - round-robin across clients; within a client, shots grouped by boot key so a warm page can take the next shot
 //     in place (capture contract v2, feature-detected by tools/lib/capture.mjs);
-//   - lane 0 always; lane 1 (a second page) only when the memory budget admits it, for shots at quality <= high and
-//     <= 1920x1080; 'long' jobs (presets soak/stress/perf/edge) use at most one lane;
+//   - lane 0 always; lane 1 (a second page) only when the memory budget admits it and the tile cache is warm, for
+//     shots at quality <= high and <= 1920x1080; shots with evals and the long presets (soak/stress/perf/edge) run
+//     alone in the browser (policy.mjs isExclusive);
 //   - a memo of finished captures keyed by (distHash, canonical shot, Chromium + GPU, capture code): an unchanged
 //     re-shoot costs a file copy;
 //   - the memory governor (tools/lib/procmem.mjs) on its own process tree: shed idle pages below 3.5 GB
@@ -29,11 +30,11 @@ import { pathToFileURL } from 'node:url';
 import { acquire, status as budgetStatus, WEIGHTS, pageWeight } from '../lib/budget.mjs';
 import { createGovernor, findInTree } from '../lib/procmem.mjs';
 import {
-  Lane, CAPTURE_CODE_HASH, LONG_PRESETS, READY_TIMEOUT_MS, launchBrowser, warmGpu, withTimeout,
+  Lane, CAPTURE_CODE_HASH, READY_TIMEOUT_MS, launchBrowser, warmGpu, withTimeout,
   parseSize, planOrder, shotFileName, captureFileName, treeFeatures, isGameShot,
 } from '../lib/capture.mjs';
 import { ensureBuild, buildIndex, RENDER_DIR, pinnedDistHashes } from './build.mjs';
-import { memoAllowed, memoKey, laneEligible, pickJob, qualityOf } from './policy.mjs';
+import { memoAllowed, memoKey, laneEligible, pickJob, qualityOf, isExclusive } from './policy.mjs';
 import { RUN_DIR, DAEMON_JSON, daemonVersion } from './client.mjs';
 
 const VERSION = daemonVersion();
@@ -81,7 +82,7 @@ let browserP = null;
 let browserLease = null;
 let browserShots = 0;
 let browserInfo = null; // { version, renderer, lost }
-let longRunning = 0;
+let exclusiveRunning = 0;
 const memoStats = { hits: 0, misses: 0, entries: 0, bytes: 0 };
 
 // ---------------------------------------------------------------- memory governor (own tree only)
@@ -163,7 +164,7 @@ const cacheWindow = [];
 let warmPump = null;
 function noteCacheGet(hit) {
   cacheWindow.push(hit ? 1 : 0);
-  if (cacheWindow.length > 200) cacheWindow.shift();
+  if (cacheWindow.length > 60) cacheWindow.shift();
   // the cache just proved warm while work is queued: let lane 1 start
   if (!coldCache() && queue.length && !warmPump) warmPump = setTimeout(() => { warmPump = null; pump(); }, 100);
 }
@@ -344,7 +345,7 @@ function memoPut(key, distHash, entry, qa) {
 /** Next job for a lane (policy.mjs pickJob), removed from the queue. */
 function takeJob(l) {
   if (!queue.length) return null;
-  const r = pickJob(queue, l.id, { warmKey: l.lane.warmKey, longRunning, last: lastClient });
+  const r = pickJob(queue, l.id, { warmKey: l.lane.warmKey, exclusiveRunning: exclusiveRunning > 0, othersBusy: lanes.some((x) => x && x !== l && x.job), last: lastClient });
   lastClient = r.last;
   if (r.job) queue.splice(queue.indexOf(r.job), 1);
   return r.job;
@@ -402,8 +403,8 @@ async function runLane(l) {
       if (job.req.cancelled) { finishJob(job, null); continue; }
       if (!(await ensurePageLease(l, job))) { queue.unshift(job); l.refusedAt = Date.now(); break; } // lane 1 not admitted: lane 0 takes it
       l.job = job;
-      if (job.long) longRunning++;
-      try { await runJob(l, job); } finally { if (job.long) longRunning--; l.job = null; }
+      if (job.exclusive) exclusiveRunning++;
+      try { await runJob(l, job); } finally { if (job.exclusive) exclusiveRunning--; l.job = null; }
       // between jobs: recycle on PSS / shot counts
       if (gov.takeRecycle()) { await closeLanePage(l); if (gov.last.pssMb > 3200 && lanes.every((x) => !x.job)) await closeBrowser('tree PSS over the cap'); }
       const gpu = gov.last.byClass?.gpu?.rss ?? 0;
@@ -483,7 +484,7 @@ async function handleRender(body, res) {
     id: nextReq++, client: String(body.client ?? 'anon'), res, t0: performance.now(), pending: 0, ended: false, cancelled: false, memoHits: 0,
     size: body.size ?? '1600x900', wait: Number.isFinite(body.wait) ? body.wait : null, evals: body.evals ?? [], qa: !!body.qa,
     streamCapture: !!body.streamCapture, draft: !!body.draft, memo: body.memo !== false, fresh: !!body.fresh, hc: Number(body.hc ?? 8),
-    evalTimeoutMs: Number(body.evalTimeoutMs ?? 900000), long: body.class === 'long',
+    evalTimeoutMs: Number(body.evalTimeoutMs ?? 900000), class: body.class ?? null,
   };
   requests.set(req.id, req);
   res.on('close', () => {
@@ -532,7 +533,7 @@ async function handleRender(body, res) {
       const search = probe.searchOf(shot, { ...req, features: side.features });
       const job = {
         req, shot, index: i, side: sides.indexOf(side), out: side.out, root: side.root, features: side.features, distHash: side.build.distHash, rank,
-        long: req.long || LONG_PRESETS.has(shot.preset),
+        exclusive: isExclusive(shot, req),
         warmKey: isGameShot(shot) ? `${side.root}\n${probe.keyOf(shot, search, { size: req.size, hc: req.hc, features: side.features })}` : null,
         memoKey: null,
       };

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const mod = path.resolve(import.meta.dirname, '../../tools/rsd/policy.mjs');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { memoKey, memoAllowed, laneEligible, pickJob } = (await import(mod)) as any;
+const { memoKey, memoAllowed, laneEligible, pickJob, isExclusive } = (await import(mod)) as any;
 
 const R = { size: '1600x900', wait: null, evals: [], qa: false, memo: true, hc: 8 };
 const key = (o: Record<string, unknown> = {}) => memoKey({
@@ -42,14 +42,14 @@ describe('capture memo', () => {
 });
 
 describe('lanes and job selection', () => {
-  const job = (client: string, params: string, extra: Record<string, unknown> = {}) => ({ req: { client, size: '1600x900' }, shot: { params }, long: false, warmKey: null, ...extra });
+  const job = (client: string, params: string, extra: Record<string, unknown> = {}) => ({ req: { client, size: '1600x900' }, shot: { params }, exclusive: false, warmKey: null, ...extra });
 
   it('keeps lane 1 to warm-weight shots', () => {
     expect(laneEligible(0, job('a', 'quality=ultra'))).toBe(true);
     expect(laneEligible(1, job('a', 'quality=high'))).toBe(true);
     expect(laneEligible(1, job('a', 'quality=ultra'))).toBe(false);
     expect(laneEligible(1, { ...job('a', 'quality=high'), shot: { params: 'x=1', size: '2560x1440' } })).toBe(false);
-    expect(laneEligible(1, job('a', 'quality=high', { long: true }))).toBe(false);
+    expect(laneEligible(1, job('a', 'quality=high', { exclusive: true }))).toBe(false);
   });
 
   it('round-robins across clients and prefers the warm page key', () => {
@@ -65,10 +65,17 @@ describe('lanes and job selection', () => {
     expect(order).toEqual(['s=2', 's=3', 's=4', 's=1']);
   });
 
-  it('runs at most one long job at a time', () => {
-    const q = [job('a', 's=1', { long: true }), job('b', 's=2')];
-    expect(pickJob(q, 0, { longRunning: 1 }).job.shot.params).toBe('s=2');
-    expect(pickJob([q[0]], 0, { longRunning: 1 }).job).toBeNull();
-    expect(pickJob([q[0]], 0, { longRunning: 0 }).job.shot.params).toBe('s=1');
+  it('gives shots with evals and the long presets the browser to themselves', () => {
+    expect(isExclusive({ params: 'x', eval: ['1'] }, {})).toBe(true);
+    expect(isExclusive({ params: 'x' }, { evals: ['__backrooms.perf(5)'] })).toBe(true);
+    expect(isExclusive({ params: 'x', preset: 'soak' }, {})).toBe(true);
+    expect(isExclusive({ params: 'x', preset: 'zones', captures: [{ eval: '1' }] }, {})).toBe(false);
+    const q = [job('a', 's=1', { exclusive: true }), job('b', 's=2')];
+    // an exclusive job waits while another lane is busy; the other client's job goes first
+    expect(pickJob(q, 0, { othersBusy: true }).job.shot.params).toBe('s=2');
+    expect(pickJob([q[0]], 0, { othersBusy: true }).job).toBeNull();
+    expect(pickJob([q[0]], 0, { othersBusy: false }).job.shot.params).toBe('s=1');
+    // nothing starts beside a running exclusive job
+    expect(pickJob([q[1]], 1, { exclusiveRunning: true }).job).toBeNull();
   });
 });

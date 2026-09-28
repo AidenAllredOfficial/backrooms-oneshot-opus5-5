@@ -170,17 +170,19 @@ export function isGameShot(shot) {
 /**
  * The launch params a tool adds to a shot, in one place so they can never be decoupled:
  *   bake=preview (draft) and stream=capture (streamCapture) for game shots that do not set them;
- *   noprime=1 for game shots in a browser whose first-context loss warmGpu absorbed (warmed);
+ *   noprime=1 for game shots without evals in a browser whose first-context loss warmGpu absorbed (warmed).
+ *     Shots with evals keep the players' boot: skipping the 0.45 s priming wait moves ready earlier relative to
+ *     background streaming, and behaviour evals (tower walk, elevator ride) depend on how far it got;
  *   autostart=1, always last (as tools/shoot.mjs always did).
  */
-export function gameSearch(shot, { warmed: w = false, draft = false, streamCapture = false } = {}) {
+export function gameSearch(shot, { warmed: w = false, draft = false, streamCapture = false, evals = false } = {}) {
   const params = String(shot.params ?? '');
   const p = new URLSearchParams(params);
   const extra = [];
   if (isGameShot(shot)) {
     if (draft && !p.has('bake')) extra.push('bake=preview');
     if (streamCapture && !p.has('stream')) extra.push('stream=capture');
-    if (w && !p.has('noprime')) extra.push('noprime=1');
+    if (w && !evals && !(shot.eval?.length > 0) && !p.has('noprime')) extra.push('noprime=1');
   }
   return [params, ...extra, 'autostart=1'].filter(Boolean).join('&');
 }
@@ -375,7 +377,8 @@ export class Lane {
     this.browser = o.browser;
     this.root = o.root;
     this.hc = o.hc ?? PAGE_HC;
-    this.warmed = o.warmed ?? isWarmed(o.browser);
+    // BACKROOMS_NOPRIME=0: let every page prime itself even in a warmed browser
+    this.warmed = process.env.BACKROOMS_NOPRIME !== '0' && (o.warmed ?? isWarmed(o.browser));
     this.features = o.features ?? { bootKeys: null, streamCapture: false };
     this.log = o.log ?? (() => {});
     this.maxPageShots = o.maxPageShots ?? MAX_PAGE_SHOTS;
@@ -392,7 +395,7 @@ export class Lane {
   searchOf(shot, o = {}) {
     const hasEval = (o.evals?.length ?? 0) > 0 || (shot.eval?.length ?? 0) > 0;
     const features = o.features ?? this.features;
-    return gameSearch(shot, { warmed: this.warmed, draft: !!o.draft, streamCapture: !!o.streamCapture && features.streamCapture && !hasEval });
+    return gameSearch(shot, { warmed: this.warmed, draft: !!o.draft, streamCapture: !!o.streamCapture && features.streamCapture && !hasEval, evals: hasEval });
   }
 
   keyOf(shot, search, o = {}) {
@@ -402,7 +405,7 @@ export class Lane {
   /** The browser was replaced (recycled): forget the warm page, which died with the old browser. */
   setBrowser(browser) {
     this.browser = browser;
-    this.warmed = isWarmed(browser);
+    this.warmed = process.env.BACKROOMS_NOPRIME !== '0' && isWarmed(browser);
     this.page = null;
     this.pageKey = null;
     this.pageShots = 0;
