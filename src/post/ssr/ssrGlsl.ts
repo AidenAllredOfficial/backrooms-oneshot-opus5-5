@@ -69,6 +69,9 @@ export const SSR = {
   /** the trace follows the macro (depth) normal instead of the block's mean normal as 1 - |mean| grows over this range
    * (a normal map finer than the trace grid) */
   NVAR: [0.002, 0.02] as const,
+  /** a block pixel joins the representative's lobe only within this roughness of it (another surface / lobe: its
+   * own texels carry it through the upsample's roughness weight) */
+  BLOCK_DR: 0.15,
 } as const;
 
 /** Debug output of the composite (URL reflView): 0 off, 1 the reflection alone, 2 confidence (misses magenta). */
@@ -298,6 +301,7 @@ layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_UP ${f(SSR.UP_FADE)}
 #define BR_SSR_NVAR0 ${f(SSR.NVAR[0])}
 #define BR_SSR_NVAR1 ${f(SSR.NVAR[1])}
+#define BR_SSR_BLOCK_DR ${f(SSR.BLOCK_DR)}
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
 ${SSR_OCT_GLSL}
 vec2 brOctEnc( vec3 n ) {
@@ -342,13 +346,15 @@ void main() {
 	if ( s1.a < 1e-4 || g.a < 0.5 ) return;
 	// the texel stands for its block: average the lobes of the glossy pixels of its whole step x step block (a normal
 	// map finer than the trace grid, corrugated metal or grout, would otherwise alias into dots); the spread of their
-	// normals widens the cone (Toksvig: alpha^2 + (1 - |n|) / |n|)
+	// normals widens the cone (Toksvig: alpha^2 + (1 - |n|) / |n|). Only pixels of the representative's lobe count
+	// (roughness within BLOCK_DR): a block across a puddle's shore averaged the mirror with the wet carpet around it
+	// into a middling lobe that caught the ceiling lamps as bright dots along the shore.
 	vec3 nSum = brOctDec( g.rg );
 	float rSum = g.b, cnt = 1.0;
 	ivec2 lim = ivec2( uFull ) - 1;
 	for ( int k = 1; k < uStep * uStep; k ++ ) {
 		vec4 gk = texelFetch( tGNR, min( p + ivec2( k % uStep, k / uStep ), lim ), 0 );
-		if ( gk.a < 0.5 ) continue;
+		if ( gk.a < 0.5 || abs( gk.b - g.b ) > BR_SSR_BLOCK_DR ) continue;
 		nSum += brOctDec( gk.rg );
 		rSum += gk.b;
 		cnt += 1.0;

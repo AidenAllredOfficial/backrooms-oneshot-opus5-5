@@ -144,6 +144,8 @@ describe('shader sources', () => {
   it('a texel averages its whole block and traces a normal-mapped block along the macro (depth) normal', () => {
     // every pixel of the step x step block (ultra's 3x3 too, not a 2x2 subset)
     expect(SSR_TRACE_FRAG).toContain('for ( int k = 1; k < uStep * uStep; k ++ )');
+    // ...of the representative's lobe only (a shore block must not blend a mirror with the wet carpet around it)
+    expect(SSR_TRACE_FRAG).toContain('if ( gk.a < 0.5 || abs( gk.b - g.b ) > BR_SSR_BLOCK_DR ) continue;');
     // disagreeing normals (1 - |mean| over NVAR) move the traced lobe to the depth normal; the cone keeps the spread
     expect(SSR.NVAR[0]).toBeLessThan(SSR.NVAR[1]);
     expect(SSR_TRACE_FRAG).toContain('vec3 Nt = normalize( mix( N, Ng, smoothstep( BR_SSR_NVAR0, BR_SSR_NVAR1, 1.0 - nLen ) ) );');
