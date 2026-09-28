@@ -190,4 +190,37 @@ describe('WorldQuery.raycast', () => {
     expect(h.t).toBeCloseTo(2 - 0.6, 5);
     expect(h.ny).toBeGreaterThan(0.8);
   });
+
+  it('an open flight is a slab: its soffit is hit from below, its stringers between the soffit and the walking line', () => {
+    const l = room();
+    // an open 1.2 m flight ascending +x over x 12..14.4, z 21.6..22.8 (slope 0.5)
+    l.solids.push({ kind: 'ramp', id: 2, x0: 12, z0: 21.6, x1: 14.4, z1: 22.8, y0: 0, y1: 1.2, dir: 0, steps: 8, mat: Mat.POOL_TILE,
+      flags: SolidFlag.COLLIDE | SolidFlag.WALKABLE_TOP | SolidFlag.RENDER, bakeGroup: 0 });
+    const q2 = query(l);
+    const nl = 1 / Math.hypot(0.5, 1);
+    // straight up from under the high end (walking line 0.9 m at x = 13.8): the soffit, RAMP_SLAB = 0.2 m below it,
+    // facing down and toward the high end; before this, the ray passed through to the ceiling at 2.7 m
+    expect(q2.raycast!(13.8, 0.2, 22.2, 0, 1, 0, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(0.9 - 0.2 - 0.2, 5);
+    expect(h.nx).toBeCloseTo(0.5 * nl, 6); // Float32 ramp records
+    expect(h.ny).toBeCloseTo(-nl, 6);
+    expect(h.nz).toBeCloseTo(0, 12);
+    // a slanted ray from beside the flight enters under it (0.4 m up at z = 21.6, soffit 0.7 m) and meets the soffit
+    // at x = 13.5 (0.55 m up), not the ceiling behind
+    const n = Math.hypot(1, 0.5, 1);
+    expect(q2.raycast!(14.5, 0.05, 20.9, -1 / n, 0.5 / n, 1 / n, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(1.0 * n, 5);
+    expect(h.ny).toBeCloseTo(-nl, 6);
+    // along +z at x = 14 (walking line 1.0 m, soffit 0.8 m): 0.9 m up hits the stringer face z = 21.6 ...
+    expect(q2.raycast!(14, 0.9, 20, 0, 0, 1, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(1.6, 5);
+    expect([h.nx, h.ny, h.nz]).toEqual([0, 0, -1]);
+    // ... 0.5 m up passes under the flight, and 1.1 m up over it (a level ray never meets the sloped planes)
+    expect(q2.raycast!(14, 0.5, 20, 0, 0, 1, 40, h)).toBe(false);
+    expect(q2.raycast!(14, 1.1, 20, 0, 0, 1, 40, h)).toBe(false);
+    // a ray rising from above the flight never meets its soffit (the plane lies behind it)
+    expect(q2.raycast!(13.2, 1.2, 22.2, 0, 1, 0, 40, h)).toBe(true);
+    expect(h.t).toBeCloseTo(2.7 - 1.2, 5);
+    expect(h.ny).toBe(-1);
+  });
 });

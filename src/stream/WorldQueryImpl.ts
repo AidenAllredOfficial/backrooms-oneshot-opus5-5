@@ -432,8 +432,10 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
     rNx = ax === 0 ? -Math.sign(dx) : 0; rNy = ax === 1 ? -Math.sign(dy) : 0; rNz = ax === 2 ? -Math.sign(dz) : 0;
   };
 
-  /** The chunk's ramps (stair flights): the walkable inclined top, hit from above; a FILLED body also on its sides
-   * and ends (vertical faces from its low end up to the walking surface). */
+  /** The chunk's ramps (stair flights): the walkable inclined top, hit from above, and the vertical faces of the body
+   * under it (sides and ends). A FILLED body runs down to its low end's height; an open flight (towers, steel stairs)
+   * is a RAMP_SLAB-thick slab: its sloped soffit, hit from below, and its stringers and ends between the soffit and
+   * the walking line (mesh/stairs.ts renders the soffit 0.15-0.2 m under the nosing line). */
   const rayRamps = (d: ChunkData, x: number, y: number, z: number, dx: number, dy: number, dz: number): void => {
     const r = d.collision.ramps;
     for (let o = 0; o < r.length; o += 8) {
@@ -445,23 +447,26 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
       else if (dir === 1) { gx = -(y1 - y0) / (x1 - x0 || 1); hc = y0 - gx * x1; }
       else if (dir === 2) { gz = (y1 - y0) / (z1 - z0 || 1); hc = y0 - gz * z0; }
       else { gz = -(y1 - y0) / (z1 - z0 || 1); hc = y0 - gz * z1; }
-      if (r[o + 7] !== 0) rayFilledSide(d, x, y, z, dx, dy, dz, x0, z0, x1, z1, Math.min(y0, y1), hc, gx, gz);
-      const den = dy - gx * dx - gz * dz; // < 0: the ray descends onto the slope
-      if (!(den < 0)) continue;
-      const t = (hc + gx * x + gz * z - y) / den;
+      const filled = r[o + 7] !== 0;
+      rayRampSide(d, x, y, z, dx, dy, dz, x0, z0, x1, z1, Math.min(y0, y1), filled ? Infinity : RAMP_SLAB, hc, gx, gz);
+      const den = dy - gx * dx - gz * dz; // < 0: the ray descends onto the slope; > 0: it rises toward the soffit
+      const up = den > 0;
+      if (!(den < 0) && !(up && !filled)) continue;
+      const t = (hc - (up ? RAMP_SLAB : 0) + gx * x + gz * z - y) / den;
       if (!(t > 1e-6) || t >= rBest) continue;
       const px = x + dx * t, pz = z + dz * t;
       if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
-      const nl = 1 / Math.sqrt(gx * gx + 1 + gz * gz);
+      const nl = (up ? -1 : 1) / Math.sqrt(gx * gx + 1 + gz * gz);
       rBest = t; rWhat = RAY_RAMP; rNx = -gx * nl; rNy = nl; rNz = -gz * nl;
       rMat = d.layout.floorMat[((worldToCell(pz) - d.key.cz * CHUNK_CELLS) * CHUNK_CELLS) + worldToCell(px) - d.key.cx * CHUNK_CELLS] ?? -1;
     }
   };
 
-  /** A FILLED ramp's vertical faces (footprint [x0, x1] x [z0, z1], from `ylo` up to the walking surface h = hc + gx *
-   * x + gz * z): the entry face of the ray into the footprint's slab, when the entry point lies under the surface. */
-  const rayFilledSide = (d: ChunkData, x: number, y: number, z: number, dx: number, dy: number, dz: number,
-    x0: number, z0: number, x1: number, z1: number, ylo: number, hc: number, gx: number, gz: number): void => {
+  /** A ramp body's vertical faces (footprint [x0, x1] x [z0, z1], up to the walking surface h = hc + gx * x + gz * z,
+   * down to max(`ylo`, h - `slab`): a FILLED body's low end height, or an open flight's soffit): the entry face of the
+   * ray into the footprint's slab, when the entry point lies between those heights. */
+  const rayRampSide = (d: ChunkData, x: number, y: number, z: number, dx: number, dy: number, dz: number,
+    x0: number, z0: number, x1: number, z1: number, ylo: number, slab: number, hc: number, gx: number, gz: number): void => {
     let t0 = -Infinity, t1 = Infinity, ax = -1;
     if (dx !== 0) {
       const a = (x0 - x) / dx, b = (x1 - x) / dx;
@@ -475,7 +480,8 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
     } else if (z < z0 || z > z1) return;
     if (ax < 0 || !(t0 > 1e-6) || t0 > t1 || t0 >= rBest) return;
     const px = x + dx * t0, py = y + dy * t0, pz = z + dz * t0;
-    if (py < ylo || py > hc + gx * px + gz * pz) return; // under the floor, or above the walking surface (the top test)
+    const h = hc + gx * px + gz * pz;
+    if (py < Math.max(ylo, h - slab) || py > h) return; // under the body (floor / soffit), or above the walking surface (the top test)
     rBest = t0; rWhat = RAY_RAMP; rNx = ax === 0 ? -Math.sign(dx) : 0; rNy = 0; rNz = ax === 2 ? -Math.sign(dz) : 0;
     const ex = px + dx * 1e-4, ez = pz + dz * 1e-4; // the material of the cell just inside the face
     rMat = d.layout.floorMat[((worldToCell(ez) - d.key.cz * CHUNK_CELLS) * CHUNK_CELLS) + worldToCell(ex) - d.key.cx * CHUNK_CELLS] ?? -1;
