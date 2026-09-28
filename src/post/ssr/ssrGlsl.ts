@@ -34,10 +34,20 @@ export const SSR = {
   /** glossy cone: tan = CONE x alpha (alpha = roughness^2; GGX's median half-vector angle doubled for the reflected
    * ray, trimmed for perceived sharpness) */
   CONE: 1.5,
-  /** the footprint stretches along the screen-projected normal by 1 / max(N.V, STRETCH_NV) up to STRETCH_MAX: the
-   * vertical light streaks of glossy floors */
-  STRETCH_NV: 0.15,
-  STRETCH_MAX: 4,
+  /** the lobe's spread out of the plane of incidence is the cone's x N.V (a half-vector tilt d out of that plane turns
+   * the reflected ray by 2 d N.V, one inside it by 2 d): the vertical light streaks of glossy floors. N.V is floored
+   * at NV_MIN */
+  NV_MIN: 0.05,
+  /** the lobe's edge rays meet the hit's plane at LEN_MIN..LEN_MAX x the central ray's length (a plane seen edge-on
+   * along the lobe) */
+  LEN_MIN: 0.25,
+  LEN_MAX: 4,
+  /** GGX's heavy tail: a second lookup with the microfacet part of the cone TAIL_K x wider, mixed in at TAIL_W. The
+   * cone alone (a Gaussian-like lookup of sd about 1.3 x its tan) holds the lobe's core; a tube lamp over a glossy
+   * floor (roughness 0.16-0.25, 1600x the ceiling's radiance) integrated with GGX keeps a visible streak about twice
+   * as long, which 0.85 core + 0.15 tail at 4x matches within ~30 % along the streak */
+  TAIL_K: 4,
+  TAIL_W: 0.15,
   /** rays toward the camera: a linear march of LIN_STEPS steps growing from 1 to LIN_STRIDE level-0 cells, then
    * BISECT bisections */
   LIN_STEPS: 24,
@@ -290,7 +300,6 @@ uniform vec4 uHiZInfo;
 uniform mat4 uProj;
 uniform mat4 uProjInv;
 uniform vec2 uFull;               // full-resolution size (px)
-uniform vec2 uPyrSize;            // pyramid level-0 size (px)
 uniform float uMaxRough;
 uniform int uStep;                // full-resolution pixels per trace texel (2, 3 on ultra's 1.4x buffer)
 layout( location = 0 ) out highp vec4 outSsr;
@@ -302,8 +311,12 @@ layout( location = 1 ) out highp vec4 outMeta;
 #define BR_SSR_RZ1 ${f(SSR.RZ_FADE1)}
 #define BR_SSR_FACING ${f(SSR.FACING)}
 #define BR_SSR_CONE ${f(SSR.CONE)}
-#define BR_SSR_NV ${f(SSR.STRETCH_NV)}
-#define BR_SSR_STRETCH ${f(SSR.STRETCH_MAX)}
+#define BR_SSR_NV_MIN ${f(SSR.NV_MIN)}
+#define BR_SSR_LEN_MIN ${f(SSR.LEN_MIN)}
+#define BR_SSR_LEN_MAX ${f(SSR.LEN_MAX)}
+#define BR_SSR_ANISO ${f(SSR.PYR_ANISO)}
+#define BR_SSR_TAIL_K ${f(SSR.TAIL_K)}
+#define BR_SSR_TAIL_W ${f(SSR.TAIL_W)}
 #define BR_SSR_SOFT ${f(SSR.THICK_SOFT)}
 #define BR_SSR_UP ${f(SSR.UP_FADE)}
 #define BR_SSR_NVAR0 ${f(SSR.NVAR[0])}
@@ -347,6 +360,48 @@ vec3 brDepthNormal( ivec2 px ) {
 vec2 brProjPx( vec3 v ) {
 	vec4 c = uProj * vec4( v, 1.0 );
 	return ( c.xy / c.w * 0.5 + 0.5 ) * uFull;
+}
+// full-resolution pixel where the edge ray P + e t of the lobe meets the hit's plane (hd = dot(Ph - P, Nh), negative in
+// front of it), within LEN_MIN..LEN_MAX x the central ray's length L0; a ray along the plane or away from it runs to
+// LEN_MAX x L0 (continuous with the grazing ones: a jump there cut lamp streaks off at a hard edge)
+vec2 brFootPx( vec3 P, vec3 e, vec3 Nh, float hd, float L0 ) {
+	float de = dot( e, Nh );
+	float t = hd >= 0.0 ? L0 : de < 0.0 ? clamp( hd / de, BR_SSR_LEN_MIN * L0, BR_SSR_LEN_MAX * L0 ) : BR_SSR_LEN_MAX * L0;
+	vec3 q = P + e * t;
+	q.z = min( q.z, - 0.05 ); // stays in front of the camera
+	return brProjPx( q );
+}
+// One axis of the footprint, ends a and b (px), as textureGrad samples it: symmetric about the hit p0, so at most twice
+// the nearer end's distance along the axis. A plane met obliquely puts the hit far off the footprint's middle (the edge
+// rays meet it at LEN_MIN..LEN_MAX x the central ray's length); an axis of |a - b| centred on the hit reached past the
+// nearer end by up to half its length, onto whatever lies beside the lobe on screen (dashed lamp glints along the
+// T-bars of a ceiling grid, PILLAR_HALL ultra)
+vec2 brSymAxis( vec2 a, vec2 b, vec2 p0 ) {
+	vec2 d = a - b;
+	float l2 = dot( d, d );
+	if ( l2 < 1e-12 ) return d;
+	return d * min( 2.0 * min( abs( dot( a - p0, d ) ), abs( dot( b - p0, d ) ) ) / l2, 1.0 );
+}
+// The glossy lobe's footprint at the hit, as the screen ellipse's two full axes in uv (textureGrad's gradients): the
+// lobe's edge rays (tan tn in the plane of incidence of R about N, tn x N.V across it: GGX's reflected lobe narrows
+// out of that plane at grazing views) met with the hit's plane (Ph, Nh: a receding ceiling or floor stretches it
+// along the recession), projected, each axis kept within the nearer end (brSymAxis). The axis ratio is capped at the
+// pyramid's anisotropy.
+void brSsrFootprint( vec3 P, vec3 R, vec3 N, float nv, vec3 Ph, vec3 Nh, float tn, out vec2 gI, out vec2 gO ) {
+	vec3 bO = cross( R, N );
+	float bl = length( bO );
+	bO = bl > 1e-4 ? bO / bl : normalize( cross( R, abs( R.y ) < 0.9 ? vec3( 0.0, 1.0, 0.0 ) : vec3( 1.0, 0.0, 0.0 ) ) );
+	vec3 tI = cross( bO, R );
+	float L0 = length( Ph - P );
+	float hd = dot( Ph - P, Nh );
+	vec3 eI = tn * tI, eO = ( tn * max( nv, BR_SSR_NV_MIN ) ) * bO;
+	vec2 p0 = brProjPx( Ph );
+	gI = brSymAxis( brFootPx( P, R + eI, Nh, hd, L0 ), brFootPx( P, R - eI, Nh, hd, L0 ), p0 ) / uFull;
+	gO = brSymAxis( brFootPx( P, R + eO, Nh, hd, L0 ), brFootPx( P, R - eO, Nh, hd, L0 ), p0 ) / uFull;
+	float lI = length( gI ), lO = length( gO );
+	float lMin = max( lI, lO ) / BR_SSR_ANISO;
+	if ( lI < lMin ) gI = ( lI > 1e-9 ? gI / lI : vec2( - gO.y, gO.x ) / lO ) * lMin;
+	if ( lO < lMin ) gO = ( lO > 1e-9 ? gO / lO : vec2( - gI.y, gI.x ) / lI ) * lMin;
 }
 void main() {
 	outSsr = vec4( 0.0 );
@@ -409,19 +464,24 @@ void main() {
 	// start just off the surface: its own depth must not stop the ray
 	if ( ! brSsrTrace( P + Nt * ( 0.002 * - P.z ), R, uProj, BR_SSR_MAX_DIST, hitUv, hitZ, hitGap, rayT ) ) return;
 	ivec2 hp = ivec2( hitUv * uFull );
-	if ( dot( brDepthNormal( hp ), R ) > BR_SSR_FACING ) return; // the back of a surface: not what the ray sees
-	// the glossy lobe as a cone (tan = CONE alpha) over the ray length, measured in pyramid texels at the hit, stretched
-	// along the screen-projected normal (grazing views of floors: the vertical streaks of lamps)
+	vec3 Nh = brDepthNormal( hp );
+	if ( dot( Nh, R ) > BR_SSR_FACING ) return; // the back of a surface: not what the ray sees
+	// the glossy lobe (tan = CONE alpha) where it meets the hit's surface, one anisotropic lookup of the low-passed
+	// pyramid. A screen-aligned disc stretched along the projected normal (the lookup until September 2026) was up to
+	// 16x the lobe's area at grazing views and ignored the hit surface: a lamp beside a dark hit, metres behind it
+	// and far outside the lobe, drew phantom copies in puddles and sparkle on tile ceilings
 	vec3 Ph = brViewPos( 1.0, hitUv );
 	Ph *= hitZ / - Ph.z;
 	float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );
-	float D = max( 2.0 * BR_SSR_CONE * a * length( Ph - P ) * 0.5 * uPyrSize.y * uProj[ 1 ][ 1 ] / hitZ, 1e-3 );
-	vec2 nS = brProjPx( P + Nt * ( 0.01 * - P.z ) ) - brProjPx( P );
-	nS = dot( nS, nS ) > 1e-10 ? normalize( nS ) : vec2( 0.0, 1.0 );
-	float s = clamp( 1.0 / max( nv, BR_SSR_NV ), 1.0, BR_SSR_STRETCH );
-	vec3 col = textureGrad( tPyr, hitUv, nS * ( D * s ) / uPyrSize, vec2( - nS.y, nS.x ) * D / uPyrSize ).rgb;
-	// a non-finite pyramid texel (half-float mips overflowing on a lamp; ColorPyramid clamps against it) is a miss,
-	// never a firefly clamped to BR_HDR_CLAMP
+	vec2 gI, gO;
+	brSsrFootprint( P, R, Nt, nv, Ph, Nh, BR_SSR_CONE * a, gI, gO );
+	vec3 col = textureGrad( tPyr, hitUv, gI, gO ).rgb;
+	// GGX's heavy tail (a lamp 1000x brighter than the room still streaks a glossy floor well outside the core): the
+	// microfacet part widens, the Toksvig spread of the block's normals (about Gaussian) does not
+	brSsrFootprint( P, R, Nt, nv, Ph, Nh, BR_SSR_CONE * sqrt( BR_SSR_TAIL_K * BR_SSR_TAIL_K * pow4( rough ) + ( 1.0 - nLen ) / nLen ), gI, gO );
+	col = mix( col, textureGrad( tPyr, hitUv, gI, gO ).rgb, BR_SSR_TAIL_W );
+	// a non-finite pyramid texel (ColorPyramid zeroes them at level 0 and filters its mips in fp32) is a miss, never a
+	// firefly clamped to BR_HDR_CLAMP
 	if ( any( isnan( col ) ) || any( isinf( col ) ) ) return;
 	// confidence: screen border, roughness cut-off, ray length, rays toward the camera, thickness
 	vec2 eb = min( hitUv, 1.0 - hitUv ) / BR_SSR_EDGE;
@@ -555,12 +615,58 @@ export function hiZSpan(t: number, dst: number, src: number): number[] {
   return out;
 }
 
-/** Footprint diameter (pyramid texels) of the glossy cone at the hit and its mip LOD (the isotropic part of the
- * textureGrad lookup): pxPerRad = 0.5 x pyramid height x proj[1][1]. */
-export function coneLod(rough: number, rayLen: number, hitZ: number, pxPerRad: number): { diameter: number; lod: number } {
-  const a = rough * rough;
-  const diameter = Math.max((2 * SSR.CONE * a * rayLen * pxPerRad) / Math.max(hitZ, 1e-6), 1e-3);
-  return { diameter, lod: Math.max(0, Math.log2(diameter)) };
+/** The trace's two cone tans for lobe roughness `rough` and block normal length `nLen`: the core (Toksvig alpha) and
+ * the tail (the microfacet alpha TAIL_K x wider, the normals' spread unchanged). */
+export function lobeCones(rough: number, nLen: number): { core: number; tail: number } {
+  const r4 = rough ** 4, toks = (1 - nLen) / nLen;
+  return { core: SSR.CONE * Math.sqrt(r4 + toks), tail: SSR.CONE * Math.sqrt(SSR.TAIL_K * SSR.TAIL_K * r4 + toks) };
+}
+
+type Vec3 = readonly [number, number, number];
+const dot3 = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a: Vec3, b: Vec3): [number, number, number] => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm3 = (a: Vec3): [number, number, number] => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const axpy = (a: Vec3, s: number, b: Vec3): [number, number, number] => [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]];
+
+/** brSymAxis twin: the footprint axis with ends a, b (px) as the ellipse symmetric about the hit p0 that textureGrad
+ * samples, at most twice the nearer end's distance along it. */
+export function symAxis(a: readonly [number, number], b: readonly [number, number], p0: readonly [number, number]): [number, number] {
+  const d: [number, number] = [a[0] - b[0], a[1] - b[1]];
+  const l2 = d[0] * d[0] + d[1] * d[1];
+  if (l2 < 1e-12) return d;
+  const near = Math.min(Math.abs((a[0] - p0[0]) * d[0] + (a[1] - p0[1]) * d[1]), Math.abs((b[0] - p0[0]) * d[0] + (b[1] - p0[1]) * d[1]));
+  const s = Math.min((2 * near) / l2, 1);
+  return [d[0] * s, d[1] * s];
+}
+
+/** brSsrFootprint twin: the glossy lobe (tan tn) from view point P along unit R about normal N (N.V = nv), met with
+ * the hit's plane (Ph, Nh). `project` maps a view point to full-resolution pixels (brProjPx with the near guard left
+ * to the caller). Returns the lobe's edge points on that plane (in-plane pair, out-of-plane pair) and the ellipse's
+ * two full axes in pixels, each kept within the nearer end (symAxis) and then anisotropy-capped (the shader divides
+ * them by the frame size). */
+export function lobeFootprint(P: Vec3, R: Vec3, N: Vec3, nv: number, Ph: Vec3, Nh: Vec3, tn: number,
+  project: (v: Vec3) => [number, number]): { edges: [number, number, number][]; gI: [number, number]; gO: [number, number] } {
+  let bO = cross3(R, N);
+  bO = Math.hypot(...bO) > 1e-4 ? norm3(bO) : norm3(cross3(R, Math.abs(R[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]));
+  const tI = cross3(bO, R);
+  const d: Vec3 = [Ph[0] - P[0], Ph[1] - P[1], Ph[2] - P[2]];
+  const L0 = Math.hypot(...d), hd = dot3(d, Nh);
+  const oS = tn * Math.max(nv, SSR.NV_MIN);
+  const rays = [axpy(R, tn, tI), axpy(R, -tn, tI), axpy(R, oS, bO), axpy(R, -oS, bO)];
+  const edges = rays.map((e) => {
+    const de = dot3(e, Nh);
+    const t = hd >= 0 ? L0 : de < 0 ? Math.min(SSR.LEN_MAX * L0, Math.max(SSR.LEN_MIN * L0, hd / de)) : SSR.LEN_MAX * L0;
+    return axpy(P, t, e);
+  });
+  const px = edges.map((q) => project(q));
+  const p0 = project(Ph);
+  let gI = symAxis(px[0], px[1], p0);
+  let gO = symAxis(px[2], px[3], p0);
+  const lI = Math.hypot(...gI), lO = Math.hypot(...gO);
+  const lMin = Math.max(lI, lO) / SSR.PYR_ANISO;
+  if (lI < lMin) gI = lI > 1e-9 ? [gI[0] / lI * lMin, gI[1] / lI * lMin] : [-gO[1] / lO * lMin, gO[0] / lO * lMin];
+  if (lO < lMin) gO = lO > 1e-9 ? [gO[0] / lO * lMin, gO[1] / lO * lMin] : [-gI[1] / lI * lMin, gI[0] / lI * lMin];
+  return { edges, gI, gO };
 }
 
 /** The composite's specular term: fallback s1 (rgb, a = Ws), upsampled reflection ssr (premultiplied, a = conf). */

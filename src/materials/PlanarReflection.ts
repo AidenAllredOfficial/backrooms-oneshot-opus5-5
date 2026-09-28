@@ -1,7 +1,11 @@
 // src/materials/PlanarReflection.ts — mirrored view of the water plane nearest the camera (WP9).
 // A proper-rotation reflection camera about y = waterY with Lengyel's oblique near-plane clip (the maths of
 // three's Reflector.js), rendered at q.planarReflectionScale of the drawing buffer into a HalfFloat target with
-// mipmaps (roughness-blurred lookups). Publishes globals.reflTex / reflMatrix / reflOn / reflY.
+// MIRROR_LEVELS mip levels (roughness-blurred lookups), each a binomial low-pass of the one before computed in fp32
+// (post/frame/ColorPyramid.ts LowPassMips, as the colour pyramid): gl.generateMipmap of the RGBA16F target sums 2x2
+// blocks in half precision on some drivers (NVIDIA GL), so lamps near HDR_CLAMP overflowed to Inf in the coarse
+// mips the rough water reads (white or red blocks at SUMP_PIT and on flashlight-lit pools). Publishes
+// globals.reflTex / reflMatrix / reflOn / reflY.
 // reflMatrix maps MAIN-camera VIEW-space positions to reflection-texture clip coords (bias · P' · V' · V⁻¹,
 // composed in float64 on the CPU), so shaders never need a float32 world position.
 // While rendering: reflOn = 0 and reflTex = null (no feedback loop, not even a bound-but-unsampled texture), the
@@ -13,16 +17,23 @@
 import * as THREE from 'three';
 import type { MaterialGlobals } from '../core/runtime.ts';
 import type { QualityConfig } from '../core/quality.ts';
+import { HDR_CLAMP } from '../core/constants.ts';
+import { allocMips, LowPassMips } from '../post/frame/ColorPyramid.ts';
 import { REFL_PASS, setWirePixel } from './shared.ts';
 import { TUNE } from './chunks/params.ts';
 import { renderWithPrepass } from './prepass.ts';
 import { WATER_VIS } from './water/waterVisibility.ts';
+
+/** mip levels of the mirror (the water reads up to lod 8) */
+export const MIRROR_LEVELS = 9;
 
 export interface PlanarReflection {
   readonly enabled: boolean;
   /** render the mirrored view if a water plane is visible within 40 m; binds globals.reflTex/reflMatrix/reflOn */
   update(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, waterY: number | null): void;
   setQuality(q: QualityConfig): void;
+  /** the mip chain's program (for warm-up) */
+  readonly materials: readonly THREE.ShaderMaterial[];
   dispose(): void;
 }
 
@@ -104,6 +115,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
   WATER_VIS.enabled = scale > 0 && mirrorWaterOnly(q);
   WATER_VIS.reset();
   let target: THREE.WebGLRenderTarget | null = null;
+  const mips = new LowPassMips('br-mirror-down', HDR_CLAMP);
   const reflCam = new THREE.PerspectiveCamera();
   reflCam.matrixAutoUpdate = true;
   const scratch = createReflScratch();
@@ -134,18 +146,20 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
       magFilter: THREE.LinearFilter,
       wrapS: THREE.ClampToEdgeWrapping,
       wrapT: THREE.ClampToEdgeWrapping,
-      generateMipmaps: true,
+      generateMipmaps: false,
       depthBuffer: true,
       stencilBuffer: false,
       colorSpace: THREE.NoColorSpace,
     });
     target.texture.name = 'br-planar-reflection';
     target.texture.anisotropy = 8; // package E: the water's glossy streaks (textureGrad along the view plane)
+    allocMips(target, MIRROR_LEVELS);
     return target;
   }
 
   const api: PlanarReflection = {
     get enabled() { return scale > 0; },
+    get materials() { return [mips.material]; },
     update(renderer, scene, camera, waterY) {
       if (scale <= 0 || waterY === null) { globals.reflOn.value = 0; return; }
       camera.updateMatrixWorld();
@@ -181,6 +195,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
         renderer.clear();
         setWirePixel(reflCam, h);
         renderWithPrepass(renderer, scene, reflCam);
+        mips.build(renderer, rt);
       } finally {
         for (const object of hidden) object.visible = true;
         hidden.length = 0;
@@ -202,6 +217,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
       if (scale <= 0) {
         target?.dispose();
         target = null;
+        mips.release();
         globals.reflOn.value = 0;
         globals.reflTex.value = null;
       }
@@ -209,6 +225,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
     dispose() {
       target?.dispose();
       target = null;
+      mips.dispose();
       globals.reflOn.value = 0;
       globals.reflTex.value = null;
     },

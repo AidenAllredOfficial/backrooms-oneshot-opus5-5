@@ -8,7 +8,8 @@
 //     of them does not move the box.
 //  2. Refinement: in a room longer than it is wide (a corridor, the pool hall), the +-30 deg rays hit the SIDE walls,
 //     and their median would end the box at ~1.7 half-widths down the corridor. A +-30 deg ray whose hit lies on a
-//     side face of the first guess is therefore only a lower bound for its axis; the axis itself is measured by the
+//     side face of the first guess is therefore only a lower bound for its axis (one that ran past the side face left
+//     through an opening in that wall: a bound only up to where it crossed the side plane); the axis is measured by the
 //     median of three PARALLEL rays (the axis ray and one either side, inside the free space the side rays found),
 //     which still ignores a pillar and never passes through a doorway narrower than their spread. The remaining
 //     +-30 deg rays (those that met the far wall) vote with it: median of three, the smaller of two.
@@ -82,12 +83,17 @@ export function probeBox(q: ProbeBoxQuery, x: number, eyeY: number, z: number, f
   const ext = (k: number): number => {
     const i = 3 * k, sp = (k + 1) % 4, sm = (k + 3) % 4;
     const axis = med3(parallel(k, sp), rays[i], parallel(k, sm));
-    // the +-30 deg rays: a hit on a side face of the first guess only bounds this axis from below; the others vote
+    // the +-30 deg rays: a hit on a side face of the first guess only bounds this axis from below; one that ran past
+    // that face left the room through an opening in the side wall (a doorway, an arch) and bounds the axis only up to
+    // where it crossed the side plane (its full length used to push the box 10-35 m through the far wall); the others
+    // vote
     let lower = 0, v1 = NaN, v2 = NaN;
     for (let j = 0; j < 2; j++) {
       const d = rays[j === 0 ? (i + 1) % n : (i + n - 1) % n];
       const face = first[j === 0 ? sp : sm];
-      if (d * s30 >= face - Math.max(PROBE_BOX.SIDE_TOL, PROBE_BOX.SIDE_TOL_REL * face)) lower = Math.max(lower, d * c30);
+      const tol = Math.max(PROBE_BOX.SIDE_TOL, PROBE_BOX.SIDE_TOL_REL * face);
+      if (Math.abs(d * s30 - face) <= tol) lower = Math.max(lower, d * c30);
+      else if (d * s30 > face + tol) lower = Math.max(lower, (face / s30) * c30);
       else if (Number.isNaN(v1)) v1 = d * c30;
       else v2 = d * c30;
     }

@@ -3,10 +3,10 @@
 //  - afterOpaque hook 'ssr' (order 10): one ray per 2x2 block (half the display resolution: 3x3 on ultra's 1.4x
 //    buffer, ssrStepFor) whose top-left pixel holds a replaceable specular in the G-buffer (att1.a = Ws > 0) below
 //    the preset's ssrMaxRoughness, with the block's averaged lobe: Hi-Z traversal for receding rays,
-//    a linear march for rays toward the camera (ssrGlsl.ts SSR_TRACE_GLSL), thickness and facing tests, a
-//    roughness cone into the colour pyramid with an anisotropic stretch along the screen-projected normal, and the
-//    confidence fades (screen border, roughness cut-off, ray length, rays toward the camera, thickness). Ultra adds
-//    a 3x3 bilateral filter (ssrFilter).
+//    a linear march for rays toward the camera (ssrGlsl.ts SSR_TRACE_GLSL), thickness and facing tests, the glossy
+//    lobe's footprint on the hit surface (narrowed by N.V out of the plane of incidence) looked up anisotropically in
+//    the low-passed colour pyramid (a core and a GGX tail), and the confidence fades (screen border, roughness
+//    cut-off, ray length, rays toward the camera, thickness). Ultra adds a 3x3 bilateral filter (ssrFilter).
 //  - The result reaches the MRT composite (post/frame/MrtComposite.ts setReflection), which upsamples it bilaterally
 //    and replaces the fallback specular by its confidence.
 // Both hooks run only on MRT frames (q.ssr on, the ssr toggle on, no debug view). BR_SSR_STEPS is compile-time: a
@@ -44,7 +44,6 @@ export class ScreenSpaceReflections {
   private readonly tmpRT: THREE.WebGLRenderTarget;
   private readonly quad = new FullscreenQuad();
   private readonly full = new THREE.Vector2(1, 1);
-  private readonly pyrSize = new THREE.Vector2(1, 1);
   private readonly aoP = new THREE.Vector2();
   private readonly renderScale: () => number;
   private step = 2;
@@ -85,7 +84,7 @@ export class ScreenSpaceReflections {
       tAo: { value: null }, uAoP: { value: this.aoP },
       uHiZ: { value: this.hiz.texture }, uHiZInfo: { value: this.hiz.info },
       uProj: { value: new THREE.Matrix4() }, uProjInv: { value: new THREE.Matrix4() },
-      uFull: { value: this.full }, uPyrSize: { value: this.pyrSize }, uMaxRough: { value: this.settings.maxRough },
+      uFull: { value: this.full }, uMaxRough: { value: this.settings.maxRough },
       uStep: { value: this.step },
     });
   }
@@ -149,7 +148,6 @@ export class ScreenSpaceReflections {
       this.tmpRT.setSize(hw, hh);
     }
     this.full.set(ctx.width, ctx.height);
-    this.pyrSize.set(pyr.width, pyr.height);
     // the pre-shade SSAO ran this frame (afterDepth 'ssao'): its depth normals serve the facing test
     const g = ctx.globals;
     const aoOn = g !== null && g.ssaoParams.value.x > 0.5;

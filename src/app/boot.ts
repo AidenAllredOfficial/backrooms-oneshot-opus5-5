@@ -334,6 +334,8 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
+  // the mirror's mip chain (the pyramid's program on presets with split frames; medium mirrors without them)
+  if (q.planarReflectionScale > 0) await warmPassMaterials(r, reflection.materials);
   // package D: screen-space reflections on the frame graph (Hi-Z after the prepass, the trace after the opaque render)
   const ssr = createScreenSpaceReflections(q, () => post.renderScale);
   if (frame) ssr.attach(frame);
@@ -445,6 +447,7 @@ export async function applyQuality(core: AppCore, nq: QualityConfig): Promise<{ 
     mats.push(...lightingPassMaterials(s.lighting)); // package F: the froxel pass of the new grid
     if (nq.ssr !== 'off') mats.push(...s.ssr.materials); // package D: a new trace program when ssrSteps changed
     if (nq.reflectionProbe > 0) mats.push(...s.probe.materials);
+    if (nq.planarReflectionScale > 0) mats.push(...s.reflection.materials); // the water mirror's mip chain
     await warmPassMaterials(r, mats);
   } finally {
     fresh.forEach((p, i) => { p.enabled = wasEnabled[i]; });

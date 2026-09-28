@@ -3,13 +3,14 @@
 // shader sources (texelFetch of the Hi-Z at a level, the hook order on the frame graph).
 
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import { QUALITY } from '../../src/core/quality.ts';
 import {
-  coneLod, compositeSpecular, HIZ_FRAG, hiZLayout, hiZSpan, SSR, SSR_COMPOSITE_SPECULAR, SSR_FILTER_FRAG, SSR_TRACE_FRAG,
-  SSR_TRACE_GLSL,
+  compositeSpecular, HIZ_FRAG, hiZLayout, hiZSpan, lobeCones, lobeFootprint, SSR, SSR_COMPOSITE_SPECULAR, SSR_FILTER_FRAG,
+  SSR_TRACE_FRAG, SSR_TRACE_GLSL, symAxis,
 } from '../../src/post/ssr/ssrGlsl.ts';
 import { MRT_COMPOSITE_FRAG } from '../../src/post/frame/MrtComposite.ts';
-import { PYR_MAX } from '../../src/post/frame/ColorPyramid.ts';
+import { MIP_DOWN_FRAG, PYR_MAX } from '../../src/post/frame/ColorPyramid.ts';
 import { HDR_CLAMP } from '../../src/core/constants.ts';
 import { ssrSettingsOf, ssrStepFor } from '../../src/post/ssr/SsrTrace.ts';
 
@@ -69,24 +70,133 @@ describe('Hi-Z layout', () => {
   });
 });
 
-describe('glossy cone footprint', () => {
-  const pxPerRad = 0.5 * 1080 * 1.732;
-  it('is monotonic in roughness and ray length, and a point (LOD 0) for a mirror', () => {
-    expect(coneLod(0, 5, 10, pxPerRad).lod).toBe(0);
+describe('glossy lobe footprint', () => {
+  // view space, camera at the origin looking down -z, 1920 x 1080, 60 deg vertical field of view
+  const cam = new THREE.PerspectiveCamera(60, 16 / 9, 0.05, 400);
+  cam.updateProjectionMatrix();
+  const W = 1920, H = 1080;
+  const project = (v: readonly [number, number, number]): [number, number] => {
+    const p = new THREE.Vector3(...v).applyMatrix4(cam.projectionMatrix);
+    return [(p.x * 0.5 + 0.5) * W, (p.y * 0.5 + 0.5) * H];
+  };
+  const len = (g: readonly [number, number]): number => Math.hypot(g[0], g[1]);
+  const dist = (a: readonly number[], b: readonly number[]): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // a floor 1.6 m below the eye seen at N.V = 0.2 (P 8 m away); its reflected ray meets a wall facing it at wallZ
+  const grazing = (tn: number, wallZ = -20) => {
+    const P: [number, number, number] = [0, -1.6, -Math.sqrt(64 - 1.6 * 1.6)];
+    const N: [number, number, number] = [0, 1, 0];
+    const v = new THREE.Vector3(...P).normalize();
+    const R: [number, number, number] = [v.x, -v.y, v.z]; // reflect(-V, N) about the floor
+    const t = (wallZ - P[2]) / R[2];
+    const Ph: [number, number, number] = [P[0] + R[0] * t, P[1] + R[1] * t, wallZ];
+    return { P, N, R, Ph, L0: t, fp: lobeFootprint(P, R, N, 0.2, Ph, [0, 0, 1], tn, project) };
+  };
+
+  it('keeps the lobe\'s spread in the plane of incidence and narrows it by N.V across it (grazing floor)', () => {
+    const { fp, L0 } = grazing(0.1);
+    // the in-plane edges lie 2 tn L0 apart along the wall (over the cosine of R's tilt to its normal), the
+    // out-of-plane ones 2 tn N.V L0: on a wall facing the camera the screen ellipse keeps that ratio
+    const [e0, e1, e2, e3] = fp.edges;
+    expect(dist(e0, e1) / (2 * 0.1 * L0)).toBeGreaterThan(0.95);
+    expect(dist(e0, e1) / (2 * 0.1 * L0)).toBeLessThan(1.1);
+    expect(dist(e2, e3) / (2 * 0.1 * 0.2 * L0)).toBeCloseTo(1, 1);
+    expect(len(fp.gO) / len(fp.gI)).toBeGreaterThan(0.15);
+    expect(len(fp.gO) / len(fp.gI)).toBeLessThan(0.22);
+    // the in-plane axis is vertical on screen (the streak of a lamp in a wet floor)
+    expect(Math.abs(fp.gI[1])).toBeGreaterThan(10 * Math.abs(fp.gI[0]));
+  });
+
+  it('a frontal view is isotropic', () => {
+    // a receiver seen head-on (N.V = 1) whose reflected ray meets a plane facing it 3 m away
+    const fp = lobeFootprint([0, 0, -5], [0, 0, 1], [0, 0, 1], 1, [0, 0, -2], [0, 0, -1], 0.1, (v) => [v[0] * 100, v[1] * 100]);
+    expect(dist(fp.edges[0], fp.edges[1])).toBeCloseTo(dist(fp.edges[2], fp.edges[3]), 9);
+    expect(len(fp.gI)).toBeCloseTo(len(fp.gO), 6);
+    expect(len(fp.gI)).toBeCloseTo(2 * 0.1 * 3 * 100, 6);
+  });
+
+  it('is smaller than the screen disc stretched along the normal it replaced (N.V = 0.2)', () => {
+    const tn = 0.1;
+    const { fp, L0, Ph } = grazing(tn);
+    // the old lookup: diameter D = 2 tn L0 px/rad / z, x min(1 / max(N.V, 0.15), 4) along the projected normal
+    const D = (2 * tn * L0 * 0.5 * H * cam.projectionMatrix.elements[5]) / -Ph[2];
+    const oldArea = 4 * D * D;
+    expect(len(fp.gI) * len(fp.gO)).toBeLessThan(oldArea / 15);
+    // the in-plane axis alone is about the old unstretched diameter
+    expect(len(fp.gI) / D).toBeGreaterThan(0.9);
+    expect(len(fp.gI) / D).toBeLessThan(1.2);
+  });
+
+  it('grows with the lobe and the ray length; a mirror is a point', () => {
+    expect(len(grazing(0).fp.gI)).toBe(0);
     let prev = -1;
-    for (const r of [0.05, 0.1, 0.2, 0.3, 0.45, 0.6]) {
-      const l = coneLod(r, 5, 10, pxPerRad).diameter;
+    for (const tn of [0.01, 0.05, 0.1, 0.2, 0.4]) {
+      const l = len(grazing(tn).fp.gI);
       expect(l).toBeGreaterThan(prev);
       prev = l;
     }
-    prev = -1;
-    for (const len of [0.5, 1, 2, 5, 20]) {
-      const l = coneLod(0.3, len, 10, pxPerRad).diameter;
-      expect(l).toBeGreaterThan(prev);
-      prev = l;
-    }
-    // farther hits of the same cone cover fewer pixels
-    expect(coneLod(0.3, 5, 20, pxPerRad).diameter).toBeLessThan(coneLod(0.3, 5, 10, pxPerRad).diameter);
+    const near = grazing(0.1, -12), far = grazing(0.1, -40);
+    expect(dist(far.fp.edges[0], far.fp.edges[1])).toBeGreaterThan(dist(near.fp.edges[0], near.fp.edges[1]));
+  });
+
+  it('a hit plane seen edge-on along the lobe stretches the footprint along it, within LEN_MAX', () => {
+    // the grazing floor's lobe meets a ceiling 1.2 m above the eye instead of a wall
+    const P: [number, number, number] = [0, -1.6, -Math.sqrt(64 - 1.6 * 1.6)];
+    const v = new THREE.Vector3(...P).normalize();
+    const R: [number, number, number] = [v.x, -v.y, v.z];
+    const t = (1.2 - P[1]) / R[1];
+    const Ph: [number, number, number] = [0, 1.2, P[2] + R[2] * t];
+    const fp = lobeFootprint(P, R, [0, 1, 0], 0.2, Ph, [0, -1, 0], 0.1, project);
+    const wall = lobeFootprint(P, R, [0, 1, 0], 0.2, Ph, [0, 0, 1], 0.1, project);
+    expect(dist(fp.edges[0], fp.edges[1])).toBeGreaterThan(2 * dist(wall.edges[0], wall.edges[1]));
+    for (const e of fp.edges) expect(dist(e, P)).toBeLessThanOrEqual(SSR.LEN_MAX * t * Math.hypot(1, 0.1) + 1e-9);
+    // the ellipse's axis ratio stays within the pyramid's anisotropy
+    const r = len(fp.gI) / len(fp.gO);
+    expect(Math.max(r, 1 / r)).toBeLessThanOrEqual(SSR.PYR_ANISO + 1e-9);
+  });
+
+  it('the lookup, symmetric about the hit, never reaches past the nearer end of an oblique footprint', () => {
+    // the grazing floor's lobe on a ceiling: its edge rays meet it at very different lengths, so the hit lies far off
+    // the footprint's middle on screen
+    const P: [number, number, number] = [0, -1.6, -Math.sqrt(64 - 1.6 * 1.6)];
+    const v = new THREE.Vector3(...P).normalize();
+    const R: [number, number, number] = [v.x, -v.y, v.z];
+    const t = (1.2 - P[1]) / R[1];
+    const Ph: [number, number, number] = [0, 1.2, P[2] + R[2] * t];
+    const fp = lobeFootprint(P, R, [0, 1, 0], 0.2, Ph, [0, -1, 0], 0.2, project);
+    const p0 = project(Ph);
+    const a = project(fp.edges[0]), b = project(fp.edges[1]);
+    const ax = [a[0] - b[0], a[1] - b[1]], l = Math.hypot(ax[0], ax[1]);
+    const along = (q: readonly [number, number]): number => Math.abs(((q[0] - p0[0]) * ax[0] + (q[1] - p0[1]) * ax[1]) / l);
+    const near = Math.min(along(a), along(b)), far = Math.max(along(a), along(b));
+    expect(far / near).toBeGreaterThan(2.5); // an axis of |a - b| centred on the hit would overshoot the near end
+    expect(len(fp.gI) / 2).toBeLessThanOrEqual(near + 1e-6);
+    expect(len(fp.gI) / 2).toBeGreaterThan(0.99 * near);
+    // a symmetric footprint (a wall facing the ray) keeps its full axes
+    expect(symAxis([10, 0], [-10, 0], [0, 0])).toEqual([20, 0]);
+    expect(symAxis([10, 0], [-30, 0], [0, 0])).toEqual([20, 0]);
+    expect(symAxis([0, 0], [0, 0], [5, 5])).toEqual([0, 0]);
+    // the shader does the same to both axes
+    expect(SSR_TRACE_FRAG).toContain('gI = brSymAxis( brFootPx( P, R + eI, Nh, hd, L0 ), brFootPx( P, R - eI, Nh, hd, L0 ), p0 ) / uFull;');
+    expect(SSR_TRACE_FRAG).toContain('gO = brSymAxis( brFootPx( P, R + eO, Nh, hd, L0 ), brFootPx( P, R - eO, Nh, hd, L0 ), p0 ) / uFull;');
+  });
+
+  it('the trace looks the core and the tail up in the pyramid, centred on the hit', () => {
+    expect(SSR_TRACE_FRAG).toContain('brSsrFootprint( P, R, Nt, nv, Ph, Nh, BR_SSR_CONE * a, gI, gO );');
+    expect(SSR_TRACE_FRAG).toContain('vec3 col = textureGrad( tPyr, hitUv, gI, gO ).rgb;');
+    expect(SSR_TRACE_FRAG).toContain('BR_SSR_CONE * sqrt( BR_SSR_TAIL_K * BR_SSR_TAIL_K * pow4( rough ) + ( 1.0 - nLen ) / nLen )');
+    expect(SSR_TRACE_FRAG).toContain('col = mix( col, textureGrad( tPyr, hitUv, gI, gO ).rgb, BR_SSR_TAIL_W );');
+    expect(SSR_TRACE_FRAG).not.toMatch(/STRETCH/);
+  });
+
+  it('the tail widens the microfacet lobe only (a block\'s normal spread is Gaussian, not heavy-tailed)', () => {
+    const glossy = lobeCones(0.2, 1);
+    expect(glossy.core).toBeCloseTo(SSR.CONE * 0.04, 9);
+    expect(glossy.tail).toBeCloseTo(SSR.TAIL_K * glossy.core, 9);
+    // a rippled puddle: the Toksvig spread dominates, the tail stays near the core
+    const rippled = lobeCones(0.08, 0.98);
+    expect(rippled.tail / rippled.core).toBeLessThan(1.02);
+    expect(SSR.TAIL_W).toBeGreaterThan(0);
+    expect(SSR.TAIL_W).toBeLessThan(0.3);
   });
 });
 
@@ -167,13 +277,15 @@ describe('shader sources', () => {
     expect(SSR_TRACE_FRAG.indexOf('if ( up <= 0.0 ) return;')).toBeLessThan(SSR_TRACE_FRAG.indexOf('brSsrTrace( P + Nt'));
   });
 
-  it('half-float mips never reach the cone lookups as Inf: the pyramid is clamped, a non-finite lookup is a miss', () => {
-    // gl.generateMipmap may sum a 2x2 block of an RGBA16F level in half precision (NVIDIA GL): 4 x PYR_MAX must fit
-    expect(4 * PYR_MAX).toBeLessThan(65504);
+  it('no Inf reaches the cone lookups: the pyramid is clamped and filtered in fp32, a non-finite lookup is a miss', () => {
+    // the mips are weighted means computed in the shader (never gl.generateMipmap's half-precision 2x2 sums)
     expect(PYR_MAX).toBeLessThanOrEqual(HDR_CLAMP);
+    expect(HDR_CLAMP).toBeLessThan(65504);
+    expect(MIP_DOWN_FRAG).toContain('precision highp float;');
+    expect(MIP_DOWN_FRAG).toContain('min( c.rgb, vec3( uMax ) )');
     const i = SSR_TRACE_FRAG.indexOf('vec3 col = textureGrad( tPyr');
     expect(i).toBeGreaterThan(0);
-    expect(SSR_TRACE_FRAG.slice(i, i + 400)).toContain('if ( any( isnan( col ) ) || any( isinf( col ) ) ) return;');
+    expect(SSR_TRACE_FRAG.slice(i, i + 800)).toContain('if ( any( isnan( col ) ) || any( isinf( col ) ) ) return;');
   });
 
   it('presets: high and ultra trace, ultra filters; low and medium do not', () => {
