@@ -95,13 +95,14 @@ describe('glossy lobe footprint', () => {
   it('keeps the lobe\'s spread in the plane of incidence and narrows it by N.V across it (grazing floor)', () => {
     const { fp, L0 } = grazing(0.1);
     // the in-plane edges lie 2 tn L0 apart along the wall (over the cosine of R's tilt to its normal), the
-    // out-of-plane ones 2 tn N.V L0: on a wall facing the camera the screen ellipse keeps that ratio
+    // out-of-plane ones 2 tn N.V L0: on a wall facing the camera the screen ellipse keeps that ratio (about 0.18),
+    // down to the pyramid's anisotropy cap
     const [e0, e1, e2, e3] = fp.edges;
     expect(dist(e0, e1) / (2 * 0.1 * L0)).toBeGreaterThan(0.95);
     expect(dist(e0, e1) / (2 * 0.1 * L0)).toBeLessThan(1.1);
     expect(dist(e2, e3) / (2 * 0.1 * 0.2 * L0)).toBeCloseTo(1, 1);
-    expect(len(fp.gO) / len(fp.gI)).toBeGreaterThan(0.15);
-    expect(len(fp.gO) / len(fp.gI)).toBeLessThan(0.22);
+    expect(len(fp.gO) / len(fp.gI)).toBeGreaterThan(Math.max(0.15, 1 / SSR.PYR_ANISO) - 1e-9);
+    expect(len(fp.gO) / len(fp.gI)).toBeLessThan(Math.max(0.22, 1 / SSR.PYR_ANISO + 1e-9));
     // the in-plane axis is vertical on screen (the streak of a lamp in a wet floor)
     expect(Math.abs(fp.gI[1])).toBeGreaterThan(10 * Math.abs(fp.gI[0]));
   });
@@ -317,6 +318,9 @@ describe('composite', () => {
     expect(SSR_COMPOSITE_SPECULAR).toContain('spec = mix( s1.rgb, s1.a * ssr.rgb / max( ssr.a, 1e-4 ), ssr.a );');
     expect(MRT_COMPOSITE_FRAG).toContain('outColor = vec4( outc, 1.0 );');
     for (const u of ['tC0', 'tS1', 'tN2', 'tSsr', 'tDepth', 'uSsrP', 'uLin']) expect(MRT_COMPOSITE_FRAG).toMatch(new RegExp(`uniform [\\w ]+ ${u};`));
+    // the upsample's normal weight is the cosine to the 8th power, by three squarings
+    expect(SSR.UP_NPOW).toBe(8);
+    expect(MRT_COMPOSITE_FRAG).toContain('nd *= nd; nd *= nd; nd *= nd; // ^UP_NPOW');
   });
 });
 

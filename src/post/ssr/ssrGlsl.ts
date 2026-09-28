@@ -57,8 +57,10 @@ export const SSR = {
   BEHIND_MAX: 10,
   /** Hi-Z levels built (the full chain is allocated for texture completeness) */
   HIZ_LEVELS: 8,
-  /** anisotropic filtering of the colour pyramid (the streak lookups use textureGrad) */
-  PYR_ANISO: 8,
+  /** anisotropic filtering of the colour pyramid (the streak lookups use textureGrad; the footprint's axis ratio is
+   * capped at it). 8 until the resolve: with it, 4 is as close to the GGX reference (5.36 against 5.32 % mean error)
+   * and saves ~0.04 ms of the ultra trace in PARKING, while the out-of-plane blur widens only at N.V < 0.25 */
+  PYR_ANISO: 4,
   /** the resolve (SSR_RESOLVE_FRAG): each texel also gathers its neighbours' rays over the lobe's spread seen from the
    * camera through the mirror (the angle x L0 / (|P| + L0), along the plane of incidence's screen direction and x N.V
    * across it), a Gaussian of sd RESOLVE_K x RESOLVE_SD x the cone's tan (GGX's in-plane half width at half maximum
@@ -624,8 +626,9 @@ float brLinZ( float d ) { return uLin.x / ( uLin.z - d * uLin.y ); }
 // (0 where the texel's pixel has no G-buffer specular)
 float brUpW( vec4 m, float zp, vec3 Np, float rp ) {
 	if ( m.x <= 0.0 ) return 0.0;
-	return exp( - abs( zp - m.x ) / ( ${f(SSR.UP_Z)} * zp ) ) * pow( max( dot( Np, brOctDec( m.yz ) ), 0.0 ), ${f(SSR.UP_NPOW)} )
-		* exp( - ${f(SSR.UP_ROUGH)} * abs( rp - m.w ) );
+	float nd = max( dot( Np, brOctDec( m.yz ) ), 0.0 );
+	nd *= nd; nd *= nd; nd *= nd; // ^UP_NPOW
+	return nd * exp( - abs( zp - m.x ) / ( ${f(SSR.UP_Z)} * zp ) - ${f(SSR.UP_ROUGH)} * abs( rp - m.w ) );
 }
 `;
 
