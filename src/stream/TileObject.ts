@@ -3,6 +3,7 @@
 // through the TileUploader interface, so the machine itself is testable in Node with a fake uploader.
 
 import * as THREE from 'three';
+import { LM_DIR_LAYERS } from '../bake/encode.ts';
 import { EMISSION, LV, NOISE_WRAP } from '../core/constants.ts';
 import { globalTileX, globalTileZ, mod, tileKeyStr, tileOriginX, tileOriginZ, type TileKey } from '../core/grid.ts';
 import type { LightmapData, MeshBuffers, TileMesh } from '../core/mesh.ts';
@@ -97,7 +98,8 @@ function slotSpec(lm: LightmapData, slot: number, o: SlotSpec): SlotSpec {
   const W = lm.width, H = lm.height;
   switch (slot) {
     case SLOT_IRR: return setSpec(o, 2, W, H, 1, 'half', false, lm.irr);
-    case SLOT_DIR: return setSpec(o, 2, W, H, 1, 'u8', false, lm.dir);
+    // dir: its layers stacked in one W x (H * LM_DIR_LAYERS) image (the shader clamps each layer's lookup to its rows)
+    case SLOT_DIR: return setSpec(o, 2, W, H * LM_DIR_LAYERS, 1, 'u8', false, lm.dir);
     case SLOT_MASK: return setSpec(o, 2, W, H, 1, 'u8', false, lm.mask);
     case SLOT_FLICK: return setSpec(o, 2, W, H, 1, 'half', false, lm.flick);
     // emission: mipmapped for the colour lookup (WP7 §10); WP9 reads alpha with texelFetch at level 0

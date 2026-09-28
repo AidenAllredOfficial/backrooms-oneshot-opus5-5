@@ -40,7 +40,7 @@ Appendix A: API facts verified in `node_modules`.
 |---|---|---|
 | D1 | **2.5D world model.** Grid of 1.2 m cells; thin walls on cell edges (`WALL_T` 0.15 m); per-cell floor, ceiling, water and blocker heights in integer cm; axis-aligned solids for everything else. One data model feeds the mesher, collision, light-bake visibility and audio. Edge semantics are defined once, in `core/edges.ts`. | rendering + procgen |
 | D2 | **Chunks are 32×32 cells (38.4 m)** for generation and streaming. Each chunk is split into **four 16×16-cell render/bake tiles** (19.2 m quadrants). A tile has its own mesh, lightmap atlas, flicker uniforms and material instance, and is the unit of bake jobs. Decided in WP0, never changed. | judges' option 2 |
-| D3 | **Baked directional lightmaps**, computed on the CPU in a worker pool.<br>• Visibility: 2.5D height-aware DDA. Partitions, lintels, half walls, soffits and blocker boxes all occlude.<br>• Direct light: analytic polygon irradiance (exact near the emitter, point samples far away).<br>• Indirect light: SH-L1 probes at 3 heights per cell, gathered from an in-job patch cache.<br>• AO: analytic.<br>• Encoding: dominant direction plus directionality, decoded in the shader through `RE_Direct`.<br>The only runtime light is the flashlight. | rendering (+engineering hybrid form factor) |
+| D3 | **Baked directional lightmaps**, computed on the CPU in a worker pool.<br>• Visibility: 2.5D height-aware DDA. Partitions, lintels, half walls, soffits and blocker boxes all occlude.<br>• Direct light: analytic polygon irradiance (exact near the emitter, point samples far away).<br>• Indirect light: SH-L1 probes at 3 heights per cell, gathered from an in-job patch cache.<br>• AO: analytic.<br>• Encoding: dominant direction plus directionality, decoded in the shader through `RE_Direct`, and the indirect light's first-order normal response (hemisphere moments of the probes), so normal maps shade the ambient part too.<br>The only runtime light is the flashlight. | rendering (+engineering hybrid form factor) |
 | D4 | **No-leak invariant.**<br>• Lightmaps are filtered BILINEAR only.<br>• Floor and ceiling grid charts put texel boundaries on cell lines.<br>• Every occluding edge is at least one texel thick at floor level: `edgeBaseThickness(k) >= LM_TEXEL` for every occluding kind and every allowed density (8 or 12 texels per cell); partitions stand on a 0.15 m plinth. Unit-tested.<br>• Bake samples are clamped `WALL_T/2 + 1 cm` from walls.<br>• There is no bicubic filtering, anywhere. | engineering |
 | D5 | **Two bake tiers.**<br>• *preview*: inline with the build job; cell-level visibility plus 2D edge-aware open-edge diffusion. Leak-free, about 50 ms.<br>• *full*: a separate job.<br>The two bakes share one atlas (the chart hash must match) and swap instantly. There is **no LOD1 ring, no dual-lightmap crossfade and no custom TAA** in v1; SMAA is the AA. | judges |
 | D6 | **Flicker channels without border rules.**<br>• Generation allows at most one dynamic (FLICKER) light per tile, with window R = 9.5 m.<br>• A light's channel is `(globalTileX&1) + 2*(globalTileZ&1)`, so every texel sees at most one light per channel.<br>• LM_C stores 4 channels; the shader picks the source tile per channel by texel side.<br>• Uniforms hold 9 lights (own tile plus 8 neighbours).<br>• Shadow-correct across tile and chunk borders, with no placement restrictions near borders. | rendering (reworked) |
@@ -2101,7 +2101,8 @@ export interface LightmapData {
   height: number;
   chartHash: number;
   irr: Uint16Array; // RGBA16F: rgb static irradiance (lux; indirect already x AO), a = baked AO
-  dir: Uint8Array; // RGBA8: dominant direction xyz*0.5+0.5 (world), a = directionality w in [0,1]
+  dir: Uint8Array; // RGBA8, 2 layers stacked (one W x 2H image): layer 0 dominant direction xyz*0.5+0.5 (world),
+                   // a = directionality w in [0,1]; layer 1 rg = the indirect gradient (128 + 127 g), ba reserved (128)
   flick: Uint16Array | null; // RGBA16F: channel c = irradiance luminance (lux) of that channel's dynamic light
   mask: Uint8Array; // RGBA8: r stain, g grime, b wetness, a damage
   emission: Uint16Array; // RGBA16F EMISSION.RES^2: rgb emitter radiance (nits, dynamic lights at i = 1),
@@ -3954,10 +3955,27 @@ export function createBakeCache(): BakeCache;
      - Trace with the DDA to the first hit, capped at `LIGHT.PROBE_RAY_MAX` (8 m); look up the hit patch radiance. Emitter hits are excluded (already direct).
      - **Misses** (no hit within 8 m) use a tile-independent ambient term: `ρ̄_probe·Ē_cell/π`, where `Ē_cell` is the mean direct irradiance of the probe's own cell floor and `ρ̄_probe` the probe's own hit-weighted albedo.
      - Project to **SH-L1 RGB** (4 coefficients × 3).
+     - **Hemisphere tangential moments** (`ProbeSet.mom`, luma, 12 per probe): for each of the 6 axis hemispheres, the
+       moments `Σ Y(ω)·ω_t·4π/N` of its rays along its two tangents (`addMoments`; misses with the ambient term, the far
+       field too). For a receiver facing +a, `dE/dθ` of its normal tilted toward t is exactly the moment of the radiance
+       over its own hemisphere along t (the boundary term vanishes with its cosine). The ambient cube is quadratic in n,
+       so without these the indirect light had no first-order response to a normal map at all. Half the full-sphere
+       moment (`½(C₊ₜ − C₋ₜ)`) equals it only for fields symmetric about the receiver plane: it also counts what lies
+       behind the receiver (a ceiling's own lamp pools, a floor's own light), and against a brute-force hemisphere
+       gather from the texels themselves (same patch radiance) it reached slopes of 0.43–0.61 on LOBBY, OFFICE and
+       PARKING ceilings and walls and a correlation of 0.06 on LOBBY floors, where the hemisphere moments reach
+       0.77–0.89 and 0.49 (the rest is parallax: the probe sits up to 0.6 m from the surface).
    - **Texel indirect.**
      - Bilinear interpolation of the neighbouring cells' probes, with weight 0 across edges occluding at the probe height, across different `room`, or across floor steps > 0.5 m unless both probes (each layer at its own cell's height) lie 1 m over the higher floor (`STEP_CLEAR`: there both cells share the air, so the ceiling over a pool blends across the rim, while a deck's mid layer never takes a pit's); renormalise.
      - Linear interpolation between the height layers.
      - Evaluate SH irradiance at the texel normal.
+     - **Indirect gradient** (`indirectGradient`): the receiver's hemisphere first moment `m(n)` blended from the axis
+       hemispheres with weights `n_a²` like the cube (normal component: the cube lobe; tangential: the moments), then
+       `g = m − (m·n)n`, × the luma multi-bounce gain × AO (× the near-field V where the gather ran). It is interpolated
+       for the off-lattice texels and dilated exactly like the indirect irradiance, and stored as `g / E` (E the total
+       static luminance) on the face's two in-plane world axes (x, y, z order skipping the normal's dominant axis) in
+       the dir map's layer 1. Stored `|g|/E` per radian (medians, seed 1 zone bakes at high): walls 18–55 % (the
+       floor bounce below), ceilings 14–35 % (DARK 76 %), floors 2–14 %; grazing-lit texels reach the ±1 clamp.
      - Multi-bounce **per colour channel**: `E_ind,c /= (1 − min(0.6, 0.55·ρ̄_probe,c))`, where `ρ̄_probe` is the mean **RGB** albedo over **that probe's own ray hits** (interpolated with the probe weights), never a per-tile mean. Every extra bounce is tinted again, so enclosed coloured rooms keep their colour in the shadows. The flicker (luminance) channels use the luma of ρ̄.
    - **AO** (`ao.ts`). Analytic `Π(1 − 0.5/(1 + (d/0.25)²))` over the nearby planes: occluding edge faces within 1 cell, floor, ceiling, and box faces (solids and `PROP_OCCLUDERS` parts) within 0.6 m. Plus **contact AO** for every COLLIDE prop footprint: an elliptical falloff reaching 0.3 m beyond the footprint, strength 0.5 at the footprint edge; round bases (`PROP_ROUND_CONTACT`: office chairs' star bases, trash cans, buckets) a disc instead, 0.5 within 0.35 R of its centre (R = the footprint's inscribed radius) fading to 0 at R + 0.3 m (a square under a swivel chair read as a grey tile). Multiplies the indirect term only; stored in `irr.a`. Full bakes with the near-field gather leave out the prop boxes and the contact AO of footprints whose prop has a part box standing on the floor (`VisGrid.contactBox`, bottom within 5 cm of the base): the gather traces them. Props whose part boxes all float (chair seats over their star bases, the lounge chair frame, the pallet deck) keep the contact AO for their untraced legs and bases, so they stay grounded.
    - **Near-field gather** (`nearfield.ts`, full bakes with `q.nearRays` > 0: high 16, ultra 32). The per-cell probe cannot see a desk top 0.7 m above a floor texel. Texels with a prop box within 1.2 m (in front of their plane) trace `nearRays` cosine rays of 1.2 m (a (0,2)-sequence, rotated by the texel's world position): `V` = the probe-SH-radiance-weighted fraction of rays that miss the props, `E_box` = π/N·Σ the hit prop faces' radiance. Prop face radiance comes from world-anchored 0.3 m face sub-patches (1.2 m along the long side of faces narrower than 0.2 m: rack uprights, deck and panel edges; K_MAX lights, form factor and one visibility ray each, cached per bake), not from the shell patch of the cell. `E_cube` blends towards the probes' **far field** by the texel's region weight: every probe also traces its rays with the prop boxes entered within 0.6 m transparent (`NEAR.PROBE_FAR`; the flicker channels' cubes too), so a low probe under a desk top or chair seat does not darken the under-desk floor a second time (the probes with the props gave 0.5× a brute-force reference gather under office desks; the far field 1.17×), while probes away from the region keep the props (racks still shade the aisles). `E_ind = (E_cube·V + E_box)·mb`; `irr.a` gets the geometric visibility. The correction fades out (smoothstep) over the region's outer 0.6 m. It is traced on a world-aligned 4×4-texel sub-lattice and at seam texels and bilinearly interpolated in between (within a patch or between linked cells), so seam texels stay exact and the cost is ~1/3 of tracing every lattice texel. With `nearRays` absent or 0 the bake is byte-identical to the far-field bake.
@@ -4005,6 +4023,9 @@ export function createBakeCache(): BakeCache;
     - 4 passes of chart-local dilation fill invalid texels and gutters.
     - rgb clamped to `HALF_MAX` → `toHalf`.
     - `dir.xyz` = normalized dominant direction·0.5 + 0.5; `dir.a` = `w = |Σ E ω̂| / Σ E` in [0, 1].
+    - `dir` layer 1 (the rows after layer 0: one W × 2H texture, so the high / ultra shell program stays at 16
+      samplers): rg = `128 + 127·clamp(g/E, −1, 1)` (128 is exactly 0; `encodeGrad`, `gradAxes`), ba = 128 (reserved for
+      the flicker channels' gradient). Texels outside the charts hold 128. +4 B per lightmap texel.
     - `term !== 'all'` zeroes the other term (the debug bake).
 13. **Timing and determinism.** Wrap stats timing in `performance.now()` (allowed in `bake/index.ts` only). No other nondeterminism: all stochastic patterns are seeded by quantized **world** positions, so adjacent tiles and chunks agree.
 
@@ -4284,6 +4305,16 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
     against 116–134 at medium; now 122). Glazed wall tiles lit by a row of troffers no longer sparkle tile by tile in
     that lobe. Glossy floors keep their lamp highlights: 85–106 % of the old peaks in LOBBY, OFFICE and POOLROOMS at
     medium. Reflection passes run the same code, so the probe's capture loses the arc too.
+  - **The ambient part follows the normal map** (lightmap path; not the light volume). `brLmDirUv(uv, k)` reads layer
+    k of the stacked dir map with its rows clamped to [0.5, H − 0.5] (exactly a separate texture's clamp-to-edge, so
+    layer 0 is bit-identical to before), and `brLmGrad` decodes the gradient, restoring the dominant-axis component so
+    it is tangent to the geometric world normal (TS twin `lmGradWorld`). Then
+    `iblIrradiance += E·SSAO_C·clamp(dot(g, n), −(1 − w), 1 − w)`: zero at n = n_g (flat surfaces and every frame
+    mean keep their value: the flat-normal renders are identical and frame means moved by at most 0.25 %), and the
+    ambient part never turns negative. Relief (high-passed log luminance, normal-mapped against flat normals):
+    PIPEWORKS CMU 6.6 → 13.2 %, the LOBBY ceiling 0.2 → 0.9 %, PARKING's ceiling 0.24 → 0.40 %, goto=dark
+    0.7 → 1.0 %; ceiling T-bars and tile bevels now shade. The flicker channels and the uniform environment radiance
+    stay normal-independent.
   - `material.multiScatteringCompensation` is only initialised by three's `lights_fragment_begin` when punctual lights exist; our chunk **sets it itself** from `material.dfg` exactly as r186 does: `material.multiScatteringCompensation = 1.0 + material.specularColorBlended * (1.0 / (material.dfg.x + material.dfg.y) - 1.0);` (`material.dfg` is always set by `lights_fragment_begin`), so harness scenes without the flashlight match the game.
   - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
     `chunks/pom.ts FRAG_DIRVIS_GLSL`): micro-shadowing (Chan 2018, not lite) `clamp(|N·L| + 2·ao² − 1, 0, 1)` with the

@@ -21,6 +21,13 @@
 // probe under a desk top or a chair seat no longer darkens the under-desk floor a second time (the traced V
 // multiplied the probe's own view of the same desk), while probes away from the region keep the props (tall racks
 // still shade the aisles).
+// Every probe also stores the TANGENTIAL first moments of its 6 axis hemispheres (ProbeSet.mom, luma): for a receiver
+// facing +a, d E / d theta of a normal tilted toward a tangent t is exactly the moment of the radiance over its own
+// hemisphere along t, the integral over omega_a > 0 of Y(omega) omega_t (the boundary term vanishes with its cosine).
+// The ambient cube is quadratic in n (no first-order response on the axis-aligned shell), so this is the part of the
+// indirect light a normal map can shade (bake/index.ts stores it per texel). The full-sphere moment (the cube's +t
+// minus -t) would also count what lies behind the receiver: a wall's own brightness seen from the probe in front of
+// it, a ceiling's own lamp pools.
 
 import { CELL, LIGHT } from '../core/constants.ts';
 import { CellFlag } from '../core/ids.ts';
@@ -52,6 +59,11 @@ export interface ProbeSet {
   farSh: Float32Array | null;
   farCube: Float32Array | null;
   farDyn: Float32Array | null;
+  /** 12 floats per probe (null: not gathered): hemisphere h (+x -x +y -y +z -z) at h * 2, the luma radiance moments
+   * sum Y(omega) omega_t over its rays (x 4 pi / N) along its two tangents t in x, y, z order skipping its axis (see
+   * addMoments). farMom: the same of the far field (null without `farR`). */
+  mom: Float32Array | null;
+  farMom: Float32Array | null;
 }
 
 const PROP_RHO = 0.3;
@@ -103,6 +115,17 @@ function addDynCube(dx: number, dy: number, dz: number, e: Float32Array, o: numb
 const dirX = new Float64Array(512), dirY = new Float64Array(512), dirZ = new Float64Array(512), missR = new Uint8Array(512);
 const farMiss = new Uint8Array(512);
 
+/** Accumulate a ray's luma radiance Y (direction d) into the tangential moments of the 3 hemispheres it lies in
+ * (ProbeSet.mom layout; sum, scaled by 4 pi / N later). */
+export function addMoments(m: Float64Array, dx: number, dy: number, dz: number, Y: number): void {
+  const hx = dx > 0 ? 0 : 2, hy = dy > 0 ? 4 : 6, hz = dz > 0 ? 8 : 10;
+  m[hx] += Y * dy; m[hx + 1] += Y * dz;
+  m[hy] += Y * dx; m[hy + 1] += Y * dz;
+  m[hz] += Y * dx; m[hz + 1] += Y * dy;
+}
+const mom = new Float64Array(12);
+const fmom = new Float64Array(12);
+
 /** Accumulate a ray's radiance into the 6 cosine lobes of an ambient cube (sum; scaled by 4 pi / N later). */
 function addCube(dx: number, dy: number, dz: number, r: number, g: number, b: number, cube = cub): void {
   const o0 = dx > 0 ? 0 : 3, c0 = dx > 0 ? dx : -dx;
@@ -147,6 +170,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
     dyn: withDyn ? new Float32Array(count * 24) : null,
     farSh: far ? new Float32Array(count * 12) : null, farCube: far ? new Float32Array(count * 18) : null,
     farDyn: far && withDyn ? new Float32Array(count * 24) : null,
+    mom: new Float32Array(count * 12), farMom: far ? new Float32Array(count * 12) : null,
   };
   const nRays = job.q.probeRays;
   const dirs = fibonacciDirs(nRays);
@@ -166,9 +190,9 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
         if (insideBox(g, c, px, py, pz, group)) continue;
         if (!tower && (py <= g.floor[c] || py >= g.ceil[c] || py <= g.blockTop[c])) continue;
         hashRotation(g.gi0 + hi, g.gj0 + hj, layer + (tower ? 16 : 0), rotM);
-        acc.fill(0); cub.fill(0);
+        acc.fill(0); cub.fill(0); mom.fill(0);
         const farP = far && propWithin(job, c, px, py, pz, group, farR); // (else far = full)
-        if (farP) { facc.fill(0); fcub.fill(0); if (withDyn) fdcub.fill(0); }
+        if (farP) { facc.fill(0); fcub.fill(0); fmom.fill(0); if (withDyn) fdcub.fill(0); }
         if (withDyn) dcub.fill(0);
         let miss0 = 0, miss1 = 0, miss2 = 0, miss3 = 0, rhoR = 0, rhoG = 0, rhoB = 0, hits = 0;
         for (let r = 0; r < nRays; r++) {
@@ -191,6 +215,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
           if (withDyn) addDynCube(dx, dy, dz, pref.e, pref.o, rhoL * INV_PI);
           addSh(acc, rad, s1, s2, s3);
           addCube(dx, dy, dz, rad[0], rad[1], rad[2]);
+          addMoments(mom, dx, dy, dz, luma(rad[0], rad[1], rad[2]));
           if (!farP) continue;
           if (refar) {
             if (hitFar.kind === HIT_NONE) { farMiss[r] = 1; continue; }
@@ -200,6 +225,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
           } else if (withDyn) addDynCube(dx, dy, dz, pref.e, pref.o, rhoL * INV_PI, fdcub);
           addSh(facc, rad, s1, s2, s3);
           addCube(dx, dy, dz, rad[0], rad[1], rad[2], fcub);
+          addMoments(fmom, dx, dy, dz, luma(rad[0], rad[1], rad[2]));
         }
         if (hits > 0) { rhoR /= hits; rhoG /= hits; rhoB /= hits; }
         else { albedoOf(g.floorMat[c], false, rho3); rhoR = rho3[0]; rhoG = rho3[1]; rhoB = rho3[2]; }
@@ -214,7 +240,12 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
           acc[0] += ar * miss0; acc[1] += ar * miss1; acc[2] += ar * miss2; acc[3] += ar * miss3;
           acc[4] += ag * miss0; acc[5] += ag * miss1; acc[6] += ag * miss2; acc[7] += ag * miss3;
           acc[8] += ab * miss0; acc[9] += ab * miss1; acc[10] += ab * miss2; acc[11] += ab * miss3;
-          for (let r = 0; r < nRays; r++) if (missR[r] !== 0) addCube(dirX[r], dirY[r], dirZ[r], ar, ag, ab);
+          const aY = luma(ar, ag, ab);
+          for (let r = 0; r < nRays; r++) {
+            if (missR[r] === 0) continue;
+            addCube(dirX[r], dirY[r], dirZ[r], ar, ag, ab);
+            addMoments(mom, dirX[r], dirY[r], dirZ[r], aY);
+          }
           if (withDyn) {
             const rhoP = luma(rhoR, rhoG, rhoB);
             for (let r = 0; r < nRays; r++) if (missR[r] !== 0) addDynCube(dirX[r], dirY[r], dirZ[r], e, o, rhoP * INV_PI);
@@ -226,6 +257,7 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
               if (farMiss[r] === 0) continue;
               addSh(facc, amb3, Y1 * dirY[r], Y1 * dirZ[r], Y1 * dirX[r]);
               addCube(dirX[r], dirY[r], dirZ[r], ar, ag, ab, fcub);
+              addMoments(fmom, dirX[r], dirY[r], dirZ[r], aY);
               if (withDyn) addDynCube(dirX[r], dirY[r], dirZ[r], e, o, rhoP * INV_PI, fdcub);
             }
           }
@@ -238,6 +270,9 @@ export function computeProbes(job: BakeJob, withDyn = false, farR = 0): ProbeSet
           for (let k = 0; k < 12; k++) P.farSh[so + k] = fa[k] * norm;
           for (let k = 0; k < 18; k++) P.farCube[pIdx * 18 + k] = fc[k] * norm;
         }
+        const mm = P.mom as Float32Array;
+        for (let k = 0; k < 12; k++) mm[pIdx * 12 + k] = mom[k] * norm;
+        if (P.farMom) { const fm = farP ? fmom : mom; for (let k = 0; k < 12; k++) P.farMom[pIdx * 12 + k] = fm[k] * norm; }
         if (P.dyn) for (let k = 0; k < 24; k++) P.dyn[pIdx * 24 + k] = dcub[k] * norm;
         if (P.farDyn) { const fd = farP ? fdcub : dcub; for (let k = 0; k < 24; k++) P.farDyn[pIdx * 24 + k] = fd[k] * norm; }
         P.rho[pIdx * 3] = rhoR; P.rho[pIdx * 3 + 1] = rhoG; P.rho[pIdx * 3 + 2] = rhoB;

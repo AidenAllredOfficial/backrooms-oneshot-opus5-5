@@ -93,7 +93,8 @@ export interface LightmapData {
   height: number;
   chartHash: number;
   irr: Uint16Array; // RGBA16F: rgb static irradiance (lux; indirect already x AO), a = baked AO
-  dir: Uint8Array; // RGBA8: dominant direction xyz*0.5+0.5 (world), a = directionality w in [0,1]
+  dir: Uint8Array; // RGBA8, 2 layers (bake/encode.ts LM_DIR_LAYERS; one W x 2H image): layer 0 dominant direction
+                   // xyz*0.5+0.5 (world), a = directionality w in [0,1]; layer 1 rg the indirect gradient, ba reserved
   flick: Uint16Array | null; // RGBA16F: channel c = irradiance luminance (lux) of that channel's dynamic light
   mask: Uint8Array; // RGBA8: r stain, g grime, b wetness, a damage
   emission: Uint16Array; // RGBA16F EMISSION.RES^2: rgb emitter radiance (nits, dynamic lights at i = 1),

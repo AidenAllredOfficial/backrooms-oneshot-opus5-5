@@ -22,7 +22,7 @@ function quadMesh(): MeshBuffers {
 function lightmap(variant: 'preview' | 'full', hash = 99, w = 512, h = 256): LightmapData {
   const n = w * h * 4, nv = LV.NX * LV.NY * LV.NZ * 4;
   return {
-    tileKey: '0:0:0:0', variant, width: w, height: h, chartHash: hash, irr: new Uint16Array(n).fill(toHalf(300)), dir: new Uint8Array(n),
+    tileKey: '0:0:0:0', variant, width: w, height: h, chartHash: hash, irr: new Uint16Array(n).fill(toHalf(300)), dir: new Uint8Array(n * 2),
     flick: null, mask: new Uint8Array(n), emission: new Uint16Array(EMISSION.RES * EMISSION.RES * 4),
     volume: { a: new Uint16Array(nv), b: new Uint8Array(nv), c: null, wallMask: new Uint8Array(18 * 18 * 4) },
     stats: { ms: 1, texels: w * h, rays: 0, lights: 0 },
@@ -80,7 +80,7 @@ describe('validateBuild / validateBake', () => {
     expect(validateBuild(m5, lightmap('preview')).join()).toMatch(/shell.uv: length 3, expected 8/);
   });
 
-  it('texture array lengths = w*h*4 and light-volume sizes', () => {
+  it('texture array lengths = w*h*4 (dir: 2 layers) and light-volume sizes', () => {
     const lm = lightmap('full');
     lm.dir = new Uint8Array(10);
     expect(validateBake(lm, 99).join()).toMatch(/lightmap.dir: length 10/);

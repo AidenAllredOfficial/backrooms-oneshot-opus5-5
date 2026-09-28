@@ -187,7 +187,7 @@ void main() {
 	float F = brFresnelW( NdV );
 	// ---- local lighting (floor-grid lightmap at the same xz)
 	vec4 lmA = texture( uLmIrr, vBrLmUv );
-	vec4 lmB = texture( uLmDir, vBrLmUv );
+	vec4 lmB = texture( uLmDir, brLmDirUv( vBrLmUv, 0.0 ) ); // (layer 0 of the stacked dir map)
 	vec4 fl = texture( uLmFlick, vBrLmUv );
 	vec3 E = max( lmA.rgb, vec3( 0.0 ) );
 	float w = clamp( lmB.a, 0.0, 1.0 );

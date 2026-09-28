@@ -2,9 +2,14 @@
 //
 // Inputs are per compact texel (TexelSet order), already dilated. Outputs are full atlas-sized RGBA arrays:
 //   irr   RGBA16F: rgb = static irradiance (lux; direct + indirect x AO), a = AO; every value clamped to HALF_MAX;
-//   dir   RGBA8:   xyz = normalized dominant direction * 0.5 + 0.5 (world), a = directionality
+//   dir   RGBA8, 2 layers (W x H each, layer 1 after layer 0: one W x 2H image, see LM_DIR_LAYERS):
+//                  layer 0: xyz = normalized dominant direction * 0.5 + 0.5 (world), a = directionality
 //                  w = |sum E_l w_l| / E (luminance), clamped to [0, 1]; w = 0 and the surface normal when there is
 //                  no direct light;
+//                  layer 1: rg = the indirect gradient g = G / E (luminance; G = d E_ind / d theta, bake/indirect.ts)
+//                  on the face's two in-plane world axes (x, y, z order skipping the normal's dominant axis, see
+//                  gradAxes), encodeGrad(clamp(g, -1, 1)) (128 = 0); ba = 128, reserved for the flicker channels'
+//                  gradient;
 //   flick RGBA16F: per-channel dynamic irradiance luminance (lux), or null;
 //   mask  RGBA8:   r stain, g grime, b wetness, a damage.
 // Atlas texels not covered by any chart or gutter stay zero (never sampled: gutters are dilated).
@@ -40,16 +45,33 @@ for (const v of [0, 1e-9, 6e-8, 1e-5, 0.1, 0.5, 1, 1.5, 300, 3299.7, 65504, 1e6]
 }
 const u8 = (v: number): number => (v <= 0 ? 0 : v >= 1 ? 255 : (v * 255 + 0.5) | 0);
 
+/** Layers of the dir map (dominant direction + w; indirect gradient). */
+export const LM_DIR_LAYERS = 2;
+/** A signed gradient in [-1, 1] as a byte, 128 + 127 g (0 is exactly 128). Decode: (byte - 128) / 127. */
+export const encodeGrad = (g: number): number => (g <= -1 ? 1 : g >= 1 ? 255 : Math.round(128 + 127 * g));
+export const decodeGrad = (b: number): number => (b - 128) / 127;
+/** The world axes (0 x, 1 y, 2 z) a face with normal n stores its tangential gradient on: the two that are not its
+ * dominant axis (ties: x before y before z, as the shader's brLmGrad decode). */
+export function gradAxes(nx: number, ny: number, nz: number): [number, number] {
+  const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+  if (ax >= ay && ax >= az) return [1, 2];
+  if (ay >= az) return [0, 2];
+  return [0, 1];
+}
+
 export interface EncodedLightmap { irr: Uint16Array; dir: Uint8Array; flick: Uint16Array | null; mask: Uint8Array }
 
 /**
  * e: 3/texel static irradiance, v: 3/texel luminance-weighted direction sum, ao: 1/texel, f: 4/texel or null,
- * m: 4/texel mask in [0, 1].
+ * m: 4/texel mask in [0, 1], gr: 3/texel indirect gradient (world, luminance lux per radian) or null (zero).
  */
-export function encodeLightmap(T: TexelSet, e: Float32Array, v: Float32Array, ao: Float32Array, f: Float32Array | null, m: Float32Array): EncodedLightmap {
+export function encodeLightmap(T: TexelSet, e: Float32Array, v: Float32Array, ao: Float32Array, f: Float32Array | null, m: Float32Array,
+  gr: Float32Array | null = null): EncodedLightmap {
   const size = T.atlasW * T.atlasH;
   const irr = new Uint16Array(size * 4);
-  const dir = new Uint8Array(size * 4);
+  const dir = new Uint8Array(size * 4 * LM_DIR_LAYERS);
+  dir.fill(128, size * 4); // layer 1: zero gradient wherever no texel writes one
+  const g1 = size * 4;
   const flick = f ? new Uint16Array(size * 4) : null;
   const mask = new Uint8Array(size * 4);
   for (let t = 0; t < T.n; t++) {
@@ -67,6 +89,12 @@ export function encodeLightmap(T: TexelSet, e: Float32Array, v: Float32Array, ao
     } else {
       dir[o] = u8(T.nx[t] * 0.5 + 0.5); dir[o + 1] = u8(T.ny[t] * 0.5 + 0.5); dir[o + 2] = u8(T.nz[t] * 0.5 + 0.5);
       dir[o + 3] = 0;
+    }
+    if (gr) { // (gradAxes, inlined)
+      const k = el > 1e-6 ? 1 / el : 0;
+      const ax = Math.abs(T.nx[t]), ay = Math.abs(T.ny[t]), az = Math.abs(T.nz[t]);
+      const a0 = ax >= ay && ax >= az ? 1 : 0, a1 = ax >= ay && ax >= az ? 2 : ay >= az ? 2 : 1;
+      dir[g1 + o] = encodeGrad(gr[t * 3 + a0] * k); dir[g1 + o + 1] = encodeGrad(gr[t * 3 + a1] * k);
     }
     if (flick && f) {
       flick[o] = clampHalf(f[t * 4]); flick[o + 1] = clampHalf(f[t * 4 + 1]);

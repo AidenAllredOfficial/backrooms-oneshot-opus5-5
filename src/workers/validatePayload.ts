@@ -3,9 +3,11 @@
 // (dev builds and the Node pipeline test) and turns violations into a loud `error` response.
 //
 // Checks (DESIGN §5 WP10 acceptance): no NaN/Inf, indices in range, lmUv inside the atlas, build chartHash ==
-// bake chartHash, texture array lengths = w*h*4, light-volume sizes, collision prefix sums monotone, plus the
-// structural invariants every consumer relies on (attribute lengths, enum ranges, per-cell array sizes).
+// bake chartHash, texture array lengths = w*h*4 (dir: w*h*4 per layer, bake/encode.ts LM_DIR_LAYERS), light-volume
+// sizes, collision prefix sums monotone, plus the structural invariants every consumer relies on (attribute lengths,
+// enum ranges, per-cell array sizes).
 
+import { LM_DIR_LAYERS } from '../bake/encode.ts';
 import {
   CHUNK_CELL_COUNT, EDGE_COUNT, EMISSION, GEN_VERSION, LM_ATLAS_W, LM_TPC_ALLOWED, LV,
 } from '../core/constants.ts';
@@ -131,7 +133,7 @@ function validateLightmap(e: Errs, lm: LightmapData, variant: 'preview' | 'full'
   if (!Number.isInteger(lm.chartHash)) e.push(`lightmap.chartHash: not an integer (${lm.chartHash})`);
   const n = w * h * 4;
   if (checkLen(e, 'lightmap.irr', lm.irr.length, n)) checkHalf(e, 'lightmap.irr', lm.irr, false, false);
-  checkLen(e, 'lightmap.dir', lm.dir.length, n);
+  checkLen(e, 'lightmap.dir', lm.dir.length, n * LM_DIR_LAYERS);
   checkLen(e, 'lightmap.mask', lm.mask.length, n);
   if (lm.flick !== null && checkLen(e, 'lightmap.flick', lm.flick.length, n)) checkHalf(e, 'lightmap.flick', lm.flick, false, false);
   if (checkLen(e, 'lightmap.emission', lm.emission.length, EMISSION_LEN)) checkHalf(e, 'lightmap.emission', lm.emission, false, true);

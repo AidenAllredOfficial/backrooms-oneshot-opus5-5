@@ -146,6 +146,7 @@ export const FRAG_LIGHTS_GLSL = /* glsl */ `
 material.diffuseContribution = brDiffRoom; // after the punctual lights (chunks/materialPost.ts brPunctAlb)
 vec4 brLmA;
 vec4 brLmB;
+vec4 brLmG = vec4( 128.0 / 255.0 ); // (a zero gradient: the light volume has none)
 vec4 brFl;
 #ifdef BR_LV
 	// props: tile light volume (32x6x32, 0.6 m), per-fragment wall clamp inside the fragment's own cell. Up-facing
@@ -197,7 +198,8 @@ vec4 brFl;
 	brFl = texture( uVolC, brUvw );
 #else
 	brLmA = texture( uLmIrr, vBrLmUv );
-	brLmB = texture( uLmDir, vBrLmUv );
+	brLmB = texture( uLmDir, brLmDirUv( vBrLmUv, 0.0 ) );
+	brLmG = texture( uLmDir, brLmDirUv( vBrLmUv, 1.0 ) ); // the dir map's layer 1: the indirect gradient
 	brFl = texture( uLmFlick, vBrLmUv );
 #endif
 vec3 brE = max( brLmA.rgb, vec3( 0.0 ) );
@@ -328,6 +330,13 @@ ${FRAG_DIRVIS_GLSL}
 }
 irradiance += brEf * mix( vec3( 1.0 ), brSsC, 0.5 ); // flicker channels: diffuse irradiance
 iblIrradiance += ( 1.0 - brW ) * ( brE * brSsC ); // ambient part (diffuse + multiscatter specular in RE_IndirectSpecular)
+#ifndef BR_LV
+// first-order normal response of the ambient part (lightmap path): E_ind(n) = E_ind(n_g) + g . n with the baked
+// indirect gradient (tangent to n_g, so a flat surface keeps its mean), within +-(1 - w) E so the ambient part never
+// turns negative. The ambient cube alone is quadratic in n: normal maps shaded nothing but the dominant-direction
+// lobe, and ceilings (w = 0) not even that
+iblIrradiance += brE * brSsC * clamp( dot( ( viewMatrix * vec4( brLmGrad( brLmG.rg, brNWg ), 0.0 ) ).xyz, normal ), - ( 1.0 - brW ), 1.0 - brW );
+#endif
 // ambient part as a uniform environment (indirect specular). Package D: the probe radiance takes over by its share
 // (the clearcoat lobe's by brPrWc), then the routed lobe's environment becomes the G-buffer fallback's on MRT pixels
 vec3 brEnvRad = ( 1.0 - brW ) * ( brE * brSsK ) * RECIPROCAL_PI;
