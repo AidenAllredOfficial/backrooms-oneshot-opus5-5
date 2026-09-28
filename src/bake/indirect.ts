@@ -3,9 +3,10 @@
 //
 // Bilinear interpolation of the 4 neighbouring cells' probes (probe = cell centre), weight 0 across an edge that
 // occludes at the probe height, across different rooms (room ids are chunk-local, so across a chunk line the edge
-// test decides alone), across floor steps > 0.5 m below STEP_CLEAR m above the higher floor (above it the air over
-// both cells is one: the ceiling over a pool took the pool's probes alone and drew its outline as a hard-edged
-// rectangle), and for invalid probes; renormalised. Diagonal neighbours need
+// test decides alone), across floor steps > 0.5 m unless both probes (the owner's layer and the neighbour's, each at
+// its own cell's height) lie STEP_CLEAR m above the higher floor (there the air over both cells is one: the ceiling
+// over a pool took the pool's probes alone and drew its outline as a hard-edged rectangle; a deck's mid layer must not
+// take a pit's, which lies at the pit's own mid height), and for invalid probes; renormalised. Diagonal neighbours need
 // one open L-shaped path. Linear interpolation between the height layers (tower cells: periodic in y with the
 // fundamental-period layers). Irradiance from the probes' ambient cube at the texel normal (SH-L1 rings for
 // strongly directional fields; the light volume keeps SH-L1 for its direction), then multi-bounce per colour
@@ -45,12 +46,13 @@ const ezOcc = (g: VisGrid, Z: number, col: number, t: number, y: number): boolea
 /** A floor step > 0.5 m separates the probes of its two cells only below this height (m) over the higher floor. */
 export const STEP_CLEAR = 1;
 
-/** Can probe interpolation connect cell a to its 4-neighbour b at height y (t = metres along the edge)? */
-function link4(g: VisGrid, a: number, b: number, y: number, t: number): boolean {
+/** Can probe interpolation connect cell a to its 4-neighbour b at height y (t = metres along the edge)? ys: the height
+ * for the floor-step test (default y; probe links pass the lower of the two probes' heights). */
+function link4(g: VisGrid, a: number, b: number, y: number, t: number, ys = y): boolean {
   const n = g.n;
   if ((g.flags[b] & CellFlag.SOLID) !== 0) return false;
   const fa = g.floor[a], fb = g.floor[b];
-  if (Math.abs(fa - fb) > 0.5 && y < (fa > fb ? fa : fb) + STEP_CLEAR) return false;
+  if (Math.abs(fa - fb) > 0.5 && ys < (fa > fb ? fa : fb) + STEP_CLEAR) return false;
   if (g.room[a] !== g.room[b] && g.slot[a] === g.slot[b]) return false;
   if (g.group[a] !== g.group[b]) return false;
   const ai = a % n, aj = (a - ai) / n, bi = b % n, bj = (b - bi) / n;
@@ -58,16 +60,16 @@ function link4(g: VisGrid, a: number, b: number, y: number, t: number): boolean 
   return !ezOcc(g, aj > bj ? aj : bj, ai, t, y);
 }
 
-/** tEx / tEz: metres along the owner's ex (x-line) / ez (z-line) edges at the sample position. */
-function linked(g: VisGrid, a: number, b: number, y: number, tEx: number, tEz: number): boolean {
+/** tEx / tEz: metres along the owner's ex (x-line) / ez (z-line) edges at the sample position; ys: see link4. */
+function linked(g: VisGrid, a: number, b: number, y: number, tEx: number, tEz: number, ys = y): boolean {
   if (a === b) return true;
   const n = g.n;
   const ai = a % n, aj = (a - ai) / n, bi = b % n, bj = (b - bi) / n;
-  if (aj === bj) return link4(g, a, b, y, tEx); // same row: crossing an x-line
-  if (ai === bi) return link4(g, a, b, y, tEz); // same column: crossing a z-line
+  if (aj === bj) return link4(g, a, b, y, tEx, ys); // same row: crossing an x-line
+  if (ai === bi) return link4(g, a, b, y, tEz, ys); // same column: crossing a z-line
   const m1 = aj * n + bi, m2 = bj * n + ai; // L-paths via (bi, aj) and (ai, bj)
   const half = CELL / 2;
-  return (link4(g, a, m1, y, half) && link4(g, m1, b, y, half)) || (link4(g, a, m2, y, half) && link4(g, m2, b, y, half));
+  return (link4(g, a, m1, y, half, ys) && link4(g, m1, b, y, half, ys)) || (link4(g, a, m2, y, half, ys) && link4(g, m2, b, y, half, ys));
 }
 
 /** Can a smooth field at (x, y, z) (halo cells / m) of owner cell a be interpolated with cell b's (probe links:
@@ -104,7 +106,9 @@ function horizontal(job: BakeJob, P: ProbeSet, x: number, z: number, c: number, 
       const pc = (j0 + b) * n + (i0 + a);
       const pIdx = (pj * P.n + pi) * 3 + layer;
       if (P.valid[pIdx] === 0) continue;
-      if (!linked(g, c, pc, y, clampT(alongX), clampT(alongZ))) continue;
+      // across a floor step both probes must lie in the shared air: the neighbour's layer sits at its own cell's height
+      const yb = job.cellH[pc * 3 + layer];
+      if (!linked(g, c, pc, y, clampT(alongX), clampT(alongZ), yb < y ? yb : y)) continue;
       cw[cnt] = w; cp[cnt] = pIdx; cnt++;
       wsum += w;
     }
