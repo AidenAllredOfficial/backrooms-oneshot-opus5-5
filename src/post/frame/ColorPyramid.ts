@@ -4,7 +4,7 @@
 //  - RGBA16F, level 0 = round(W x s) x round(H x s) of the full-resolution target, s = QualityConfig.colorPyramidScale
 //    (high 1.0, ultra 0.67), LinearMipmapLinear, ClampToEdge. PYR_LEVELS levels (floor-halved; TEXTURE_MAX_LEVEL
 //    stops sampling there), each a low-pass of the one before (LowPassMips).
-//  - rgb = the opaque HDR colour before reflections and water: the source texel at s = 1, otherwise a 4-tap bilinear
+//  - rgb = the full opaque HDR colour, including fallback specular before SSR and water: the source texel at s = 1, otherwise a 4-tap bilinear
 //    box over the texel's footprint (about 3x3 source texels at 0.67).
 //  - a = the linear view depth (positive metres; the far plane where nothing was drawn) of the NEAREST full-resolution
 //    depth texel: read it with texelFetch on level 0 only (the mips hold a weighted mean).
@@ -154,23 +154,31 @@ export class LowPassMips {
 const FRAG = /* glsl */ `
 precision highp float;
 uniform highp sampler2D tColor;
+uniform highp sampler2D tFallback;
+uniform bool uFallback;
 uniform highp sampler2D tDepth;
 uniform vec2 uSrcSize; // full-resolution size (px)
 uniform vec2 uDstSize; // level-0 size (px)
 uniform float uNear;
 uniform float uFar;
 layout( location = 0 ) out highp vec4 outColor;
+vec3 brOpaqueColor( vec2 uv ) {
+	vec3 c = texture( tColor, uv ).rgb;
+	if ( uFallback ) c += texture( tFallback, uv ).rgb;
+	return c;
+}
 void main() {
 	vec2 uv = gl_FragCoord.xy / uDstSize;
 	ivec2 src = ivec2( uSrcSize );
 #ifdef BR_PYR_FULL
 	ivec2 p = min( ivec2( gl_FragCoord.xy ), src - 1 );
 	vec3 c = texelFetch( tColor, p, 0 ).rgb;
+	if ( uFallback ) c += texelFetch( tFallback, p, 0 ).rgb;
 #else
 	ivec2 p = min( ivec2( uv * uSrcSize ), src - 1 );
 	vec2 o = 0.25 / uDstSize; // a quarter of a level-0 texel: the 4 bilinear taps span its footprint
-	vec3 c = 0.25 * ( texture( tColor, uv + vec2( - o.x, - o.y ) ).rgb + texture( tColor, uv + vec2( o.x, - o.y ) ).rgb
-		+ texture( tColor, uv + vec2( - o.x, o.y ) ).rgb + texture( tColor, uv + vec2( o.x, o.y ) ).rgb );
+	vec3 c = 0.25 * ( brOpaqueColor( uv + vec2( - o.x, - o.y ) ) + brOpaqueColor( uv + vec2( o.x, - o.y ) )
+		+ brOpaqueColor( uv + vec2( - o.x, o.y ) ) + brOpaqueColor( uv + vec2( o.x, o.y ) ) );
 #endif
 	if ( any( isnan( c ) ) || any( isinf( c ) ) ) c = vec3( 0.0 );
 	float d = texelFetch( tDepth, p, 0 ).x;
@@ -201,7 +209,8 @@ export class ColorPyramid {
     this.target.texture.name = 'Frame.ColorPyramid';
     allocMips(this.target);
     const uniforms = (): Record<string, THREE.IUniform> => ({
-      tColor: { value: null }, tDepth: { value: null }, uSrcSize: { value: this.srcSize }, uDstSize: { value: this.dstSize },
+      tColor: { value: null }, tFallback: { value: null }, uFallback: { value: false }, tDepth: { value: null },
+      uSrcSize: { value: this.srcSize }, uDstSize: { value: this.dstSize },
       uNear: { value: 0.05 }, uFar: { value: 400 },
     });
     this.full = quadMaterial('br-pyramid-full', FRAG, { BR_PYR_FULL: '' }, uniforms());
@@ -227,11 +236,14 @@ export class ColorPyramid {
     this.invSize.set(1 / dw, 1 / dh);
   }
 
-  /** Build level 0 from the opaque colour and its depth, then the low-passed levels; leaves no target bound. */
-  build(renderer: THREE.WebGLRenderer, color: THREE.Texture, depth: THREE.Texture, camera: THREE.PerspectiveCamera): void {
+  /** Build the complete opaque radiance and depth, then the low-passed levels. MRT frames supply their separate
+   * fallback specular here, before filtering; the current SSR result is excluded to avoid reflection feedback. */
+  build(renderer: THREE.WebGLRenderer, color: THREE.Texture, depth: THREE.Texture, camera: THREE.PerspectiveCamera, fallback: THREE.Texture | null = null): void {
     const m = this.scale === 1 ? this.full : this.box;
     const u = m.uniforms;
     u.tColor.value = color;
+    u.tFallback.value = fallback;
+    u.uFallback.value = fallback !== null;
     u.tDepth.value = depth;
     u.uNear.value = camera.near;
     u.uFar.value = camera.far;

@@ -5,6 +5,7 @@ import {
   isCameraCut, MOTION_BLUR, MotionBlurEffect, motionShutter, reprojectUv, rollingShutterUv,
 } from '../../src/post/effects/MotionBlurEffect.ts';
 import { QUALITY } from '../../src/core/quality.ts';
+import { LensEffect } from '../../src/post/effects/LensEffect.ts';
 
 const mkCam = (): THREE.PerspectiveCamera => {
   const c = new THREE.PerspectiveCamera(62, 16 / 9, 0.05, 400);
@@ -65,6 +66,7 @@ describe('motion blur maths', () => {
     expect(isCameraCut(0, 0, 0.15, false)).toBe(true);
     expect(isCameraCut(0, 0, 1 / 60, true)).toBe(true);
     expect(isCameraCut(NaN, 0, 1 / 60, false)).toBe(true);
+    for (const dt of [0, -1 / 60, NaN, Infinity]) expect(isCameraCut(0, 0, dt, false)).toBe(true);
   });
 
   it('rolling shutter: a left turn shifts upper rows left of lower rows (the top was read first)', () => {
@@ -81,6 +83,61 @@ describe('motion blur maths', () => {
 });
 
 describe('MotionBlurEffect state', () => {
+  it('a zero-time camera change is a cut, with no shutter blur or rolling-shutter velocity', () => {
+    const c = mkCam();
+    const fx = new MotionBlurEffect(c);
+    fx.set(8, 1 / 60, 48);
+    const up = (dt: number): void => fx.update(null as unknown as THREE.WebGLRenderer, null as unknown as THREE.WebGLRenderTarget, dt);
+    up(1 / 60);
+    c.rotation.y += 0.03;
+    c.updateMatrixWorld();
+    up(0);
+    expect(fx.wasCut).toBe(true);
+    expect(mbState(fx).w).toBe(0);
+    expect(fx.angularVelocity.yaw).toBe(0);
+    up(NaN);
+    expect(mbState(fx).toArray().every(Number.isFinite)).toBe(true);
+    fx.dispose();
+  });
+
+  it('rolling shutter follows the current turn and stops on the first stationary frame', () => {
+    const c = mkCam();
+    const motion = new MotionBlurEffect(c);
+    const lens = new LensEffect();
+    lens.setMotionSource(motion, c);
+    lens.setCamcorder(true, 0, 0);
+    const rs = (): THREE.Vector2 => (lens.uniforms.get('uRS') as THREE.Uniform<THREE.Vector2>).value;
+    const frame = (): void => {
+      motion.update(null as unknown as THREE.WebGLRenderer, null as unknown as THREE.WebGLRenderTarget, 1 / 60);
+      lens.update(null as unknown as THREE.WebGLRenderer, null as unknown as THREE.WebGLRenderTarget);
+    };
+    frame();
+    expect(rs().length()).toBe(0);
+    c.rotation.y += 0.01;
+    c.updateMatrixWorld();
+    frame();
+    const expected = rollingShutterUv(0.01 * 60, 0, Math.tan(c.fov * Math.PI / 360), c.aspect);
+    expect(rs().x).toBeCloseTo(expected[0], 9);
+    frame();
+    expect(rs().length()).toBe(0);
+    c.rotation.y += 0.01;
+    c.updateMatrixWorld();
+    lens.setRollingShutterEnabled(false);
+    frame();
+    expect(rs().length()).toBe(0);
+    lens.setRollingShutterEnabled(true);
+    motion.cut();
+    frame();
+    expect(rs().length()).toBe(0);
+    c.rotation.y += 0.01;
+    c.updateMatrixWorld();
+    lens.setCamcorder(false, 0, 0);
+    frame();
+    expect(rs().length()).toBe(0);
+    motion.dispose();
+    lens.dispose();
+  });
+
   it('is off on the first frame, for a static camera (byte-stable captures) and with taps 0', () => {
     const c = mkCam();
     const fx = new MotionBlurEffect(c);

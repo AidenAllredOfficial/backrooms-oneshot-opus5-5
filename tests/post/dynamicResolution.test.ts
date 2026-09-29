@@ -67,6 +67,16 @@ describe('dynamic resolution: cost relative to the display refresh (R2 B9)', () 
     expect(c.scale).toBe(s);
   });
 
+  it('with a GPU timer, CPU stalls hold the scale and prevent upscales without reallocating pixel buffers', () => {
+    for (const initial of [0.8, 1]) {
+      const c = createScaleController(1, initial);
+      run(c, 4, () => [16.7, 2, 2]);
+      c.reset(initial);
+      expect(run(c, 20, () => [33.4, 25, 2])).toEqual([]);
+      expect(c.scale).toBe(initial);
+    }
+  });
+
   it('without a GPU timer, a CPU-bound slowdown scales down and recovers', () => {
     const c = createScaleController(1);
     run(c, 3, () => [16.7, 5, null]);

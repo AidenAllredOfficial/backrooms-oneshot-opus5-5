@@ -44,6 +44,7 @@ export const GATE_TIMEOUT_MS = 45_000;
 const ATTRACT_MAX_SPEED = 1.0;
 const WALK_SPEED = DEFAULT_CONTROLLER.walk;
 const WATER_SCAN_INTERVAL = 6; // frames
+const WATER_SCAN_JUMP_M = 3; // force a fresh plane after discontinuous eye movement
 const WATER_MAX_DIST = 40; // m (PlanarReflection renders planes within 40 m)
 const WATER_FILM_PENALTY = 8; // m: a film (kind 2) ranks this much farther than a pool / flooded plane
 /** Upload budget while an automation ready gate (bake 'full') is closed: nobody watches, so uploads may take most
@@ -300,11 +301,16 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
   let lastZone = -1;
   let lastNow = -1;
   let waterY: number | null = null;
+  let waterStorey = -1, waterScanX = NaN, waterScanY = NaN, waterScanZ = NaN, waterScale = -1;
+  let waterQuality = core.sys?.q;
 
   const scanWater = (): void => {
     const s = core.sys;
-    if (!s || s.q.planarReflectionScale <= 0) { waterY = null; return; }
+    if (!s) { waterY = null; return; }
     const st = s.player.state;
+    waterStorey = st.s; waterScanX = st.eyeX; waterScanY = st.eyeY; waterScanZ = st.eyeZ;
+    waterQuality = s.q; waterScale = s.q.planarReflectionScale;
+    if (waterScale <= 0) { waterY = null; return; }
     // package E: a film under the player ranks WATER_FILM_PENALTY m farther (the pool beside the deck takes the mirror)
     const wp = nearestWaterPlane(s.streamer.query, st.eyeX, st.eyeY, st.eyeZ, -Math.sin(st.camYaw), -Math.cos(st.camYaw), WATER_MAX_DIST, WATER_FILM_PENALTY);
     waterY = wp ? wp.y : null;
@@ -352,13 +358,10 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       if (input.flashlightPressed) s.lighting.flashlight.set(!s.lighting.flashlight.on);
       // 2. player (real dt so autowalk/walk work under time=; frozenTime freezes bob/breath)
       if (!clock.paused) s.player.update(realDt * timeScale, input, query, core.bus, clock.frozen);
-      // 3. streaming (an automation gate's capture set is computed from this frame's view, not the last one's: the
-      // camera is placed before the streamer reads its frustum)
+      // 3. place this frame's camera before streaming and lighting read its pose and frustum.
       const burst = core.gate.active && core.params.bake === 'full';
-      if (burst) {
-        s.player.applyToCamera(core.camera, core.fov());
-        core.camera.updateMatrixWorld();
-      }
+      s.player.applyToCamera(core.camera, core.fov());
+      core.camera.updateMatrixWorld();
       s.streamer.update(st.x, st.z, -Math.sin(st.camYaw), -Math.cos(st.camYaw), core.camera, core.frame);
       // 4. uploads
       s.streamer.processUploads(r, burst ? BURST_UPLOAD_MS : s.q.uploadBudgetMs, burst);
@@ -369,17 +372,18 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       s.anomaly.update(t, dt, st, query);
       // 7. material time
       s.materials.globals.time.value = t;
-      // 8. camera
-      s.player.applyToCamera(core.camera, core.fov());
       // 9. audio
       s.audio.update(t, dt, st, query, s.lighting);
-      // 10. reflection probe, planar reflection (every frame while an automation gate is closed: the mirror plane
+      // 10. reflection probe, planar selection (every frame while an automation gate is closed: the mirror plane
       // at ready must not depend on which frame the gate opened at)
-      if (burst || core.frame % WATER_SCAN_INTERVAL === 0) scanWater();
+      const waterDx = st.eyeX - waterScanX, waterDy = st.eyeY - waterScanY, waterDz = st.eyeZ - waterScanZ;
+      if (burst || core.frame % WATER_SCAN_INTERVAL === 0 || st.s !== waterStorey || s.q !== waterQuality ||
+        s.q.planarReflectionScale !== waterScale ||
+        waterDx * waterDx + waterDy * waterDy + waterDz * waterDz > WATER_SCAN_JUMP_M * WATER_SCAN_JUMP_M) scanWater();
       core.gpu?.begin();
       s.ripples.update(r, dt, t, st, query); // package E: ripple window and fixed steps (inside the GPU timer)
       s.probe.update(r, core.scene, core.camera, query, st, s.features.probe); // package D: one cube face per frame
-      s.reflection.update(r, core.scene, core.camera, waterY);
+      s.reflectionPlaneY = waterY; // the frame graph renders the mirror after updating the flashlight shadow map
       // 11. post
       s.post.setAtmosphere(s.lighting.atmosphere());
       s.post.render(realDt, t);

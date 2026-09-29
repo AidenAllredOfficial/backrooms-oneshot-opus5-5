@@ -1,7 +1,7 @@
 // tests/materials/depthPrepass.test.ts — the invariants the depth prepass (materials/prepass.ts, DepthMaterial.ts)
 // and the flat per-face varyings (chunks/vertex.ts) rely on, plus the prepass render bookkeeping.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { VFlag, Zone, type ZoneId } from '../../src/core/ids.ts';
 import { LAYER_DEFS } from '../../src/core/materials.ts';
@@ -211,6 +211,27 @@ describe('renderWithPrepass', () => {
     // a camera that does not render the late layer never asks for a split
     cam.layers.disable(LAYER_LATE);
     expect(at(-5)).toBe(false);
+  });
+
+  it('updates transforms before late visibility checks and shares them between depth and shading', () => {
+    const t = setup();
+    const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+    cam.layers.enable(LAYER_LATE);
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial());
+    water.layers.set(LAYER_LATE);
+    water.position.z = 20;
+    t.scene.add(water);
+    t.scene.updateMatrixWorld(true);
+    // Move a previously out-of-view mesh without updating its world matrix, as an animation does.
+    water.position.z = -5;
+    const update = vi.spyOn(t.scene, 'updateMatrixWorld');
+    t.renderer.render = () => {
+      expect(t.scene.matrixWorldAutoUpdate).toBe(false);
+    };
+    renderWithPrepass(t.renderer as unknown as THREE.WebGLRenderer, t.scene, cam, {});
+    expect(PREPASS_LATE.visible).toBe(true);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(t.scene.matrixWorldAutoUpdate).toBe(true);
   });
 
   it('renders once when disabled', () => {

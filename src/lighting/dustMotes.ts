@@ -120,6 +120,11 @@ void main() {
 	float fade = smoothstep( ${f(MOTES.NEAR)}, ${f(MOTES.NEAR + 0.35)}, d )
 		* ( 1.0 - smoothstep( ${f(0.35 * MOTES.L)}, ${f(0.5 * MOTES.L)}, max( max( abs( rel.x ), abs( rel.y ) ), abs( rel.z ) ) ) );
 	if ( fade <= 0.0 ) return;
+	// Point centres outside the clip volume are discarded by rasterisation anyway. Reject them before the atlas,
+	// cookie and shadow lookups; most particles in the camera-centred box lie behind or outside the view.
+	vec4 clip = projectionMatrix * vec4( mat3( viewMatrix ) * rel, 1.0 );
+	if ( any( greaterThan( abs( clip.xyz ), vec3( clip.w ) ) ) ) return;
+	gl_Position = clip;
 	vec3 rd = rel / d;
 	// light: the baked field (ambient + dominant direction) and the shadowed torch
 	vec3 E, Ld, Ef;
@@ -146,8 +151,6 @@ void main() {
 		}
 	}
 	I *= ${f(MOTES.CROSS)} * fade;
-	vec4 pv = vec4( mat3( viewMatrix ) * rel, 1.0 );
-	gl_Position = projectionMatrix * pv;
 	// sprite: the defocus disc of the camcorder (focused at FOCUS), at least SIZE_MIN px; energy-conserving
 	float px = max( uBrWirePx, 1e-6 ); // m per px at unit depth
 	float coc = ${f(MOTES.APERTURE)} * abs( 1.0 / d - ${f(1 / MOTES.FOCUS)} ) / px;

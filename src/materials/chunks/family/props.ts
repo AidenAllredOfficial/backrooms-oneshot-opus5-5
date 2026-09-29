@@ -157,7 +157,7 @@ if ( brWpOn ) {
 		// corrosion: paint remnants where C is above a threshold that rises with age, on pipe undersides (condensation)
 		// and at joints and flanges (crevices); below it the recipe's rust shows. The paint takes the part's colour
 		// (props/builder.ts: METAL_RUST tints are relative to the neutral RUST_PAINT_REF paint)
-		float brWpRt = 0.62 + 0.1 * ( brWpDec - 0.5 ) + ( brWpProp ? 0.25 * smoothstep( -0.3, -0.8, brNWg.y ) : 0.0 )
+		float brWpRt = 0.62 + 0.1 * ( brWpDec - 0.5 ) + ( brWpProp ? 0.25 * ( 1.0 - smoothstep( -0.8, -0.3, brNWg.y ) ) : 0.0 )
 			+ 0.3 * ( 1.0 - smoothstep( 20.0, 80.0, brWpEd ) );
 		float brWpPt = 1.0 - brWpExpose( brAux, brWpA, brWpRt );
 		// the paint: chalked and stained brown where rust bleeds under it (the band above the threshold)

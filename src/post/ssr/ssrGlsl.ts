@@ -108,6 +108,10 @@ export const SSR = {
   /** a block pixel joins the representative's lobe only within this roughness of it (another surface / lobe: its
    * own texels carry it through the upsample's roughness weight) */
   BLOCK_DR: 0.15,
+  /** block pixels must lie on the representative's depth plane within this share of view depth */
+  BLOCK_PLANE: 0.01,
+  /** cosine to the representative's shading normal: keep corrugated flanks, exclude a crease or opposite face */
+  BLOCK_N: 0.05,
 } as const;
 
 /** Debug output of the composite (URL reflView): 0 off, 1 the reflection alone, 2 confidence (misses magenta). */
@@ -170,6 +174,9 @@ bool brSsrAccept( vec3 p, mat4 proj, ivec2 hz0, out float zs, out float gap ) {
 	return gap >= 0.0 && gap < 1.0;
 }
 float brSsrBehindT = 0.0;
+// The march parameter is affine after perspective division, not along the view-space ray. Recover the metric
+// distance by interpolating reciprocal clip w; multiplying t by L made receding hits fade long before 60 m.
+float brSsrRayDistance( float t, float L, float w0, float w1 ) { return L * t * w0 / mix( w1, w0, t ); }
 bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out float hitZ, out float hitGap, out float rayT ) {
 	hitUv = vec2( 0.0 );
 	hitZ = 0.0;
@@ -232,11 +239,11 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 						hitUv = p.xy / cells;
 						hitZ = zs;
 						hitGap = gap;
-						rayT = t * L / maxDist;
+						rayT = brSsrRayDistance( t, L, c0.w, c1.w ) / maxDist;
 						return true;
 					}
 					// passing behind a thick occluder: what the ray meets there is not on screen
-					brSsrBehindT = t * L;
+					brSsrBehindT = brSsrRayDistance( t, L, c0.w, c1.w );
 					if ( ++ behind >= BR_SSR_BEHIND_MAX ) return false;
 				}
 				t = tExit + 1e-5;
@@ -262,7 +269,7 @@ bool brSsrTrace( vec3 P, vec3 R, mat4 proj, float maxDist, out vec2 hitUv, out f
 				hitUv = p.xy / cells;
 				hitZ = zs;
 				hitGap = gap;
-				rayT = hi * L / maxDist;
+				rayT = brSsrRayDistance( hi, L, c0.w, c1.w ) / maxDist;
 				return true;
 			}
 		}
@@ -351,6 +358,8 @@ layout( location = 2 ) out highp vec4 outKer;
 #define BR_SSR_NAGREE0 ${f(SSR.NAGREE[0])}
 #define BR_SSR_NAGREE1 ${f(SSR.NAGREE[1])}
 #define BR_SSR_BLOCK_DR ${f(SSR.BLOCK_DR)}
+#define BR_SSR_BLOCK_PLANE ${f(SSR.BLOCK_PLANE)}
+#define BR_SSR_BLOCK_N ${f(SSR.BLOCK_N)}
 #define BR_SSR_RES_S ${f(SSR.RESOLVE_K * SSR.RESOLVE_SD)}
 #define BR_SSR_RES_MAX ${f(SSR.RESOLVE_MAX)}
 #define BR_HDR_CLAMP ${f(HDR_CLAMP)}
@@ -445,26 +454,32 @@ void main() {
 	vec4 s1 = texelFetch( tSpec, p, 0 );
 	vec4 g = texelFetch( tGNR, p, 0 );
 	if ( s1.a < 1e-4 || g.a < 0.5 ) return;
+	float d = texelFetch( tDepth, p, 0 ).x;
+	vec3 P = brViewPos( d, ( vec2( p ) + 0.5 ) / uFull );
+	vec3 N0 = brOctDec( g.rg ), Ng0 = brDepthNormal( p );
 	// the texel stands for its block: average the lobes of the glossy pixels of its whole step x step block (a normal
 	// map finer than the trace grid, corrugated metal or grout, would otherwise alias into dots); the spread of their
 	// normals widens the cone (Toksvig: alpha^2 + (1 - |n|) / |n|). Only pixels of the representative's lobe count
 	// (roughness within BLOCK_DR): a block across a puddle's shore averaged the mirror with the wet carpet around it
-	// into a middling lobe that caught the ceiling lamps as bright dots along the shore.
-	vec3 nSum = brOctDec( g.rg );
+	// into a middling lobe that caught the ceiling lamps as bright dots along the shore. A different depth plane or
+	// perpendicular face is another surface too, even when its roughness matches.
+	vec3 nSum = N0;
 	float rSum = g.b, cnt = 1.0;
 	ivec2 lim = ivec2( uFull ) - 1;
 	for ( int k = 1; k < uStep * uStep; k ++ ) {
-		vec4 gk = texelFetch( tGNR, min( p + ivec2( k % uStep, k / uStep ), lim ), 0 );
+		ivec2 pk = min( p + ivec2( k % uStep, k / uStep ), lim );
+		vec4 gk = texelFetch( tGNR, pk, 0 );
 		if ( gk.a < 0.5 || abs( gk.b - g.b ) > BR_SSR_BLOCK_DR ) continue;
-		nSum += brOctDec( gk.rg );
+		vec3 Nk = brOctDec( gk.rg );
+		if ( dot( N0, Nk ) < BR_SSR_BLOCK_N ) continue;
+		if ( abs( dot( brPixPos( pk ) - P, Ng0 ) ) > BR_SSR_BLOCK_PLANE * - P.z ) continue;
+		nSum += Nk;
 		rSum += gk.b;
 		cnt += 1.0;
 	}
 	float nLen = max( length( nSum ) / cnt, 1e-3 );
 	vec3 N = normalize( nSum );
 	float rough = rSum / cnt;
-	float d = texelFetch( tDepth, p, 0 ).x;
-	vec3 P = brViewPos( d, ( vec2( p ) + 0.5 ) / uFull );
 	outMeta = vec4( - P.z, brOctEnc( N ), rough );
 	if ( rough > uMaxRough ) return;
 	float a = sqrt( pow4( rough ) + ( 1.0 - nLen ) / nLen );
@@ -475,7 +490,7 @@ void main() {
 	// the texel and its four neighbours, where they agree with each other (a surface) and with the block's mean; one
 	// pixel's depth slope at geometry finer than a pixel (a ceiling grid's far T-bars) is noise, and rays reflected
 	// about it caught the lamps as sparkles along every far grid line.
-	vec3 Ng = brDepthNormal( p );
+	vec3 Ng = Ng0;
 	for ( int k = 0; k < 4; k ++ ) {
 		ivec2 o = ( k < 2 ? ivec2( 1, 0 ) : ivec2( 0, 1 ) ) * ( ( k & 1 ) == 0 ? - uStep : uStep );
 		Ng += brDepthNormal( clamp( p + o, ivec2( 0 ), lim ) );
@@ -611,10 +626,11 @@ void main() {
  * texels around the pixel are weighted bilinear x depth x normal^UP_NPOW x roughness (from the trace's metadata:
  * texels whose representative pixel has no G-buffer specular do not count), and the reflection replaces the
  * fallback by its confidence:
- *   spec = mix( s1.rgb, s1.a x ssr.rgb / ssr.a, ssr.a ). */
+ *   spec = mix( s1.rgb, RGB BRDF weight x ssr.rgb / ssr.a, ssr.a ). */
 export const SSR_COMPOSITE_PARS = /* glsl */ `
 uniform highp sampler2D tSsr;     // half-resolution premultiplied reflection (a = confidence)
 uniform highp sampler2D tMeta;    // half-resolution metadata: linear depth, oct view normal, roughness
+uniform highp sampler2D tWeight;  // full-resolution RGB specular weight x haze transmittance
 uniform highp sampler2D tDepth;   // full-resolution device depth of the MRT frame
 uniform vec4 uSsrP;               // x on, y debug view (REFL_DEBUG), z full-resolution pixels per trace texel
 uniform vec3 uLin;                // near x far, far - near, far
@@ -658,7 +674,8 @@ export const SSR_COMPOSITE_SPECULAR = /* glsl */ `
 			float ws = w.x + w.y + w.z + w.w;
 			if ( ws > 1e-3 ) ssr = ( w.x * r00 + w.y * r10 + w.z * r01 + w.w * r11 ) / ws;
 		}
-		spec = mix( s1.rgb, s1.a * ssr.rgb / max( ssr.a, 1e-4 ), ssr.a );
+		vec3 weight = texelFetch( tWeight, p, 0 ).rgb;
+		spec = mix( s1.rgb, weight * ssr.rgb / max( ssr.a, 1e-4 ), ssr.a );
 	}
 `;
 
@@ -670,6 +687,11 @@ export const SSR_COMPOSITE_DEBUG = /* glsl */ `
 `;
 
 // ---------------------------------------------------------------- CPU twins (tests/post/ssr.test.ts)
+
+/** Metric ray distance at projected interpolation fraction t (the brSsrRayDistance twin). */
+export function ssrRayDistance(t: number, length: number, w0: number, w1: number): number {
+  return length * t * w0 / (w1 * (1 - t) + w0 * t);
+}
 
 /** Level sizes of the Hi-Z for a w x h full-resolution frame: level 0 = ceil(w/2) x ceil(h/2), then floor-halved (as
  * three allocates mips); `levels` = the full chain, `built` = min(levels, HIZ_LEVELS). */
@@ -702,6 +724,12 @@ const dot3 = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[
 const cross3 = (a: Vec3, b: Vec3): [number, number, number] => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm3 = (a: Vec3): [number, number, number] => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const axpy = (a: Vec3, s: number, b: Vec3): [number, number, number] => [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]];
+
+/** Whether a block sample belongs to its representative's surface/lobe (the trace's accumulation gate). */
+export function ssrSameSurface(P: Vec3, N: Vec3, Ng: Vec3, rough: number, Pk: Vec3, Nk: Vec3, roughK: number): boolean {
+  return Math.abs(roughK - rough) <= SSR.BLOCK_DR && dot3(N, Nk) >= SSR.BLOCK_N
+    && Math.abs(dot3([Pk[0] - P[0], Pk[1] - P[1], Pk[2] - P[2]], Ng)) <= SSR.BLOCK_PLANE * -P[2];
+}
 
 /** brSymAxis twin: the footprint axis with ends a, b (px) as the ellipse symmetric about the hit p0 that textureGrad
  * samples, at most twice the nearer end's distance along it. */
@@ -758,10 +786,10 @@ export function resolveTap(i: number, n: number): [number, number] {
 }
 
 /** The composite's specular term: fallback s1 (rgb, a = Ws), upsampled reflection ssr (premultiplied, a = conf). */
-export function compositeSpecular(s1: readonly [number, number, number, number], ssr: readonly [number, number, number, number]): [number, number, number] {
+export function compositeSpecular(s1: readonly [number, number, number, number], ssr: readonly [number, number, number, number], weight: Vec3): [number, number, number] {
   if (s1[3] <= 0 || ssr[3] <= 0) return [s1[0], s1[1], s1[2]];
   const c = ssr[3];
   const out: [number, number, number] = [0, 0, 0];
-  for (let i = 0; i < 3; i++) out[i] = s1[i] * (1 - c) + c * (s1[3] * ssr[i] / Math.max(c, 1e-4));
+  for (let i = 0; i < 3; i++) out[i] = s1[i] * (1 - c) + c * (weight[i] * ssr[i] / Math.max(c, 1e-4));
   return out;
 }

@@ -62,6 +62,26 @@ describe('dust motes', () => {
     d.dispose();
   });
 
+  it('rejects clipped point centres before sampling the room or torch, leaving visible particle positions exact', () => {
+    const a = new LightAtlas(), fog = new VolumetricFog(a, new THREE.SpotLight(), 'high');
+    const d = new DustMotes(6000, a.uniforms, fog.torch);
+    const body = d.material.vertexShader.slice(d.material.vertexShader.indexOf('void main()'));
+    expect(body.indexOf('greaterThan( abs( clip.xyz ), vec3( clip.w ) )')).toBeLessThan(body.indexOf('brLaSample( rel'));
+    expect(body.indexOf('greaterThan( abs( clip.xyz ), vec3( clip.w ) )')).toBeLessThan(body.indexOf('textureLod( uFlShadow'));
+    expect(body).toContain('gl_Position = clip;');
+    const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.05, 100);
+    const seeds = moteSeeds(6000), clip = new THREE.Vector4();
+    let rejected = 0;
+    for (let i = 0; i < 6000; i++) {
+      clip.set((seeds[i * 4] - 0.5) * MOTES.L, (seeds[i * 4 + 1] - 0.5) * MOTES.L, (seeds[i * 4 + 2] - 0.5) * MOTES.L, 1).applyMatrix4(camera.projectionMatrix);
+      const culled = Math.abs(clip.x) > clip.w || Math.abs(clip.y) > clip.w || Math.abs(clip.z) > clip.w;
+      if (culled) rejected++;
+      else expect(Math.abs(clip.z / clip.w)).toBeLessThanOrEqual(1);
+    }
+    expect(rejected / 6000).toBeGreaterThan(0.75);
+    d.dispose(); fog.dispose(); a.dispose();
+  });
+
   it('a late-layer additive Points without a depth material, added by the runtime on presets with volumetrics', () => {
     const scene = new THREE.Scene();
     const bus: GameBus = new EventBus();

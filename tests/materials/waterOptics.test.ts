@@ -7,7 +7,8 @@ import { NOISE_WRAP } from '../../src/core/constants.ts';
 import { HELPERS_GLSL } from '../../src/materials/chunks/common.ts';
 import { FRAG_LIGHTS_GLSL } from '../../src/materials/chunks/lighting.ts';
 import { downwellPhi, f, fresnelWater, phaseHG, phaseWater, WATER_CAUSTICS, WATER_MEDIA, WATER_PHI, waterMediaGlsl } from '../../src/materials/chunks/params.ts';
-import { WATER_SURF_GLSL, WATER_SURFACE, waveAmplitudes, waveLattice, waveOmega, waterWavesGlsl } from '../../src/materials/chunks/water.ts';
+import { WATER_SURF_GLSL, WATER_SURFACE, waveAmplitudes, waveLattice, waveOmega, waterMirrorWeight, waterWavesGlsl } from '../../src/materials/chunks/water.ts';
+import { waterFragmentGlsl } from '../../src/materials/WaterMaterial.ts';
 
 // ---------------------------------------------------------------- caustic twin (chunks/common.ts brCausticsW)
 
@@ -173,6 +174,26 @@ describe('water waves', () => {
 const cosRefracted = (vy: number): number => Math.sqrt(Math.max(1 - (1 - vy * vy) * 0.5625, 0));
 
 describe('in-water optics', () => {
+  it('fades mirror lookups at capture edges and behind the reflection eye, widening the fade for rough lobes', () => {
+    expect(waterMirrorWeight([0.5, 0.5, 0, 1])).toBe(1);
+    expect(waterMirrorWeight([-0.1, 0.5, 0, 1])).toBe(0);
+    expect(waterMirrorWeight([0.5, 1.1, 0, 1])).toBe(0);
+    expect(waterMirrorWeight([0, 0, 0, 0])).toBe(0);
+    expect(waterMirrorWeight([-0.5, -0.5, 0, -1])).toBe(0);
+    expect(waterMirrorWeight([0.01, 0.5, 0, 1])).toBeCloseTo(0.5, 9);
+    expect(waterMirrorWeight([0.02, 0.5, 0, 1], 0.08)).toBeLessThan(0.2);
+    let previous = 0;
+    for (let u = -0.02; u <= 0.04; u += 0.0001) {
+      const weight = waterMirrorWeight([u, 0.5, 0, 1]);
+      expect(weight).toBeGreaterThanOrEqual(previous);
+      previous = weight;
+    }
+    const shader = waterFragmentGlsl();
+    expect(shader.indexOf('if ( mirrorWeight > 0.0 )')).toBeLessThan(shader.indexOf('refl = 0.35 *'));
+    expect(shader).toContain('3.2 * rT * stretch / min( texSz.x, texSz.y )');
+    expect(shader).toContain('refl = mix( brWaterEnv( rW, irr, rough, waterY, brAuxB ), refl, mirrorWeight );');
+  });
+
   it('the refracted path through flat water is D / cos(theta_t), at most ~1.51 D at grazing incidence', () => {
     expect(cosRefracted(-1)).toBeCloseTo(1, 12);
     const D = 0.5;

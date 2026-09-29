@@ -107,26 +107,35 @@ export function createGpuTimer(gl: WebGL2RenderingContext | null): GpuTimer {
   let last: number | null = null;
   let fresh = false;
   if (gl && ext) for (let i = 0; i < N; i++) queries.push(gl.createQuery());
-  const poll = (): void => {
-    if (!gl || !ext) return;
+  const poll = (): boolean => {
+    if (!gl || !ext) return false;
     const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
-    for (let i = 0; i < N; i++) {
+    if (disjoint) {
+      // Every outstanding query spans an invalid timer epoch, even results that are not available yet.
+      pending.fill(0);
+      smooth = last = null;
+      fresh = false;
+      return false;
+    }
+    // Starting at the next write slot visits old queries before new ones, including after ring wrap.
+    for (let k = 0; k < N; k++) {
+      const i = (cur + k) % N;
       const q = queries[i];
       if (!pending[i] || !q || (active && i === cur)) continue;
       if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) continue;
       pending[i] = 0;
-      if (disjoint) continue;
       const ns = gl.getQueryParameter(q, gl.QUERY_RESULT) as number;
       last = ns / 1e6;
       fresh = true;
       smooth = smooth === null ? last : smooth + (last - smooth) * 0.1;
     }
+    return true;
   };
   return {
     available: ext !== null,
     begin() {
       if (!gl || !ext || active) return;
-      poll();
+      if (!poll()) return;
       // find a free slot; if all are pending (slow readback), skip timing this frame
       for (let k = 0; k < N; k++) {
         const i = (cur + k) % N;

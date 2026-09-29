@@ -75,8 +75,12 @@ vec3 brNormal( ivec2 p, float c0, vec3 ce ) {
 	float db = abs( ( 2.0 * b1 - b2 ) - c0 ), dt = abs( ( 2.0 * t1 - t2 ) - c0 );
 	vec2 px = 1.0 / uFull;
 	vec2 uv = ( vec2( p ) + 0.5 ) * px;
-	vec3 dpdx = dl < dr ? ce - brViewPos( l1, uv - vec2( px.x, 0.0 ) ) : brViewPos( r1, uv + vec2( px.x, 0.0 ) ) - ce;
-	vec3 dpdy = db < dt ? ce - brViewPos( b1, uv - vec2( 0.0, px.y ) ) : brViewPos( t1, uv + vec2( 0.0, px.y ) ) - ce;
+	// Clamped outside depths have zero extrapolation error but are not neighbours on the surface. Use the inward
+	// derivative at the frame border, rather than reconstructing a repeated depth on a fictitious outside ray.
+	bool useL = p.x > 0 && ( p.x >= int( uFull.x ) - 1 || dl < dr );
+	bool useB = p.y > 0 && ( p.y >= int( uFull.y ) - 1 || db < dt );
+	vec3 dpdx = useL ? ce - brViewPos( l1, uv - vec2( px.x, 0.0 ) ) : brViewPos( r1, uv + vec2( px.x, 0.0 ) ) - ce;
+	vec3 dpdy = useB ? ce - brViewPos( b1, uv - vec2( 0.0, px.y ) ) : brViewPos( t1, uv + vec2( 0.0, px.y ) ) - ce;
 	return normalize( cross( dpdx, dpdy ) );
 }
 // view position of the full-resolution pixel an AO texel represents, from its stored view depth

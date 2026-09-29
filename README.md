@@ -174,6 +174,7 @@ default) lowers the render scale when frames run over its budget, which ultra's 
 `__backrooms.gpuBench()` measures the current view, `__backrooms.gpuProfile(seconds)` splits it by pass.
 
 See [the performance audit](docs/PERFORMANCE_AUDIT.md) for measurements, changes and reproduction steps.
+The [rendering audit](docs/RENDERING_AUDIT.md) covers lighting, reflections, motion quality, fixes, and their GPU cost.
 
 **First-context loss.** Under native Wayland, Chromium on this laptop loses the first WebGL context of a fresh
 browser session on the NVIDIA GPU and restores it about a second later: that is the GPU process restarting after GPU

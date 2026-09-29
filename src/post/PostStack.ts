@@ -32,7 +32,7 @@ import { ColorGradeEffect } from './effects/ColorGradeEffect.ts';
 import { ExposureEffect } from './effects/ExposureEffect.ts';
 import { FilmGrainEffect } from './effects/FilmGrainEffect.ts';
 import { GlareEffect } from './effects/GlareEffect.ts';
-import { MOTION_BLUR, MotionBlurEffect, motionShutter, rollingShutterUv } from './effects/MotionBlurEffect.ts';
+import { MOTION_BLUR, MotionBlurEffect, motionShutter } from './effects/MotionBlurEffect.ts';
 import { LENS_MTF, LensEffect, VIGNETTE_FOCAL } from './effects/LensEffect.ts';
 import { ev100FromLog2, exposureFromEv, meterClamp, stepExposure } from './exposureMath.ts';
 import { FLARE, GLARE } from './glareMath.ts';
@@ -173,6 +173,7 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
 
   // 6. lens + grain -> canvas, or the display target on capture frames (rendered by hand)
   const lens = new LensEffect();
+  lens.setMotionSource(motionBlur, camera);
   const grain = new FilmGrainEffect();
   const finalPass = new EffectPass(camera, lens, grain);
   finalPass.dithering = true;
@@ -299,11 +300,8 @@ export function createPostStack(renderer: THREE.WebGLRenderer, scene: THREE.Scen
     const fm = atm && atm.flickerMode !== undefined ? atm.flickerMode : 0;
     const band = fm >= 2 ? 0 : fm >= 1 ? P.BEAT_BAND * 0.5 : P.BEAT_BAND;
     lens.setCamcorder(enabled.lens && film.camcorder, frame, t, band);
-    // CMOS rolling shutter (camcorder mode, C.6): skew from the camera's angular velocity over the frame that is
-    // about to render (the motion-blur state of the previous update; zero after a cut or while paused)
-    const av = motionBlur.angularVelocity;
-    const rs = enabled.lens && film.camcorder && !paused && !motionBlur.wasCut ? rollingShutterUv(av.yaw, av.pitch, tanHalf, camera.aspect) : null;
-    lens.setRollingShutter(rs ? rs[0] : 0, rs ? rs[1] : 0);
+    // The final lens pass reads this frame's motion after the HDR pass has updated the camera history.
+    lens.setRollingShutterEnabled(!paused);
     // grain: sigma ~ grain * sqrt(scene exposure / exposure_ref) (dark footage is noisier), plus the low-light AGC boost
     // (grain and chroma noise grow as the metered EV falls below LOW_LIGHT_EV: a camcorder at max gain)
     const g = atm ? atm.grain : 0.5;

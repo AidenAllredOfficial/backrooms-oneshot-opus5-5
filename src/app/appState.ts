@@ -43,6 +43,8 @@ export interface Systems {
   lighting: LightingRuntime;
   post: PostStack;
   reflection: PlanarReflection;
+  /** Selected water plane for the afterDepth mirror render, after this frame's flashlight shadow map. */
+  reflectionPlaneY: number | null;
   /** package D: screen-space reflections (the frame graph's 'hiz' and 'ssr' hooks; setQuality on preset changes) */
   ssr: ScreenSpaceReflections;
   /** package D: the camera-room reflection probe (loop step 10, before the planar reflection; features.probe) */
@@ -132,4 +134,3 @@ export interface AppCore {
   /** vertical FOV in degrees (fov= param, else settings) */
   fov(): number;
 }
-

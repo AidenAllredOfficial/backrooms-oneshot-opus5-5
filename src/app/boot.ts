@@ -334,6 +334,9 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   post.setSize(innerWidth, innerHeight);
   post.setFilm(filmOf(core), settings.brightnessEV);
   const reflection = createPlanarReflection(materials.globals, q);
+  frame?.addHook('afterDepth', { name: 'planar', order: 5, run: (ctx) => {
+    reflection.update(ctx.renderer, core.scene, core.camera, core.sys?.reflectionPlaneY ?? null);
+  } });
   // the mirror's mip chain (the pyramid's program on presets with split frames; medium mirrors without them)
   if (q.planarReflectionScale > 0) await warmPassMaterials(r, reflection.materials);
   // package D: screen-space reflections on the frame graph (Hi-Z after the prepass, the trace after the opaque render)
@@ -382,11 +385,12 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   const dynRes = createDynamicResolution(post, r, q);
   watchDevicePixelRatio(core);
   player.applyToCamera(core.camera, core.fov());
+  core.camera.updateMatrixWorld();
   // Claim every preloaded request before dropping unclaimed startup work. No GPU uploads here.
   streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
   startup.clear();
   return {
-    q, features: featuresOf(p), textures, materials, lighting, post, reflection, ssr, probe, ripples, anomaly, dynRes, pool,
+    q, features: featuresOf(p), textures, materials, lighting, post, reflection, reflectionPlaneY: null, ssr, probe, ripples, anomaly, dynRes, pool,
     poolTarget: poolSize(q), streamer, player, audio, input, init,
     spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
   };

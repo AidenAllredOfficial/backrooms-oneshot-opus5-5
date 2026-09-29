@@ -2,7 +2,7 @@
 // afterDepth hooks, opaque shading, pyramid, afterOpaque hooks, MRT composite + depth blit, late render; no split and
 // no MRT on low / medium; the MRT specular attachments start at zero; layers, clears and shadow state are restored.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { QUALITY } from '../../src/core/quality.ts';
 import type { QualityConfig } from '../../src/core/quality.ts';
@@ -45,7 +45,7 @@ function setup(q: QualityConfig, opts: { water?: boolean; waterInView?: boolean;
   let current: THREE.WebGLRenderTarget | null = null;
   const nameOf = (t: THREE.WebGLRenderTarget | null): string => {
     if (t === null) return 'screen';
-    if (!names.has(t)) names.set(t, t.textures.length === 3 ? 'sceneRT' : t.texture.name || 'rt');
+    if (!names.has(t)) names.set(t, t.textures.length === 4 ? 'sceneRT' : t.texture.name || 'rt');
     return names.get(t) as string;
   };
   const gl = {
@@ -83,7 +83,7 @@ function setup(q: QualityConfig, opts: { water?: boolean; waterInView?: boolean;
   pass.addHook('afterDepth', { name: 'hiz', order: 20, run: () => { events.push({ e: 'hook:hiz' }); } });
   pass.addHook('afterDepth', { name: 'ssao', order: 10, run: (c) => { events.push({ e: 'hook:ssao', target: nameOf(current), volOn: globals.waterVolOn.value }); ctxs.push({ ...c }); current = null; } });
   const run = (): void => pass.render(renderer as unknown as THREE.WebGLRenderer, input, output);
-  return { events, run, pass, renderer, camera, globals, input, ctxs, depth };
+  return { events, run, pass, renderer, camera, globals, input, ctxs, depth, scene };
 }
 
 const seq = (ev: Ev[]): string[] => ev.map((x) => x.e);
@@ -149,23 +149,31 @@ describe('ScenePass frame graph', () => {
     const t = setup(q);
     t.run();
     expect(seq(t.events)).toEqual([
-      'clear', 'prepass', 'hook:ssao', 'hook:hiz', 'clearBuffer1:0,0,0,0', 'clearBuffer2:0,0,0,0', 'shade',
+      'clear', 'prepass', 'hook:ssao', 'hook:hiz', 'clearBuffer1:0,0,0,0', 'clearBuffer2:0,0,0,0', 'clearBuffer3:0,0,0,0', 'shade',
       'quad:br-pyramid-full', 'hook:ssr', 'quad:br-mrt-composite', 'blitDepth', 'late',
     ]);
     const ev = (e: string): Ev => t.events.find((x) => x.e === e) as Ev;
     expect(ev('clear').target).toBe('sceneRT');
     expect(ev('prepass')).toMatchObject({ target: 'sceneRT', mrtPass: 1, clearColor: true });
     expect(ev('clearBuffer1:0,0,0,0').target).toBe('sceneRT');
+    expect(ev('clearBuffer3:0,0,0,0').target).toBe('sceneRT');
     // the background's forced clear inside the shading render must not touch the colour attachments
     expect(ev('shade')).toMatchObject({ target: 'sceneRT', mrtPass: 1, clearColor: false, mask: 1 });
     expect(ev('quad:br-mrt-composite')).toMatchObject({ target: 'input', mrtPass: 0 });
     expect(ev('late').target).toBe('input');
     expect(t.ctxs[0].mrt).not.toBeNull();
     expect(t.ctxs[0].depth).toBe(t.ctxs[0].mrt?.depthTexture);
-    // the pyramid's 4-tap box (ultra) reads the colour attachment bilinearly; the G-buffer stays nearest
+    // The pyramid reads both radiance attachments bilinearly; normal data stays nearest.
     const tex = (t.ctxs[0].mrt as THREE.WebGLRenderTarget).textures;
+    expect(tex).toHaveLength(4);
     expect([tex[0].minFilter, tex[0].magFilter]).toEqual([THREE.LinearFilter, THREE.LinearFilter]);
-    expect([tex[1].minFilter, tex[2].minFilter]).toEqual([THREE.NearestFilter, THREE.NearestFilter]);
+    expect([tex[1].minFilter, tex[1].magFilter]).toEqual([THREE.LinearFilter, THREE.LinearFilter]);
+    expect(tex[2].minFilter).toBe(THREE.NearestFilter);
+    expect(tex[3]).toMatchObject({ name: 'Frame.SpecularWeight', type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    expect(t.pass.composite.material.uniforms.tWeight.value).toBe(tex[3]);
+    const pyramid = t.pass.pyramid.materials[0];
+    expect(pyramid.uniforms.uFallback.value).toBe(true);
+    expect(pyramid.uniforms.tFallback.value).toBe(tex[1]);
     expect(t.pass.lastFrame).toEqual({ mrt: true, split: true });
     expect(t.renderer.autoClearColor).toBe(true);
     expect(MRT_PASS.value).toBe(0);
@@ -214,9 +222,50 @@ describe('ScenePass frame graph', () => {
     expect(t.pass.needsDepthTexture).toBe(true);
     expect(t.pass.materials.map((m) => m.name)).toEqual(['br-pyramid-full', 'br-pyramid-box', 'br-pyramid-down', 'br-mrt-composite']);
   });
+
+  it('shares current scene transforms across all draws and restores frame state after a failing hook', () => {
+    const t = setup(QUALITY.high);
+    const update = vi.spyOn(t.scene, 'updateMatrixWorld');
+    t.pass.addHook('afterOpaque', { name: 'failure', order: 100, run: () => {
+      expect(t.scene.matrixWorldAutoUpdate).toBe(false);
+      throw new Error('hook failed');
+    } });
+    expect(t.run).toThrow('hook failed');
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(t.scene.matrixWorldAutoUpdate).toBe(true);
+    expect(t.globals.waterVolOn.value).toBe(0);
+    expect(MRT_PASS.value).toBe(0);
+    expect(t.renderer.autoClearColor).toBe(true);
+  });
 });
 
 describe('ColorPyramid mip chain', () => {
+  it('includes fallback specular on MRT frames and resets it when the next frame uses plain colour', () => {
+    const p = new ColorPyramid();
+    const color = new THREE.Texture(), fallback = new THREE.Texture(), depth = new THREE.Texture();
+    const camera = new THREE.PerspectiveCamera();
+    const draws: { full: boolean; color: unknown; fallback: unknown; enabled: unknown }[] = [];
+    const renderer = {
+      setRenderTarget() {},
+      getContext: () => ({}),
+      properties: { get: () => ({}) },
+      render(sc: THREE.Scene) {
+        const m = (sc.children[0] as THREE.Mesh).material as THREE.ShaderMaterial;
+        draws.push({ full: 'BR_PYR_FULL' in m.defines, color: m.uniforms.tColor.value,
+          fallback: m.uniforms.tFallback.value, enabled: m.uniforms.uFallback.value });
+      },
+    } as unknown as THREE.WebGLRenderer;
+    for (const scale of [1, 0.67]) {
+      p.setSize(64, 32, scale);
+      p.build(renderer, color, depth, camera, fallback);
+      p.build(renderer, color, depth, camera);
+    }
+    expect(draws).toEqual([
+      { full: true, color, fallback, enabled: true }, { full: true, color, fallback: null, enabled: false },
+      { full: false, color, fallback, enabled: true }, { full: false, color, fallback: null, enabled: false },
+    ]);
+    p.dispose();
+  });
   it('allocates PYR_LEVELS floor-halved levels, and again after a resize', () => {
     const p = new ColorPyramid();
     p.setSize(1920, 1080, 1);

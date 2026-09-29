@@ -9,6 +9,7 @@ import { QUALITY } from '../../src/core/quality.ts';
 import { createGlobals } from '../../src/materials/MaterialSystem.ts';
 import { createPlanarReflection, createReflScratch, MIRROR_LEVELS, reflectionTextureMatrix, setupReflectionCamera } from '../../src/materials/PlanarReflection.ts';
 import { HDR_CLAMP } from '../../src/core/constants.ts';
+import { MRT_PASS, REFL_PASS, WIRE_PX } from '../../src/materials/shared.ts';
 
 function mainCamera(x: number, y: number, z: number, yaw: number, pitch: number): THREE.PerspectiveCamera {
   const c = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 400);
@@ -137,7 +138,7 @@ describe('mirror mip chain', () => {
     const renderer = {
       shadowMap: { autoUpdate: true }, xr: { enabled: false }, autoClear: true,
       getDrawingBufferSize: (v: THREE.Vector2) => v.set(2000, 1000), // a 1000 x 500 mirror at high
-      getRenderTarget: () => null, clear() {},
+      getRenderTarget: () => null, getActiveCubeFace: () => 0, getActiveMipmapLevel: () => 0, clear() {},
       getContext: () => gl,
       properties: { get: (o: object) => (o === target ? { __webglFramebuffer: Array.from({ length: 12 }, () => ({})) } : { __webglTexture: {}, __webglFramebuffer: {} }) },
       state: { buffers: { depth }, bindTexture() {}, bindFramebuffer() {} },
@@ -181,15 +182,21 @@ describe('reflection draw culling', () => {
     for (const m of [near, far, boundary, shell]) (m.material as THREE.Material).userData.brDepth = depthMat;
     const depth = { mask: true, locked: false, setMask(v: boolean) { if (!this.locked) this.mask = v; }, setLocked(v: boolean) { this.locked = v; } };
     let renders = 0;
+    const prevTarget = new THREE.WebGLCubeRenderTarget(8);
+    let restored: [THREE.WebGLRenderTarget | null, number | undefined, number | undefined] | null = null;
+    REFL_PASS.value = 0.25; MRT_PASS.value = 1; WIRE_PX.value = 0.125;
     const renderer = {
       shadowMap: { autoUpdate: true }, xr: { enabled: true }, autoClear: true,
       getDrawingBufferSize: (v: THREE.Vector2) => v.set(100, 100),
-      getRenderTarget: () => null, setRenderTarget() {}, clear() {},
+      getRenderTarget: () => prevTarget, getActiveCubeFace: () => 3, getActiveMipmapLevel: () => 2,
+      setRenderTarget(t: THREE.WebGLRenderTarget | null, face?: number, level?: number) { restored = [t, face, level]; }, clear() {},
       state: { buffers: { depth } },
       render() {
         expect(water.visible).toBe(false); expect(far.visible).toBe(false);
         expect(near.visible).toBe(true); expect(boundary.visible).toBe(true); expect(shell.visible).toBe(true);
         expect(renderer.autoClear).toBe(false);
+        expect(scene.matrixWorldAutoUpdate).toBe(false);
+        expect(REFL_PASS.value).toBe(1); expect(MRT_PASS.value).toBe(0);
         // 1: the depth prepass (depth materials swapped in); 2: the shading pass (surface materials, depth locked)
         if (++renders === 1) { expect(near.material).toBe(depthMat); return; }
         expect(near.material).not.toBe(depthMat);
@@ -205,6 +212,10 @@ describe('reflection draw culling', () => {
     expect(depth.locked).toBe(false); expect(depth.mask).toBe(true);
     expect(renderer.autoClear).toBe(true);
     expect(renderer.shadowMap.autoUpdate).toBe(true); expect(renderer.xr.enabled).toBe(true);
-    reflection.dispose(); geo.dispose();
+    expect(scene.matrixWorldAutoUpdate).toBe(true);
+    expect(restored).toEqual([prevTarget, 3, 2]);
+    expect(REFL_PASS.value).toBe(0.25); expect(MRT_PASS.value).toBe(1); expect(WIRE_PX.value).toBe(0.125);
+    REFL_PASS.value = 0; MRT_PASS.value = 0; WIRE_PX.value = 0;
+    reflection.dispose(); geo.dispose(); prevTarget.dispose();
   });
 });

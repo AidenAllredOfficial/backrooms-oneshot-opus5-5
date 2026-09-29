@@ -84,7 +84,7 @@ void gen(vec2 uv, inout Surf s) {
   Cell sc = worley(wv, PM(25.0), 0.9, 22);
   vec4 sh = hash4f(sc.id, 23);
   // (the spots crowd where the large-scale field corrodes: patchy, not an even dalmatian scatter)
-  float spot = (1.0 - smoothstep(0.2 + 0.4 * sh.x, 0.3 + 0.5 * sh.x, sc.f1)) * step(sh.y, 0.08 + 0.5 * smoothstep(0.15, -0.25, lf));
+  float spot = (1.0 - smoothstep(0.2 + 0.4 * sh.x, 0.3 + 0.5 * sh.x, sc.f1)) * step(sh.y, 0.08 + 0.5 * (1.0 - smoothstep(-0.25, 0.15, lf)));
   Cell bc = worley(uv, PM(40.0), 0.9, 6);
   vec4 bh = hash4f(bc.id, 7);
   float br = 0.003 + 0.007 * bh.x;

@@ -109,8 +109,13 @@ export function renderWithPrepass(renderer: THREE.WebGLRenderer, scene: THREE.Sc
   const depthBuf = renderer.state.buffers.depth;
   const shadowAuto = renderer.shadowMap.autoUpdate;
   const autoClear = renderer.autoClear;
+  const sceneAuto = scene.matrixWorldAutoUpdate;
   renderer.autoClear = false;
   try {
+    // Late-layer visibility must use current transforms. Both draws share them, so avoid updating the entire
+    // scene again in each renderer.render call. A caller can already have prepared and frozen the scene.
+    if (sceneAuto) scene.updateMatrixWorld();
+    scene.matrixWorldAutoUpdate = false;
     if (opts) PREPASS_LATE.visible = false;
     // a camera without the late layer never draws those meshes, so they cannot ask for a split
     trackLate = opts !== undefined && (camera.layers.mask & lateBit) !== 0;
@@ -139,5 +144,6 @@ export function renderWithPrepass(renderer: THREE.WebGLRenderer, scene: THREE.Sc
     depthBuf.setMask(true);
     renderer.shadowMap.autoUpdate = shadowAuto;
     renderer.autoClear = autoClear;
+    scene.matrixWorldAutoUpdate = sceneAuto;
   }
 }

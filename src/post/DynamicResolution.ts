@@ -10,7 +10,7 @@
 //             lower value is taken at once, a higher one is approached by REFRESH_RISE per window (a heavy stretch
 //             at 60 Hz must not re-define the display as 30 Hz). The prior is 60 Hz.
 //   with GPU timings (EXT_disjoint_timer_query_webgl2 results in at least half of the window's frames):
-//             load = max(p90 gpu, p90 cpu); down DOWN when load > GPU_HIGH x refresh, up UP when < GPU_LOW x refresh
+//             down DOWN when p90 gpu > GPU_HIGH x refresh; up UP only when both GPU and CPU < GPU_LOW x refresh
 //   without:  down only when p50 interval > SLOW_P50 x refresh AND p90 cpu > SLOW_CPU x refresh (the main thread is
 //             really busy: a throttle or a slow display has a short cpu time); up when p95 interval <= FAST_P95 x refresh
 //   both:     missed vsyncs are load too, whatever the timer says (a TIME_ELAPSED query does not see compositor /
@@ -150,7 +150,9 @@ export function createScaleController(maxScale: number, initial = maxScale): Sca
           ceilLeft = ceilHold;
         } else if (timed) {
           const load = Math.max(gpu90, cpu90);
-          if (load > DYNRES.GPU_HIGH * budget) next = round(scale - DYNRES.DOWN);
+          // Fewer pixels do not fix streaming, simulation or worker-message stalls. A GPU timer lets us tell those
+          // apart from pixel load; CPU cost can prevent an up-step, but must not trigger a costly target resize.
+          if (gpu90 > DYNRES.GPU_HIGH * budget) next = round(scale - DYNRES.DOWN);
           else if (load < DYNRES.GPU_LOW * budget) next = round(scale + DYNRES.UP);
         } else if (p50 > DYNRES.SLOW_P50 * budget && cpu90 > DYNRES.SLOW_CPU * budget) {
           next = round(scale - DYNRES.DOWN);

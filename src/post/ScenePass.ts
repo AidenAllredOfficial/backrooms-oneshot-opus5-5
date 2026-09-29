@@ -1,13 +1,13 @@
 // src/post/ScenePass.ts — the composer's scene pass and the frame graph (package A). pmndrs RenderPass with a depth
 // prepass (materials/prepass.ts; each visible pixel is shaded once) and ordered hook stages around the opaque render:
 //
-//   clear -> depth prepass (+ flashlight shadow map) -> afterDepth hooks (ssao 10, hiz 20, lightAtlas 30,
+//   clear -> depth prepass (+ flashlight shadow map) -> afterDepth hooks (planar mirror 5, ssao 10, hiz 20, lightAtlas 30,
 //   volumetrics 40) -> opaque shading (MRT sceneRT when SSR is on; LAYER_LATE left out on split frames) ->
 //   ColorPyramid (split frames) -> afterOpaque hooks (ssr 10) -> MRT composite into the input buffer + depth blit ->
 //   late render of LAYER_LATE (water, sparks, motes) into the input buffer.
 //
-// - MRT frame: q.ssr on, the ssr toggle on and no debug view. The opaque view renders into sceneRT (3 x RGBA16F:
-//   colour, fallback specular x T, oct normal + roughness; FloatType depth). Attachments 1-2 are zeroed after the
+// - MRT frame: q.ssr on, the ssr toggle on and no debug view. The opaque view renders into sceneRT (4 x RGBA16F:
+//   colour, fallback specular x T, oct normal + roughness, RGB specular weight x T; FloatType depth). Attachments 1-3 are zeroed after the
 //   prepass render (its colour background clears every attachment to the background colour) and the shading render
 //   then runs with autoClearColor off, so the forced background clear leaves them alone. MrtComposite resolves them
 //   into the input buffer and the depth is blitted across, so the late render and the composer's own depth copy see
@@ -46,7 +46,7 @@ export interface FrameContext {
   /** full-resolution size (px) */
   width: number;
   height: number;
-  /** sceneRT on MRT frames (textures 0-2), else null */
+  /** sceneRT on MRT frames (textures 0-3), else null */
   mrt: THREE.WebGLRenderTarget | null;
   /** afterOpaque on split frames: the colour + depth pyramid of this frame, else null */
   pyramid: ColorPyramid | null;
@@ -58,7 +58,7 @@ export interface FrameContext {
 export interface FrameHook {
   /** also the gpuProfile segment label */
   name: string;
-  /** ascending within a stage; convention: afterDepth ssao 10, hiz 20, lightAtlas 30, volumetrics 40; afterOpaque
+  /** ascending within a stage; convention: afterDepth planar 5, ssao 10, hiz 20, lightAtlas 30, volumetrics 40; afterOpaque
    * ssr 10 */
   order: number;
   run(ctx: FrameContext): void;
@@ -150,41 +150,51 @@ export class ScenePass extends RenderPass {
     ctx.debugView = dv;
     this.split = false;
 
-    const clear = this.getClearPass();
-    if (clear.enabled) clear.render(renderer, target, outputBuffer);
-    renderer.setRenderTarget(this.renderToScreen ? null : target);
-    setWirePixel(this.cam, target.height);
-    MRT_PASS.value = mrtOn ? 1 : 0;
     const autoClearColor = renderer.autoClearColor;
+    const sceneAuto = this.scene.matrixWorldAutoUpdate;
     try {
-      renderWithPrepass(renderer, this.scene, this.cam, this.prepassOpts);
+      if (sceneAuto) this.scene.updateMatrixWorld();
+      this.scene.matrixWorldAutoUpdate = false;
+      const clear = this.getClearPass();
+      if (clear.enabled) clear.render(renderer, target, outputBuffer);
+      renderer.setRenderTarget(this.renderToScreen ? null : target);
+      setWirePixel(this.cam, target.height);
+      MRT_PASS.value = mrtOn ? 1 : 0;
+      try {
+        renderWithPrepass(renderer, this.scene, this.cam, this.prepassOpts);
+      } finally {
+        MRT_PASS.value = 0;
+        renderer.autoClearColor = autoClearColor;
+      }
+
+      if (this.split) {
+        const s = q ? q.colorPyramidScale : 1;
+        this.pyramid.setSize(target.width, target.height, s);
+        this.pyramid.build(renderer, mrtOn ? target.textures[0] : inputBuffer.texture, ctx.depth, this.cam,
+          mrtOn ? target.textures[1] : null);
+        ctx.pyramid = this.pyramid;
+        if (g) {
+          g.sceneColor.value = this.pyramid.texture;
+          g.sceneInvSize.value.copy(this.pyramid.invSize);
+        }
+      }
+      const opaque = this.hooks.afterOpaque;
+      for (let i = 0; i < opaque.length; i++) opaque[i].run(ctx);
+      if (mrtOn) {
+        this.composite.render(renderer, target, inputBuffer);
+        blitDepth(renderer, target, inputBuffer);
+      }
+      if (this.split) this.renderLate(renderer, inputBuffer);
+      this.lastFrame.mrt = mrtOn;
+      this.lastFrame.split = this.split;
+      // leave the input buffer bound, as a plain RenderPass does
+      renderer.setRenderTarget(this.renderToScreen ? null : inputBuffer);
     } finally {
       MRT_PASS.value = 0;
       renderer.autoClearColor = autoClearColor;
+      this.scene.matrixWorldAutoUpdate = sceneAuto;
+      if (g) g.waterVolOn.value = 0;
     }
-
-    if (this.split) {
-      const s = q ? q.colorPyramidScale : 1;
-      this.pyramid.setSize(target.width, target.height, s);
-      this.pyramid.build(renderer, mrtOn ? target.textures[0] : inputBuffer.texture, ctx.depth, this.cam);
-      ctx.pyramid = this.pyramid;
-      if (g) {
-        g.sceneColor.value = this.pyramid.texture;
-        g.sceneInvSize.value.copy(this.pyramid.invSize);
-      }
-    }
-    const opaque = this.hooks.afterOpaque;
-    for (let i = 0; i < opaque.length; i++) opaque[i].run(ctx);
-    if (mrtOn) {
-      this.composite.render(renderer, target, inputBuffer);
-      blitDepth(renderer, target, inputBuffer);
-    }
-    if (this.split) this.renderLate(renderer, inputBuffer);
-    if (g) g.waterVolOn.value = 0;
-    this.lastFrame.mrt = mrtOn;
-    this.lastFrame.split = this.split;
-    // leave the input buffer bound, as a plain RenderPass does
-    renderer.setRenderTarget(this.renderToScreen ? null : inputBuffer);
   }
 
   /** Between the prepass and the shading render: decide the split, run the depth hooks, rebind, prepare MRT. */
@@ -204,6 +214,7 @@ export class ScenePass extends RenderPass {
       renderer.state.buffers.color.setMask(true);
       gl.clearBufferfv(gl.COLOR, 1, ZERO4);
       gl.clearBufferfv(gl.COLOR, 2, ZERO4);
+      gl.clearBufferfv(gl.COLOR, 3, ZERO4);
       renderer.autoClearColor = false;
     }
   }
@@ -243,7 +254,7 @@ export class ScenePass extends RenderPass {
     let rt = this.sceneRT;
     if (!rt) {
       rt = new THREE.WebGLRenderTarget(w, h, {
-        count: 3, type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter,
+        count: 4, type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter,
         magFilter: THREE.NearestFilter, generateMipmaps: false, depthBuffer: true, stencilBuffer: false,
         depthTexture: new THREE.DepthTexture(w, h, THREE.FloatType),
       });
@@ -253,7 +264,10 @@ export class ScenePass extends RenderPass {
       rt.textures[0].minFilter = THREE.LinearFilter;
       rt.textures[0].magFilter = THREE.LinearFilter;
       rt.textures[1].name = 'Frame.Specular';
+      rt.textures[1].minFilter = THREE.LinearFilter;
+      rt.textures[1].magFilter = THREE.LinearFilter;
       rt.textures[2].name = 'Frame.NormalRough';
+      rt.textures[3].name = 'Frame.SpecularWeight';
       this.sceneRT = rt;
     } else if (rt.width !== w || rt.height !== h) {
       rt.setSize(w, h);

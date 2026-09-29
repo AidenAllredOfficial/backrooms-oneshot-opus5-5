@@ -122,6 +122,15 @@ describe('glare PSF (C.1)', () => {
 });
 
 describe('aperture flare (C.5)', () => {
+  it('the ghost window uses increasing smoothstep edges for defined results across GPU drivers', () => {
+    const g = new GlareEffect(9);
+    const shader = g.chain.materials().find((m) => m.name === 'br-glare-ghost')!.fragmentShader;
+    const edges = [...shader.matchAll(/smoothstep\(\s*([\d.]+),\s*([\d.]+),/g)];
+    expect(edges.length).toBeGreaterThan(0);
+    for (const [, lo, hi] of edges) expect(Number(lo)).toBeLessThan(Number(hi));
+    g.dispose();
+  });
+
   it('the streak kernels are normalised and decay as OMEGA^(|j| step)', () => {
     for (const step of FLARE.STAR_STEPS) {
       const w = streakWeights(step);

@@ -1,8 +1,9 @@
 // src/materials/chunks/gbuffer.ts — the specular G-buffer outputs of the surface programs (declared by package A,
-// filled by package D). Only under BR_SSR, where ScenePass renders the opaque view into a 3-attachment target:
+// filled by package D). Only under BR_SSR, where ScenePass renders the opaque view into a 4-attachment target:
 //  att1 = fallback specular x haze transmittance (rgb), specular weight Ws x T (a)
 //  att2 = octahedral view normal (rg), lobe roughness (b)
-// chunks/lighting.ts declares the split variables (brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brMrtRough) and
+//  att3 = RGB reflection throughput x haze transmittance (keeps coloured-metal Fresnel on SSR hits)
+// chunks/lighting.ts declares the split variables (brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brWsRgb, brMrtRough) and
 // chunks/haze.ts writes them at the very end. Writes to attachments the bound target lacks are dropped, so planar
 // and probe captures stay safe; the depth prepass (colorWrite false) never touches the colour attachments.
 
@@ -31,5 +32,6 @@ export const GBUFFER_PARS_GLSL = /* glsl */ `
 ${OCT_GLSL}
 layout( location = 1 ) out highp vec4 brOut1;
 layout( location = 2 ) out highp vec4 brOut2;
+layout( location = 3 ) out highp vec4 brOut3;
 #endif
 `;

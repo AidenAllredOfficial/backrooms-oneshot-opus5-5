@@ -50,6 +50,18 @@ describe('SsaoPre', () => {
     p.dispose();
   });
 
+  it('normal reconstruction uses an inward derivative at each screen edge', () => {
+    const p = new SsaoPre(new THREE.PerspectiveCamera(), { samples: 12, halfRes: true });
+    const src = p.materials.find((m) => m.name === 'br-ao')!.fragmentShader;
+    // Repeated clamped depths have zero extrapolation error. They must not win the best-side test on the outside
+    // of the frame, where their view ray does not correspond to an actual sample on a slanted wall.
+    expect(src).toContain('p.x > 0 && ( p.x >= int( uFull.x ) - 1 || dl < dr )');
+    expect(src).toContain('p.y > 0 && ( p.y >= int( uFull.y ) - 1 || db < dt )');
+    expect(src).toContain('vec3 dpdx = useL ?');
+    expect(src).toContain('vec3 dpdy = useB ?');
+    p.dispose();
+  });
+
   it('the denoise filters .r and copies the centre texel\'s view depth and normal (.gba) unchanged', () => {
     const p = new SsaoPre(new THREE.PerspectiveCamera(), { samples: 12, halfRes: true });
     const src = (p as unknown as Internals).denoiseMat.fragmentShader;

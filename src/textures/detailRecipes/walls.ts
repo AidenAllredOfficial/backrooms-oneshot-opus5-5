@@ -79,9 +79,9 @@ const ROLLER_STIPPLE = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
   Cell cr = worley(uv, PMxy(550.0, 440.0), 0.9, 3);
-  float crater = smoothstep(0.6, 0.0, cr.f1) * (0.5 + 0.5 * hashf(cr.id, 4));
+  float crater = (1.0 - smoothstep(0.0, 0.6, cr.f1)) * (0.5 + 0.5 * hashf(cr.id, 4));
   Cell pk = worley(uv, PMxy(400.0, 320.0), 0.9, 5);
-  float peak = smoothstep(0.75, 0.0, pk.f1);
+  float peak = 1.0 - smoothstep(0.0, 0.75, pk.f1);
   float lap = fbm(uv, PM(40.0), 2, 6); // nap load: the stipple is deeper where the roller was fuller
   s.height = 0.5 + (0.6 + 0.3 * lap) * (0.45 * peak - 0.4 * crater);
   s.albedo = vec3(1.0 - 0.012 * crater);

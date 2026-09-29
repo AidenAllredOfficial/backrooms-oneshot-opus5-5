@@ -210,7 +210,7 @@ export function createLightingRuntime(scene: THREE.Scene, globals: MaterialGloba
     a.mistCount = m;
   };
   const updateVolumetrics = (t: number, tiles: Iterable<TileRuntime>, player: PlayerState, world: WorldQuery): void => {
-    if (!atlas) return;
+    if (!atlas || !volOn) return;
     atlas.plan(tiles, player.s, player.eyeX, player.eyeZ, world);
     if (fog) {
       const a = fog.atmosphere;

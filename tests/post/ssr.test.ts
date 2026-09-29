@@ -7,12 +7,46 @@ import * as THREE from 'three';
 import { QUALITY } from '../../src/core/quality.ts';
 import {
   compositeSpecular, HIZ_FRAG, hiZLayout, hiZSpan, lobeCones, lobeFootprint, resolveKernel, resolveTap, SSR,
-  SSR_COMPOSITE_SPECULAR, SSR_RESOLVE_FRAG, SSR_TRACE_FRAG, SSR_TRACE_GLSL, symAxis,
+  SSR_COMPOSITE_SPECULAR, SSR_RESOLVE_FRAG, SSR_TRACE_FRAG, SSR_TRACE_GLSL, ssrRayDistance, ssrSameSurface, symAxis,
 } from '../../src/post/ssr/ssrGlsl.ts';
 import { MRT_COMPOSITE_FRAG } from '../../src/post/frame/MrtComposite.ts';
 import { MIP_DOWN_FRAG, PYR_MAX } from '../../src/post/frame/ColorPyramid.ts';
 import { HDR_CLAMP } from '../../src/core/constants.ts';
 import { ScreenSpaceReflections, ssrSettingsOf, ssrStepFor } from '../../src/post/ssr/SsrTrace.ts';
+
+describe('perspective ray distances', () => {
+  it('recovers metric distance from projected ray positions, including rays toward the near plane', () => {
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 400);
+    for (const [origin, direction, length] of [
+      [[0, -1.6, -8], [0.2, 0.3, -1], 60],
+      [[1, -1, -12], [0.3, 0.1, 1], 10],
+      [[0, -1, -8], [1, 0.2, 0], 15],
+    ] as const) {
+      const P = new THREE.Vector3(...origin), R = new THREE.Vector3(...direction).normalize();
+      const project = (d: number) => {
+        const p = P.clone().addScaledVector(R, d);
+        return new THREE.Vector4(p.x, p.y, p.z, 1).applyMatrix4(camera.projectionMatrix);
+      };
+      const a = project(0), b = project(length);
+      const ax = a.x / a.w, bx = b.x / b.w;
+      for (const fraction of [0, 0.1, 0.25, 0.5, 0.9, 1]) {
+        const h = project(length * fraction);
+        const t = (h.x / h.w - ax) / (bx - ax);
+        expect(ssrRayDistance(t, length, a.w, b.w)).toBeCloseTo(length * fraction, 8);
+      }
+    }
+    // The old screen-linear distance nearly exhausted the 60 m range for a hit just 10 m from this reflector.
+    const projectedT = (10 / 18) / (60 / 68);
+    expect(projectedT * 60).toBeGreaterThan(35);
+    expect(ssrRayDistance(projectedT, 60, 8, 68)).toBeCloseTo(10, 9);
+  });
+
+  it('uses the corrected distance for both hit fades and missed-ray resolve kernels', () => {
+    expect(SSR_TRACE_GLSL).toContain('rayT = brSsrRayDistance( t, L, c0.w, c1.w ) / maxDist;');
+    expect(SSR_TRACE_GLSL).toContain('rayT = brSsrRayDistance( hi, L, c0.w, c1.w ) / maxDist;');
+    expect(SSR_TRACE_GLSL).toContain('brSsrBehindT = brSsrRayDistance( t, L, c0.w, c1.w );');
+  });
+});
 
 describe('Hi-Z layout', () => {
   it('level 0 is half the frame (rounded up), then floor-halved down to 1x1, HIZ_LEVELS of them built', () => {
@@ -261,7 +295,7 @@ describe('resolve', () => {
   it('the trace sizes the kernel from the hit, and from where a ray last went behind an occluder when it missed', () => {
     expect(SSR_TRACE_FRAG).toContain('outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, length( Ph - P ) ) );');
     expect(SSR_TRACE_FRAG).toContain('if ( brSsrBehindT > 0.0 ) outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, brSsrBehindT ) );');
-    expect(SSR_TRACE_GLSL).toContain('brSsrBehindT = t * L;');
+    expect(SSR_TRACE_GLSL).toContain('brSsrBehindT = brSsrRayDistance( t, L, c0.w, c1.w );');
     // the kernel is sized before the facing test: a hit on the back of a surface is a miss the resolve fills
     expect(SSR_TRACE_FRAG.indexOf('outKer = vec4( brOctEnc( Nm ), brSsrKernel( P, nv, BR_SSR_CONE * a, length( Ph - P ) ) );'))
       .toBeLessThan(SSR_TRACE_FRAG.indexOf('if ( dot( Nh, R ) > BR_SSR_FACING ) return;'));
@@ -301,23 +335,50 @@ describe('resolve', () => {
 describe('composite', () => {
   it('confidence 0 (or no weight) gives exactly the fallback; confidence 1 gives Ws x the reflection', () => {
     const s1 = [0.3, 0.2, 0.1, 0.25] as const;
-    expect(compositeSpecular(s1, [0, 0, 0, 0])).toEqual([0.3, 0.2, 0.1]);
-    expect(compositeSpecular([0.3, 0.2, 0.1, 0], [5, 5, 5, 1])).toEqual([0.3, 0.2, 0.1]);
-    const full = compositeSpecular(s1, [8, 4, 2, 1]);
+    const weight = [0.25, 0.25, 0.25] as const;
+    expect(compositeSpecular(s1, [0, 0, 0, 0], weight)).toEqual([0.3, 0.2, 0.1]);
+    expect(compositeSpecular([0.3, 0.2, 0.1, 0], [5, 5, 5, 1], weight)).toEqual([0.3, 0.2, 0.1]);
+    const full = compositeSpecular(s1, [8, 4, 2, 1], weight);
     expect(full[0]).toBeCloseTo(0.25 * 8, 6);
     expect(full[1]).toBeCloseTo(0.25 * 4, 6);
     expect(full[2]).toBeCloseTo(0.25 * 2, 6);
     // premultiplied half confidence: the midpoint of fallback and Ws x colour
-    const half = compositeSpecular(s1, [4, 2, 1, 0.5]);
+    const half = compositeSpecular(s1, [4, 2, 1, 0.5], weight);
     expect(half[0]).toBeCloseTo(0.5 * 0.3 + 0.5 * 0.25 * 8, 6);
+  });
+
+  it('retains colored metal Fresnel weights as a hit fades to the environment fallback', () => {
+    const weight = [0.8, 0.32, 0.08] as const;
+    const luma = 0.2126 * weight[0] + 0.7152 * weight[1] + 0.0722 * weight[2];
+    const fallback = [weight[0] * 10, weight[1] * 10, weight[2] * 10, luma] as const;
+    for (const confidence of [0, 0.1, 0.5, 0.9, 1]) {
+      const result = compositeSpecular(fallback, [10 * confidence, 10 * confidence, 10 * confidence, confidence], weight);
+      for (let i = 0; i < 3; i++) expect(result[i]).toBeCloseTo(fallback[i], 9);
+      expect(result[0] / result[2]).toBeCloseTo(10, 9);
+    }
+    // Small dielectric weights survive half precision without RGBA8's four-millipercent quantization.
+    const faint = [0.0007, 0.0011, 0.0018] as const;
+    const quantized = faint.map((v) => THREE.DataUtils.fromHalfFloat(THREE.DataUtils.toHalfFloat(v))) as [number, number, number];
+    const reflected = compositeSpecular([0, 0, 0, 0.001], [100, 100, 100, 1], quantized);
+    for (let i = 0; i < 3; i++) expect(Math.abs(reflected[i] / (100 * faint[i]) - 1)).toBeLessThan(0.001);
+  });
+
+  it('keeps decal coverage on colored reflection weights and their fallback at every confidence', () => {
+    const coverage = 0.35, transmission = 1 - coverage;
+    const weight = [0.5, 0.1, 0.02].map((v) => v * transmission) as [number, number, number];
+    const fallback = [weight[0] * 20, weight[1] * 20, weight[2] * 20, 0.17 * transmission] as const;
+    for (const confidence of [0, 0.5, 1]) {
+      const result = compositeSpecular(fallback, [20 * confidence, 20 * confidence, 20 * confidence, confidence], weight);
+      for (let i = 0; i < 3; i++) expect(result[i]).toBeCloseTo(20 * weight[i], 9);
+    }
   });
 
   it('the composite shader keeps the fallback path exact and mixes by confidence', () => {
     expect(MRT_COMPOSITE_FRAG).toContain('vec3 spec = s1.rgb;');
     expect(SSR_COMPOSITE_SPECULAR).toContain('uSsrP.x > 0.5 && s1.a > 0.0');
-    expect(SSR_COMPOSITE_SPECULAR).toContain('spec = mix( s1.rgb, s1.a * ssr.rgb / max( ssr.a, 1e-4 ), ssr.a );');
+    expect(SSR_COMPOSITE_SPECULAR).toContain('spec = mix( s1.rgb, weight * ssr.rgb / max( ssr.a, 1e-4 ), ssr.a );');
     expect(MRT_COMPOSITE_FRAG).toContain('outColor = vec4( outc, 1.0 );');
-    for (const u of ['tC0', 'tS1', 'tN2', 'tSsr', 'tDepth', 'uSsrP', 'uLin']) expect(MRT_COMPOSITE_FRAG).toMatch(new RegExp(`uniform [\\w ]+ ${u};`));
+    for (const u of ['tC0', 'tS1', 'tN2', 'tSsr', 'tDepth', 'tWeight', 'uSsrP', 'uLin']) expect(MRT_COMPOSITE_FRAG).toMatch(new RegExp(`uniform [\\w ]+ ${u};`));
     // the upsample's normal weight is the cosine to the 8th power, by three squarings
     expect(SSR.UP_NPOW).toBe(8);
     expect(MRT_COMPOSITE_FRAG).toContain('nd *= nd; nd *= nd; nd *= nd; // ^UP_NPOW');
@@ -325,6 +386,18 @@ describe('composite', () => {
 });
 
 describe('shader sources', () => {
+  it('keeps same-surface detail in a block while rejecting a crease and a different depth plane', () => {
+    const P = [0, -1.6, -8] as const, N = [0, 1, 0] as const;
+    // A grazing floor spans metres in view depth. Plane distance keeps it together despite that depth spread.
+    expect(ssrSameSurface(P, N, N, 0.2, [0.01, -1.6, -12], [0, 0.82, 0.57], 0.21)).toBe(true);
+    expect(ssrSameSurface(P, N, N, 0.2, [0.01, -1.6, -8], [1, 0, 0], 0.2)).toBe(false);
+    expect(ssrSameSurface(P, N, N, 0.2, [0.01, -1.6, -8], [0, -1, 0], 0.2)).toBe(false);
+    expect(ssrSameSurface(P, N, N, 0.2, [0.01, -0.6, -8], N, 0.2)).toBe(false);
+    expect(ssrSameSurface(P, N, N, 0.2, [0.01, -1.6, -8], N, 0.5)).toBe(false);
+    expect(SSR_TRACE_FRAG).toContain('if ( dot( N0, Nk ) < BR_SSR_BLOCK_N ) continue;');
+    expect(SSR_TRACE_FRAG).toContain('if ( abs( dot( brPixPos( pk ) - P, Ng0 ) ) > BR_SSR_BLOCK_PLANE * - P.z ) continue;');
+  });
+
   it('the trace steps through the Hi-Z with texelFetch at a level, bounded by BR_SSR_STEPS', () => {
     expect(SSR_TRACE_GLSL).toMatch(/texelFetch\( uHiZ, [^;]*, lvl \)/);
     expect(SSR_TRACE_GLSL).toContain('for ( int i = 0; i < BR_SSR_STEPS; i ++ )');

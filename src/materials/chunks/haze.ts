@@ -3,7 +3,7 @@
 // pile trap), submerged optics (the water body's absorption and in-scatter live on the submerged surfaces, not on the
 // transparent water mesh), per-fragment haze + edge fog + airlight (HAZE_FUNCS_GLSL in chunks/common.ts), decal
 // premultiply and the HDR clamp; then, under BR_SSR, the specular G-buffer write (MRT attachments 1 and 2,
-// chunks/gbuffer.ts).
+// chunks/gbuffer.ts); attachment 3 carries the RGB reflection weight.
 
 import { FRAG_DEBUG_GLSL } from './debug.ts';
 import { familyHook } from './family/index.ts';
@@ -59,18 +59,21 @@ gl_FragColor.rgb = min( max( gl_FragColor.rgb, vec3( 0.0 ) ), vec3( BR_HDR_CLAMP
 	// transmittance and Ws x T, att2 = oct view normal + roughness of the routed lobe (base or clearcoat). Decals blend att1 with (Zero,
 	// OneMinusSrcAlpha) on alpha, which attenuates the surface's specular weight under them by their coverage; att2
 	// keeps the surface below (src alpha 0).
-	vec4 brO1 = vec4( 0.0 ), brO2 = vec4( 0.0 );
+	vec4 brO1 = vec4( 0.0 ), brO2 = vec4( 0.0 ), brO3 = vec4( 0.0 );
 #ifndef BR_DECAL
 	if ( uDebugView == 0 && brMrtSpec ) {
 		float brT = brHazeT( - vViewPosition );
 		brO1 = vec4( min( brFbSpec * brT, vec3( BR_HDR_CLAMP ) ), brWs * brT );
 		brO2 = vec4( brOctEnc( normalize( brMrtN ) ), brMrtRough, 1.0 );
+		brO3 = vec4( brWsRgb * brT, 0.0 );
 	}
 #else
 	brO1 = vec4( 0.0, 0.0, 0.0, gl_FragColor.a );
+	brO3 = vec4( 0.0, 0.0, 0.0, gl_FragColor.a ); // OneMinusSrcAlpha on RGB attenuates the weight under the decal
 #endif
 	brOut1 = brO1;
 	brOut2 = brO2;
+	brOut3 = brO3;
 }
 #endif
 `;

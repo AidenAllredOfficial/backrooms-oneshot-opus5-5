@@ -25,7 +25,7 @@ export interface GpuProfiler {
   readonly current: string | null;
   /** poll finished queries; call once per frame */
   poll(): void;
-  /** frames counted since the last reset (frames = number of endFrame calls with all queries resolved) */
+  /** Count a frame that submitted segments in the current valid timer epoch; results may resolve later. */
   endFrame(): void;
   report(): GpuProfileReport;
   dispose(): void;
@@ -38,6 +38,8 @@ export function createGpuProfiler(gl: WebGL2RenderingContext): GpuProfiler | nul
   const pending: { q: WebGLQuery; label: string }[] = [];
   const sums = new Map<string, number>();
   let frames = 0;
+  let disjointEpoch = false;
+  let frameMeasured = false;
   let cur: { q: WebGLQuery; label: string } | null = null;
   const take = (): WebGLQuery => free.pop() ?? (gl.createQuery() as WebGLQuery);
   const close = (): void => {
@@ -48,26 +50,41 @@ export function createGpuProfiler(gl: WebGL2RenderingContext): GpuProfiler | nul
   };
   return {
     mark(label) {
+      if (disjointEpoch) return;
       close();
       const q = take();
       gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
       cur = { q, label };
+      frameMeasured = true;
       if (!sums.has(label)) sums.set(label, 0);
     },
     stop: close,
     get current() { return cur ? cur.label : null; },
     poll() {
       const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
+      if (disjoint) {
+        close();
+        // Unavailable queries are invalid too: their late results must never enter the next timer epoch. Reset
+        // the sample window, since some segments of those frames may already have contributed to the sums.
+        for (const p of pending) free.push(p.q);
+        pending.length = 0;
+        for (const label of sums.keys()) sums.set(label, 0);
+        frames = 0;
+        frameMeasured = false;
+        disjointEpoch = true;
+        return;
+      }
+      disjointEpoch = false;
       let i = 0;
       for (; i < pending.length; i++) {
         const p = pending[i];
         if (!gl.getQueryParameter(p.q, gl.QUERY_RESULT_AVAILABLE)) break;
-        if (!disjoint) sums.set(p.label, (sums.get(p.label) ?? 0) + (gl.getQueryParameter(p.q, gl.QUERY_RESULT) as number) / 1e6);
+        sums.set(p.label, (sums.get(p.label) ?? 0) + (gl.getQueryParameter(p.q, gl.QUERY_RESULT) as number) / 1e6);
         free.push(p.q);
       }
       pending.splice(0, i);
     },
-    endFrame() { frames++; },
+    endFrame() { if (frameMeasured) frames++; frameMeasured = false; },
     report() {
       const passes: Record<string, number> = {};
       let total = 0;

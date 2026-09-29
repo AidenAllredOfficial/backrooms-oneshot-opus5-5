@@ -19,6 +19,7 @@
 
 import * as THREE from 'three';
 import { BlendFunction, Effect, EffectAttribute } from 'postprocessing';
+import { rollingShutterUv, type MotionBlurEffect } from './MotionBlurEffect.ts';
 
 export const LENS_FRAG = /* glsl */ `
 uniform vec4 uLens;     // x distortion K (>0 barrel), y CA px at the corner, z vignette exponent, w effective tan(fov/2)
@@ -81,7 +82,9 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   vec2 uvd = 0.5 + (st - 0.5) * (1.0 + uLens.x * r2) / (1.0 + uLens.x);
   // ---- lateral CA: uLens.y px at the corner (radius 0.5 * |resolution| px)
   float caS = (uLens.y + split) / (0.5 * length(resolution));
-  vec3 col = brLensFetch(uvd, caS);
+  vec3 col;
+  if (caS == 0.0) col = texture2D(inputBuffer, clamp(uvd, 0.0, 1.0)).rgb;
+  else col = brLensFetch(uvd, caS);
   // ---- lens MTF: soft ring blur growing toward the corners, then the camcorder detail (unsharp) halo
   if (uMtf.x > 0.0) {
     vec2 pr = (uv - 0.5) * vec2(aspect, 1.0);
@@ -156,6 +159,9 @@ export class LensEffect extends Effect {
   private readonly uCam: THREE.Uniform<THREE.Vector4>;
   private readonly uMtf: THREE.Uniform<THREE.Vector2>;
   private readonly uRS: THREE.Uniform<THREE.Vector2>;
+  private motion: Pick<MotionBlurEffect, 'angularVelocity' | 'wasCut'> | null = null;
+  private motionCamera: THREE.PerspectiveCamera | null = null;
+  private rollingShutterEnabled = true;
   constructor() {
     const uLens = new THREE.Uniform(new THREE.Vector4(0.02, 1.5, 1, 0.33));
     const uGlitch = new THREE.Uniform(new THREE.Vector4(0, 0, 0, 0));
@@ -177,6 +183,25 @@ export class LensEffect extends Effect {
   setRollingShutter(x: number, y: number): void {
     const lim = 0.05; // a wild frame (hitch) must not tear the image apart
     this.uRS.value.set(Math.max(-lim, Math.min(lim, x)), Math.max(-lim, Math.min(lim, y)));
+  }
+  /** The HDR pass updates the motion before this final lens pass, so the skew follows the current frame's turn. */
+  setMotionSource(motion: Pick<MotionBlurEffect, 'angularVelocity' | 'wasCut'>, camera: THREE.PerspectiveCamera): void {
+    this.motion = motion;
+    this.motionCamera = camera;
+  }
+  setRollingShutterEnabled(on: boolean): void {
+    this.rollingShutterEnabled = on;
+  }
+  override update(_renderer: THREE.WebGLRenderer, _inputBuffer: THREE.WebGLRenderTarget): void {
+    const motion = this.motion, camera = this.motionCamera;
+    if (!motion || !camera) return;
+    if (!this.rollingShutterEnabled || this.uCam.value.x < 0.5 || motion.wasCut) {
+      this.setRollingShutter(0, 0);
+      return;
+    }
+    const av = motion.angularVelocity;
+    const rs = rollingShutterUv(av.yaw, av.pitch, Math.tan(camera.fov * Math.PI / 360), camera.aspect);
+    this.setRollingShutter(rs[0], rs[1]);
   }
   /** Lens softness (blur mix 0..1) and camcorder detail enhancement (unsharp amount); 0, 0 = a perfect lens. */
   setMtf(mix: number, unsharp: number): void {

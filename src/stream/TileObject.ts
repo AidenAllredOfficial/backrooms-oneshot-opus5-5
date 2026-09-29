@@ -1,5 +1,5 @@
 // src/stream/TileObject.ts — GPU side of one render tile (WP10): textures, materials, meshes, forced upload,
-// in-place lightmap swap, dynamic meshes, disposal. The residency state machine (ChunkStreamer.ts) drives it
+// atomic lightmap swap, dynamic meshes, disposal. The residency state machine (ChunkStreamer.ts) drives it
 // through the TileUploader interface, so the machine itself is testable in Node with a fake uploader.
 
 import * as THREE from 'three';
@@ -36,9 +36,11 @@ export interface TileUploader {
   /** Geometry step (resumable, one mesh per unit): meshes into gpu.group with their GPU upload forced now; the
    * group is added to `parent` when the last mesh is done. */
   uploadGeometry(gpu: TileGpu, mesh: TileMesh, parent: THREE.Group, more: () => boolean): boolean;
-  /** Full bake arrived (resumable): same-size textures are re-uploaded in place (texSubImage); bindings updated
-   * via .value. Calling it with a different `lm` restarts the swap. */
+  /** Full bake arrived (resumable): upload pooled replacements, then publish every binding together. The
+   * displayed bake stays coherent between budgeted units. Calling it with a different `lm` restarts the swap. */
   swapLightmap(gpu: TileGpu, lm: LightmapData, more: () => boolean): boolean;
+  /** Abandon an unfinished full-bake upload while retaining the displayed bake. */
+  cancelLightmapSwap(gpu: TileGpu): void;
   setFade(gpu: TileGpu, f: number): void;
   attachDynamic(gpu: TileGpu, m: MeshBuffers): DynamicMeshHandle;
   /** Rebuild: move live dynamic meshes from an old build to its replacement. */
@@ -70,6 +72,7 @@ interface TileGpuImpl extends TileGpu {
   texLm: LightmapData | null; texCur: number;
   geoMesh: TileMesh | null; geoCur: number;
   swapLm: LightmapData | null; swapCur: number;
+  swapSlots: (THREE.Texture | null)[];
 }
 
 function bindingOf(b: TileBindings, slot: number): { value: THREE.Texture } {
@@ -121,14 +124,6 @@ export function tileWaterOf(wallMask: Uint8Array): number {
   for (let i = 2; i < wallMask.length; i += 4) if (wallMask[i] !== 0) m |= 1 << (wallMask[i] - 1);
   return m;
 }
-
-const sameSize = (t: THREE.Texture, s: SlotSpec): boolean => {
-  const img = t.image as { width: number; height: number; depth?: number };
-  const is3 = (t as THREE.Data3DTexture).isData3DTexture === true;
-  const type = t.type === THREE.HalfFloatType ? 'half' : 'u8';
-  return img.width === s.w && img.height === s.h && (s.dim === 3) === is3 && (!is3 || img.depth === s.d) && type === s.type &&
-    t.generateMipmaps === s.mips;
-};
 
 // ---------------------------------------------------------------- the uploader
 
@@ -195,8 +190,23 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
 
   function acquire(s: SlotSpec, data: Uint16Array | Uint8Array): THREE.Texture {
     const t = s.dim === 3 ? pool.acquire3D(s.w, s.h, s.d, s.type, data) : pool.acquire2D(s.w, s.h, s.type, data, s.mips);
-    renderer.initTexture(t); // upload now (texture step), not at first draw
+    try {
+      renderer.initTexture(t); // upload now (texture step), not at first draw
+    } catch (e) {
+      pool.release(t);
+      throw e;
+    }
     return t;
+  }
+
+  function releaseSwap(gpu: TileGpuImpl): void {
+    for (let slot = 0; slot < SLOT_COUNT; slot++) {
+      const t = gpu.swapSlots[slot];
+      if (t) pool.release(t);
+      gpu.swapSlots[slot] = null;
+    }
+    gpu.swapLm = null;
+    gpu.swapCur = 0;
   }
 
   function zeroFor(slot: number): THREE.Texture {
@@ -272,6 +282,7 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
         bounds: new Float64Array([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]),
         slots: new Array<THREE.Texture | null>(SLOT_COUNT).fill(null), meshes: [], dyn: new Set(), disposed: false,
         texLm: null, texCur: 0, geoMesh: null, geoCur: 0, swapLm: null, swapCur: 0,
+        swapSlots: new Array<THREE.Texture | null>(SLOT_COUNT).fill(null),
       };
       // until the texture step reaches a slot, it samples the shared zero texture (never an unset uniform)
       for (let slot = 0; slot < SLOT_COUNT; slot++) bindingOf(b, slot).value = zeroFor(slot);
@@ -328,34 +339,37 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
 
     swapLightmap(gpuIn, lm, more) {
       const gpu = gpuIn as TileGpuImpl;
-      if (gpu.swapLm !== lm) { gpu.swapLm = lm; gpu.swapCur = 0; }
+      if (gpu.swapLm !== lm) { releaseSwap(gpu); gpu.swapLm = lm; }
       const b = gpu.materials.bindings;
-      while (gpu.swapCur < SLOT_COUNT) {
-        const slot = gpu.swapCur++;
-        const s = slotSpec(lm, slot, spec);
-        if (slot === SLOT_VOLMASK) b.water.value = tileWaterOf(lm.volume.wallMask);
-        const old = gpu.slots[slot];
-        const binding = bindingOf(b, slot);
-        if (s.data && old && sameSize(old, s)) {
-          // same size: re-upload into the existing GL texture (texSubImage), binding unchanged
-          (old.image as { data: unknown }).data = s.data;
-          old.needsUpdate = true;
-          renderer.initTexture(old);
-        } else if (s.data) {
-          const t = acquire(s, s.data);
-          gpu.slots[slot] = t;
-          binding.value = t;
-          if (old) pool.release(old);
-        } else {
-          gpu.slots[slot] = null;
-          binding.value = zeroFor(slot);
-          if (old) pool.release(old);
-          continue; // no upload: not a unit
+      try {
+        while (gpu.swapCur < SLOT_COUNT) {
+          const slot = gpu.swapCur;
+          const s = slotSpec(lm, slot, spec);
+          gpu.swapSlots[slot] = s.data ? acquire(s, s.data) : null;
+          gpu.swapCur++;
+          if (s.data && gpu.swapCur < SLOT_COUNT && !more()) return false;
         }
-        if (gpu.swapCur < SLOT_COUNT && !more()) return false;
+      } catch (e) {
+        releaseSwap(gpu);
+        throw e;
       }
+      // No render or atlas planning can interleave with this synchronous publication. Keeping the previous
+      // textures alive until here also preserves their CPU volume arrays for the lighting atlas.
+      for (let slot = 0; slot < SLOT_COUNT; slot++) {
+        const old = gpu.slots[slot];
+        const t = gpu.swapSlots[slot];
+        gpu.slots[slot] = t;
+        gpu.swapSlots[slot] = null;
+        bindingOf(b, slot).value = t ?? zeroFor(slot);
+        if (old) pool.release(old);
+      }
+      b.water.value = tileWaterOf(lm.volume.wallMask);
       gpu.swapLm = null;
       return true;
+    },
+
+    cancelLightmapSwap(gpu) {
+      releaseSwap(gpu as TileGpuImpl);
     },
 
     setFade(gpu, f) {
@@ -405,6 +419,7 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
       if (gpu.disposed) return;
       gpu.disposed = true;
       gpu.texLm = null; gpu.geoMesh = null; gpu.swapLm = null;
+      releaseSwap(gpu);
       gpu.group.removeFromParent();
       for (const d of [...gpu.dyn]) d.handle.dispose();
       for (const m of gpu.meshes) dropMesh(m);

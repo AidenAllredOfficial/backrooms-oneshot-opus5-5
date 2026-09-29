@@ -294,7 +294,7 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
       const r = core.renderer;
       if (!s || !r) return Promise.reject(new Error('gpuBench: the app has not booted yet'));
       const gl = r.getContext() as WebGL2RenderingContext;
-      const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number } | null;
+      const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
       if (!ext) return Promise.reject(new Error('gpuBench: EXT_disjoint_timer_query_webgl2 unavailable'));
       const k = Math.max(1, Math.min(200, Math.floor(Number.isFinite(repeats) ? repeats : 20)));
       const ROUNDS = 7;
@@ -305,22 +305,29 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
       return new Promise((resolve) => {
         core.hooks.push(() => {
           // between frames: one round = this frame's GPU work (mirror + post stack) k times inside one query
-          for (let i = pending.length - 1; i >= 0; i--) {
-            const q = pending[i];
-            if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) continue;
-            results.push((gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6 / k);
-            gl.deleteQuery(q);
-            pending.splice(i, 1);
+          const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT) as boolean;
+          if (disjoint) {
+            // An invalid epoch includes unfinished queries. Restart the sample set after the timer recovers.
+            for (const q of pending) gl.deleteQuery(q);
+            pending.length = 0;
+            results.length = 0;
+            rounds = 0;
+          } else {
+            for (let i = pending.length - 1; i >= 0; i--) {
+              const q = pending[i];
+              if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) continue;
+              results.push((gl.getQueryParameter(q, gl.QUERY_RESULT) as number) / 1e6 / k);
+              gl.deleteQuery(q);
+              pending.splice(i, 1);
+            }
           }
-          if (rounds < ROUNDS) {
-            const g = s.materials.globals;
-            const waterY = g.reflOn.value > 0.5 ? g.reflY.value : null;
+          if (!disjoint && rounds < ROUNDS) {
             const q = gl.createQuery() as WebGLQuery;
             gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
             for (let i = 0; i < k; i++) {
               // package D: the probe's steady state (one face captured and re-filtered every PROBE.STEADY_EVERY frames)
               s.probe.update(r, core.scene, core.camera, s.streamer.query, s.player.state, s.features.probe);
-              s.reflection.update(r, core.scene, core.camera, waterY);
+              // ScenePass's afterDepth hook renders the mirror using the current flashlight shadow map.
               s.post.render(0, core.clock.t);
             }
             gl.endQuery(ext.TIME_ELAPSED_EXT);
@@ -328,7 +335,7 @@ export function createDebugApi(core: AppCore, host: DebugHost): DebugApiHandle {
             rounds++;
             return false;
           }
-          if (pending.length > 0 && ++waited < 120) return false;
+          if ((pending.length > 0 || disjoint) && ++waited < 120) return false;
           for (const q of pending) gl.deleteQuery(q);
           results.sort((x, y) => x - y);
           resolve({

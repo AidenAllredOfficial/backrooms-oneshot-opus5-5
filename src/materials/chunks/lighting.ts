@@ -11,14 +11,14 @@
 //  - brSs / brSsK / brSsC: pre-shade SSAO (A) on the indirect terms only; brSsK is the occlusion the bake has not
 //    already applied. With SSAO off they are an exact 1.0, and each factor sits next to brE / brAO so the other
 //    operands are rounded exactly as before (the preset images stay bit-identical).
-//  - brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brMrtRough, brMrtN: the specular G-buffer split (package D;
-//    chunks/haze.ts writes them to MRT attachments 1 and 2 under BR_SSR). On MRT frames (uBrMrt) a glossy,
+//  - brMrtSpec, brFbDir, brFbEnv, brFbSpec, brWs, brWsRgb, brMrtRough, brMrtN: the specular G-buffer split (package D;
+//    chunks/haze.ts writes them to MRT attachments 1 through 3 under BR_SSR). On MRT frames (uBrMrt) a glossy,
 //    non-emissive pixel that is not under water (brUnderW: submerged, or a wet floor under a film-water surface,
 //    whose reflection the water mesh draws) moves its replaceable specular out of the inline sum: the baked dominant-direction lobe
 //    (the difference of reflectedLight.directSpecular across RE_Direct: three's sheen / clearcoat terms stay exact)
 //    and the environment radiance (uniform, or the reflection probe's). Clearcoat pixels (props with the coat bit)
 //    route their lacquer lobe instead (clearcoatSpecularDirect's difference, the coat environment) and keep the base
-//    inline. FRAG_AO_REFL_GLSL assembles the fallback brFbSpec with its weight brWs; the SSR composite
+//    inline. FRAG_AO_REFL_GLSL assembles the fallback brFbSpec with its RGB weight brWsRgb; the SSR composite
 //    (post/frame/MrtComposite.ts) replaces it by confidence, so a screen-space miss falls back to the probe.
 //  - brPrW / brPrWc: the reflection probe's share (package D, chunks/probe.ts, BR_PROBE) of the base / clearcoat
 //    environment: the baked dominant-direction lobe fades out by (1 - share) and the uniform environment is mixed
@@ -224,6 +224,7 @@ if ( uSsaoP.x > 0.5 && uBrReflPass < 0.5 ) {
 bool brMrtSpec = false;
 vec3 brFbDir = vec3( 0.0 ), brFbEnv = vec3( 0.0 ), brFbSpec = vec3( 0.0 );
 float brWs = 0.0, brMrtRough = 1.0;
+vec3 brWsRgb = vec3( 0.0 ); // per-channel reflection throughput; scalar brWs remains the eligibility/debug weight
 vec3 brMrtN = normal; // the routed lobe's normal (att2): the shading normal, or the clearcoat's
 // under water: submerged (the water body's optics act on the whole radiance), or a glossy wet floor under a water
 // surface in the wall mask (film water over puddles). The water mesh reflects the room at its surface: neither SSR
@@ -479,7 +480,7 @@ vec3 brReflRad = vec3( 0.0 ); // the emission-map reflection's radiance x its fa
 #if defined( BR_SSR ) && ! defined( BR_DECAL )
 if ( brMrtSpec ) {
 	// package D: the replaceable specular of a G-buffer pixel, nothing of it stays inline. The environment and
-	// emission-map radiance share one weight, which the SSR hit inherits (brWs), with a horizon term against the
+	// emission-map radiance share one RGB weight, which the SSR hit inherits (brWsRgb), with a horizon term against the
 	// unperturbed normal, so normal-mapped grout and bevels do not reflect from under the surface. Plus the baked lobe.
 #ifdef USE_CLEARCOAT
 	if ( brCoat ) {
@@ -490,6 +491,7 @@ if ( brMrtSpec ) {
 		float brHc = saturate( 1.0 + BR_HORIZON_K * dot( reflect( - geometryViewDir, geometryClearcoatNormal ), brNg ) );
 		float brSOch = brSOc * brHc * brHc * material.clearcoat;
 		brFbSpec = brFbEnv * brEc * brSOch + brFbDir;
+		brWsRgb = brEc * brSOch;
 		brWs = brLuma( brEc ) * brSOch;
 		brMrtRough = material.clearcoatRoughness;
 		brMrtN = geometryClearcoatNormal;
@@ -508,6 +510,7 @@ if ( brMrtSpec ) {
 		float brHor = saturate( 1.0 + BR_HORIZON_K * dot( reflect( - geometryViewDir, geometryNormal ), brNg ) );
 		float brSOh = brSO * brHor * brHor;
 		brFbSpec = ( brFbEnv + brReflRad ) * brSSw * brSOh + brFbDir;
+		brWsRgb = brSSw * brSOh;
 		brWs = brLuma( brSSw ) * brSOh;
 		brMrtRough = material.roughness;
 	}

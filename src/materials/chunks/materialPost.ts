@@ -17,6 +17,9 @@ export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `
 {
 	float brWf = max( BR_WET_FILM_F0 * brFilm, brPuddle );
 	material.specularColor = mix( material.specularColor, vec3( 0.02 ), brWf );
+	// r186 uses diffuseColor as the metallic F0 in indirect lighting (and our SSR fallback). Keep it consistent
+	// with the punctual lobe's blended F0; diffuseContribution already holds the substrate's diffuse albedo.
+	material.diffuseColor = mix( material.diffuseColor, vec3( 0.02 ), brWf );
 	material.specularColorBlended = mix( material.specularColorBlended, vec3( 0.02 ), brWf );
 	material.specularF90 = mix( material.specularF90, 1.0, brWf );
 }
@@ -24,6 +27,7 @@ export const FRAG_MATERIAL_POST_GLSL = /* glsl */ `
 {
 	float brGk = 1.0 - brCov * ( 1.0 - brPuddle );
 	material.specularColor *= brGk;
+	material.diffuseColor *= brGk;
 	material.specularColorBlended *= brGk;
 	material.specularF90 *= brGk;
 }

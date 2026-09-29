@@ -9,7 +9,7 @@ import { CellFlag, Mood, Zone, type StoreyId } from '../../src/core/ids.ts';
 import { createEmptyLayout } from '../../src/core/layout.ts';
 import type { ChunkLayout } from '../../src/core/layout.ts';
 import type { TileRuntime, WorldQuery } from '../../src/core/runtime.ts';
-import { channelSlot, LA, LA_BIT, laInWindow, laMaskIndex, laSlot, LightAtlas, lightAtlasGlsl } from '../../src/lighting/LightAtlas.ts';
+import { channelSlot, LA, LA_BIT, laClampFootprint, laInWindow, laMaskIndex, laSlot, LightAtlas, lightAtlasGlsl } from '../../src/lighting/LightAtlas.ts';
 import { slotLut } from '../../src/materials/chunks/params.ts';
 
 const N = LV.NX * LV.NY * LV.NZ * 4;
@@ -142,6 +142,45 @@ describe('light atlas', () => {
     expect(body).toContain(`( ct - 3.0 ) * ${TILE_SIZE}`);
     expect(body).toContain(`( ct + 4.0 ) * ${TILE_SIZE}`);
     expect(body.indexOf('return false;')).toBeLessThan(body.indexOf('texelFetch( uLaMask'));
+  });
+
+  it('never filters stale texels from missing neighbours, including a missing diagonal and the toroidal window edge', () => {
+    const tileOf = (i: number): number => Math.floor(i / LV.NX);
+    const valid = (gi: number, gj: number): boolean => Math.floor(gi / 16) === 0 && Math.floor(gj / 16) === 0;
+    // Model the hardware's horizontal bilinear taps of a volume. Missing tiles deliberately contain 1000 lux from
+    // a previous slot occupant, while the loaded tile is a constant 10 lux.
+    const sample = (p: readonly number[], loaded: (i: number, j: number) => boolean): number => {
+      const fx = p[0] / LV.STEP - 0.5, fz = p[1] / LV.STEP - 0.5;
+      const ix = Math.floor(fx), iz = Math.floor(fz), wx = fx - ix, wz = fz - iz;
+      let sum = 0;
+      for (let z = 0; z < 2; z++) for (let x = 0; x < 2; x++) {
+        const w = (x ? wx : 1 - wx) * (z ? wz : 1 - wz);
+        sum += w * (loaded(tileOf(ix + x) * 16, tileOf(iz + z) * 16) ? 10 : 1000);
+      }
+      return sum;
+    };
+    for (const p of [[0.01, 4], [TILE_SIZE - 0.01, 4], [4, 0.01], [4, TILE_SIZE - 0.01], [0.01, 0.01], [TILE_SIZE - 0.01, TILE_SIZE - 0.01]]) {
+      expect(sample(p, valid)).toBeGreaterThan(400);
+      expect(sample(laClampFootprint(p[0], p[1], 5, 5, valid), valid)).toBeCloseTo(10, 8);
+    }
+    // Both cardinal neighbours exist, but their diagonal is still loading.
+    const corner = (gi: number, gj: number): boolean => {
+      const tx = Math.floor(gi / 16), tz = Math.floor(gj / 16);
+      return (tx === 0 && tz === 0) || (tx === 1 && tz === 0) || (tx === 0 && tz === 1);
+    };
+    const edge = [TILE_SIZE - 0.01, TILE_SIZE - 0.01];
+    expect(sample(edge, corner)).toBeGreaterThan(200);
+    expect(sample(laClampFootprint(edge[0], edge[1], 5, 5, corner), corner)).toBeCloseTo(10, 8);
+    // A wrapped slot may be VALID while its unwrapped coordinate lies outside the planned window.
+    const x = -3 * TILE_SIZE + 0.01;
+    expect(laClampFootprint(x, 4, 5, 5, () => true)[0]).toBeCloseTo(-3 * TILE_SIZE + LV.STEP / 2, 8);
+    for (const p of [[4, 4], [0.01, 4], [TILE_SIZE - 0.01, TILE_SIZE - 0.01]]) {
+      expect(laClampFootprint(p[0], p[1], 5, 5, () => true)).toEqual(p); // loaded seams retain trilinear filtering
+    }
+    const g = lightAtlasGlsl();
+    expect(g).toContain('p.xz = brLaClampFootprint( p.xz, cell, ct );');
+    expect(g).toContain('cell + side, ct'); // diagonal check
+    expect(g.indexOf('p.xz = brLaClampFootprint')).toBeLessThan(g.indexOf('vec4 a = textureLod( uLaA'));
   });
 
   it('plans only changed tiles, nearest first; re-queues on a version bump; clears tiles that leave, and storey switches', () => {

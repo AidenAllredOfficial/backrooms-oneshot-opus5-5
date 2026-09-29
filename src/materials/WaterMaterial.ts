@@ -203,7 +203,10 @@ void main() {
 		vec3 rV = reflect( - V, nV );
 		vec3 qV = P + rV * BR_REFL_GEOM_D;
 		vec4 rc = uReflMatrix * vec4( qV, 1.0 );
-		vec2 ruv = rc.xy / rc.w;
+		vec2 ruv = rc.xy / max( rc.w, 1e-5 );
+		// Waves can send this lookup outside the mirrored view, or behind its eye. ClampToEdge repeated a lamp at
+		// the capture border as a moving streak. Fade to the same environment used by the other water planes.
+		float edge = min( min( ruv.x, ruv.y ), min( 1.0 - ruv.x, 1.0 - ruv.y ) );
 		// glossy blur: the lobe (angular radius ~ alpha) seen at the reflected geometry, stretched along the view plane
 		// by 1 / cos(theta): rough water draws streaks (below). One lookup of a coarse box-filtered mip showed its texel
 		// grid in the saturated contour of a bright lamp (stepped blobs)
@@ -212,22 +215,31 @@ void main() {
 		float rT = br * 0.5 * projectionMatrix[ 1 ][ 1 ] * texSz.y; // lobe radius, texels
 		float cV = max( dot( V, upV ), 0.08 );
 		float stretch = min( 1.0 / cV, 6.0 );
-		if ( rT * stretch > 1.5 ) {
-			vec3 tV = normalize( V - upV * cV + 1e-5 ); // in-plane direction toward the camera
-			// the streak's direction in the mirror texture (the image of the in-plane direction toward the camera); its
-			// angular length is stretch x the lateral lobe (the mirror texture has the view's projection)
-			vec4 rc2 = uReflMatrix * vec4( qV + tV * ( 0.05 * ( d + BR_REFL_GEOM_D ) ), 1.0 );
-			vec2 dirT = ( rc2.xy / rc2.w - ruv ) * texSz;
-			dirT /= max( length( dirT ), 1e-6 );
-			vec2 sd = dirT * ( rT * stretch ) / texSz; // texture-space radius along the streak
-			vec2 lat = vec2( - dirT.y, dirT.x ) * rT / texSz; // lateral radius
-			// the mirror texture's hardware anisotropic filter integrates the lobe's ellipse (textureGrad with its axes;
-			// PlanarReflection sets anisotropy 8): two taps across it round the lateral profile, a third over twice the
-			// length gives the GGX-like tail (a lamp 1000x brighter than the room keeps a visible streak)
-			refl = 0.35 * ( textureGrad( uReflTex, ruv + 0.4 * lat, 1.6 * sd, lat ).rgb + textureGrad( uReflTex, ruv - 0.4 * lat, 1.6 * sd, lat ).rgb )
-				+ 0.3 * textureGrad( uReflTex, ruv, 3.2 * sd, lat ).rgb;
-		} else {
-			refl = brWReflCubic( ruv, texSz, clamp( log2( 1.0 + rT ), 0.0, 8.0 ) );
+		float margin = max( BR_REFL_EDGE_FADE, 3.2 * rT * stretch / min( texSz.x, texSz.y ) );
+		float mirrorWeight = rc.w > 1e-5 ? smoothstep( 0.0, margin, edge ) : 0.0;
+		refl = vec3( 0.0 );
+		if ( mirrorWeight > 0.0 ) {
+			if ( rT * stretch > 1.5 ) {
+				vec3 tV = normalize( V - upV * cV + 1e-5 ); // in-plane direction toward the camera
+				// the streak's direction in the mirror texture (the image of the in-plane direction toward the camera); its
+				// angular length is stretch x the lateral lobe (the mirror texture has the view's projection)
+				vec4 rc2 = uReflMatrix * vec4( qV + tV * ( 0.05 * ( d + BR_REFL_GEOM_D ) ), 1.0 );
+				vec2 dirT = ( rc2.xy / rc2.w - ruv ) * texSz;
+				dirT /= max( length( dirT ), 1e-6 );
+				vec2 sd = dirT * ( rT * stretch ) / texSz; // texture-space radius along the streak
+				vec2 lat = vec2( - dirT.y, dirT.x ) * rT / texSz; // lateral radius
+				// the mirror texture's hardware anisotropic filter integrates the lobe's ellipse (textureGrad with its axes;
+				// PlanarReflection sets anisotropy 8): two taps across it round the lateral profile, a third over twice the
+				// length gives the GGX-like tail (a lamp 1000x brighter than the room keeps a visible streak)
+				refl = 0.35 * ( textureGrad( uReflTex, ruv + 0.4 * lat, 1.6 * sd, lat ).rgb + textureGrad( uReflTex, ruv - 0.4 * lat, 1.6 * sd, lat ).rgb )
+					+ 0.3 * textureGrad( uReflTex, ruv, 3.2 * sd, lat ).rgb;
+			} else {
+				refl = brWReflCubic( ruv, texSz, clamp( log2( 1.0 + rT ), 0.0, 8.0 ) );
+			}
+		}
+		if ( mirrorWeight < 1.0 ) {
+			vec3 rW = normalize( ( vec4( rV, 0.0 ) * viewMatrix ).xyz );
+			refl = mix( brWaterEnv( rW, irr, rough, waterY, brAuxB ), refl, mirrorWeight );
 		}
 	} else {
 		vec3 rW = normalize( ( vec4( reflect( - V, nV ), 0.0 ) * viewMatrix ).xyz );

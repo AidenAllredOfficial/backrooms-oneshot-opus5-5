@@ -19,7 +19,7 @@ import type { MaterialGlobals } from '../core/runtime.ts';
 import type { QualityConfig } from '../core/quality.ts';
 import { HDR_CLAMP } from '../core/constants.ts';
 import { allocMips, LowPassMips } from '../post/frame/ColorPyramid.ts';
-import { REFL_PASS, setWirePixel } from './shared.ts';
+import { MRT_PASS, REFL_PASS, WIRE_PX, setWirePixel } from './shared.ts';
 import { TUNE } from './chunks/params.ts';
 import { renderWithPrepass } from './prepass.ts';
 import { WATER_VIS } from './water/waterVisibility.ts';
@@ -178,17 +178,24 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
 
       // render the mirrored view (no feedback: reflTex unbound, reflOn off, water/props culled in shaders)
       const prevRT = renderer.getRenderTarget();
+      const prevFace = renderer.getActiveCubeFace();
+      const prevLevel = renderer.getActiveMipmapLevel();
       const prevShadow = renderer.shadowMap.autoUpdate;
       const prevXr = renderer.xr.enabled;
+      const prevMW = scene.matrixWorldAutoUpdate;
+      const prevRefl = REFL_PASS.value, prevMrt = MRT_PASS.value, prevWire = WIRE_PX.value;
       globals.reflOn.value = 0;
       globals.reflTex.value = null;
       REFL_PASS.value = 1;
+      MRT_PASS.value = 0;
       renderer.xr.enabled = false;
       renderer.shadowMap.autoUpdate = false;
       try {
         // These draws would discard every fragment. Cull whole meshes first;
         // partly visible props still use the shader's exact distance test.
-        scene.updateMatrixWorld();
+        if (prevMW) scene.updateMatrixWorld();
+        // Both prepass renders share these matrices. Avoid traversing every streamed object again per render.
+        scene.matrixWorldAutoUpdate = false;
         scene.traverseVisible(cullReflection);
         renderer.setRenderTarget(rt);
         renderer.state.buffers.depth.setMask(true);
@@ -199,10 +206,13 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
       } finally {
         for (const object of hidden) object.visible = true;
         hidden.length = 0;
-        renderer.setRenderTarget(prevRT);
+        scene.matrixWorldAutoUpdate = prevMW;
+        renderer.setRenderTarget(prevRT, prevFace, prevLevel);
         renderer.shadowMap.autoUpdate = prevShadow;
         renderer.xr.enabled = prevXr;
-        REFL_PASS.value = 0;
+        REFL_PASS.value = prevRefl;
+        MRT_PASS.value = prevMrt;
+        WIRE_PX.value = prevWire;
       }
 
       globals.reflTex.value = rt.texture;

@@ -70,7 +70,9 @@ v2 conventions").
   - `BR_L_DETREP` scales brDetUv, brDetDx and brDetDy before the postSample hooks, and the ripple compensates for it.
   - 'detailMask' layers multiply `brDetL.y` by brAux after postSample.
   - `BR_L_DETTINT` is applied after the grey multiplier.
-  - `BR_L_DETSO` scales the inline indirectSpecular after FRAG_AO_REFL, before the postLight hooks.
+  - `BR_L_DETSO` scales the inline indirectSpecular after FRAG_AO_REFL, before the postLight hooks. Routed base-lobe
+    environment fallback and scalar/RGB SSR weights take the same factor; the baked directional term and routed
+    clearcoat lobe keep their own visibility.
 - **New helpers** (`chunks/grimeLib.ts`, in the common block before the family pars):
   `float brHeightBlend(m, rel, K, E)` and `void brStainFront(s, fine, L0, out inside, out tide)`. brStainFront calls
   fwidth, so use it only in quad-uniform control flow.

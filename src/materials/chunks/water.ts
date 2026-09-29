@@ -46,6 +46,8 @@ export const WATER_SURFACE = {
   TEX_FEATURE: 0.1,
   // ---- planar reflection: typical distance of the reflected geometry behind the reflection point (m)
   REFL_GEOM_D: 3,
+  /** fraction of the mirror view used to blend to the environment at capture edges; broad lobes widen it */
+  REFL_EDGE_FADE: 0.02,
   // ---- ripples / drips
   DRIP_SLOPE: 0.25,
   DRIP_SPEED: 0.28, // m/s ring expansion
@@ -124,6 +126,15 @@ export function waveAmplitudes(waves: readonly Wave[]): number[][] {
 export const waveOmega = (k: number, D: number): number =>
   Math.sqrt(WATER_SURFACE.G * k * Math.tanh(Math.min(k * Math.max(D, 0.02), 10)) + WATER_SURFACE.SIGMA_RHO * k * k * k);
 
+/** The water shader's mirror capture weight: no clamped edge texels, and no lookup behind the reflection eye. */
+export function waterMirrorWeight(clip: readonly [number, number, number, number], footprint = 0): number {
+  if (clip[3] <= 1e-5) return 0;
+  const u = clip[0] / clip[3], v = clip[1] / clip[3];
+  const edge = Math.min(u, v, 1 - u, 1 - v);
+  const t = Math.max(0, Math.min(1, edge / Math.max(WATER_SURFACE.REFL_EDGE_FADE, footprint)));
+  return t * t * (3 - 2 * t);
+}
+
 const v2 = (a: readonly number[]): string => `vec2(${a.map(f).join(', ')})`;
 const v3 = (a: readonly number[]): string => `vec3(${a.map(f).join(', ')})`;
 const g9 = (v: number): string => f(Number(v.toPrecision(9)));
@@ -155,6 +166,7 @@ export function waterWavesGlsl(): string {
 #define BR_WTEX_FEATURE ${f(W.TEX_FEATURE)}
 #define BR_WALPHA_MAX ${f(W.ALPHA_MAX)}
 #define BR_REFL_GEOM_D ${f(W.REFL_GEOM_D)}
+#define BR_REFL_EDGE_FADE ${f(W.REFL_EDGE_FADE)}
 const float BR_WALPHA0[3] = float[3](${W.ALPHA0.map(f).join(', ')});
 const vec3 BR_WTEX_GAIN[3] = vec3[3](${W.TEX_GAIN.map(v3).join(', ')});
 const vec3 BR_WTEX_P = ${v3(W.TEX_PERIOD)};

@@ -198,7 +198,7 @@ void main() {
     bool coarse = abs(s) > 1.0;
     vec2 q = 0.5 + d * s;
     // window by the source's distance from the axis; a magnified ghost spreads its energy over 1/s^2 the area
-    float win = smoothstep(0.75, 0.2, length(q - 0.5)) * min(1.0, s * s);
+    float win = (1.0 - smoothstep(0.2, 0.75, length(q - 0.5))) * min(1.0, s * s);
     if (win <= 0.0) continue;
     vec3 c;
     c.r = brGhFetch(0.5 + d * (s * ${(1 + FLARE.GHOST_CA).toFixed(4)}), coarse).r;

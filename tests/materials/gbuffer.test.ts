@@ -1,5 +1,5 @@
 // tests/materials/gbuffer.test.ts — package D's specular G-buffer contract: the octahedral normal encoding survives
-// the RGBA16F attachment, BR_SSR surface programs write attachments 1 and 2, and the lighting split moves exactly
+// the RGBA16F attachment, BR_SSR surface programs write attachments 1 through 3, and the lighting split moves exactly
 // the replaceable specular (baked lobe by difference across the unchanged RE_Direct call, uniform environment,
 // emission-map reflection) into brFbSpec / brWs on eligible pixels.
 
@@ -54,16 +54,20 @@ describe('octahedral view normals in RGBA16F', () => {
 });
 
 describe('G-buffer outputs', () => {
-  it('BR_SSR programs declare and write MRT locations 1 and 2 (the surface fragment is one text for every variant)', () => {
+  it('BR_SSR programs declare and write MRT locations 1 through 3 (the surface fragment is one text for every variant)', () => {
     expect(GBUFFER_PARS_GLSL).toMatch(/#ifdef BR_SSR[\s\S]*layout\( location = 1 \) out highp vec4 brOut1;[\s\S]*layout\( location = 2 \) out highp vec4 brOut2;/);
     const frag = buildSurfaceFragment(ShaderLib.physical.fragmentShader);
     expect(frag).toContain(GBUFFER_PARS_GLSL);
     expect(FRAG_FOG_GLSL).toContain('brOut1 = brO1;');
     expect(FRAG_FOG_GLSL).toContain('brOut2 = brO2;');
+    expect(GBUFFER_PARS_GLSL).toContain('layout( location = 3 ) out highp vec4 brOut3;');
+    expect(FRAG_FOG_GLSL).toContain('brOut3 = brO3;');
     // the write carries the haze transmittance on both the fallback and the weight
     expect(FRAG_FOG_GLSL).toContain('brO1 = vec4( min( brFbSpec * brT, vec3( BR_HDR_CLAMP ) ), brWs * brT );');
     // att2: the routed lobe's normal (the shading normal, a clearcoat pixel's coat normal) and roughness
     expect(FRAG_FOG_GLSL).toContain('brO2 = vec4( brOctEnc( normalize( brMrtN ) ), brMrtRough, 1.0 );');
+    expect(FRAG_FOG_GLSL).toContain('brO3 = vec4( brWsRgb * brT, 0.0 );');
+    expect(FRAG_FOG_GLSL).toContain('brO3 = vec4( 0.0, 0.0, 0.0, gl_FragColor.a );');
   });
 });
 
@@ -107,6 +111,8 @@ describe('lighting split (package D)', () => {
     expect(fb).toContain('float brHor = saturate( 1.0 + BR_HORIZON_K * dot( reflect( - geometryViewDir, geometryNormal ), brNg ) );');
     expect(fb).toContain('brFbSpec = ( brFbEnv + brReflRad ) * brSSw * brSOh + brFbDir;');
     expect(fb).toContain('brWs = brLuma( brSSw ) * brSOh;');
+    expect(fb).toContain('brWsRgb = brSSw * brSOh;');
+    expect(fb).toContain('brWsRgb = brEc * brSOch;');
     expect(fb).toContain('brRefl = vec3( 0.0 );'); // nothing stays inline
     // the specular occlusion is the one the inline terms use (baked AO x SSAO x cavity)
     expect(FRAG_AO_REFL_GLSL).toContain('float brSO = computeSpecularOcclusion( brDotNV, brAO * brSsK * brCav, material.roughness );');

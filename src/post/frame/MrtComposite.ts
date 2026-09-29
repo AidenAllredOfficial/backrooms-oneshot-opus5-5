@@ -5,7 +5,7 @@
 // bilaterally from half resolution and mixed over the fallback by its confidence (post/ssr/ssrGlsl.ts
 // SSR_COMPOSITE_SPECULAR). Without a reflection this frame (uSsrP.x = 0) the output is att0 + att1 exactly. Alpha is
 // 1, as on non-MRT frames (the decals' SSR alpha blending scales att0.a, which nothing downstream may read).
-// Uniform names tC0 / tS1 / tN2 are the frame graph's contract; URL reflView selects the debug outputs.
+// Uniform names tC0 / tS1 / tN2 / tWeight are the frame graph's contract; URL reflView selects the debug outputs.
 
 import * as THREE from 'three';
 import type { ReflView } from '../../core/debug.ts';
@@ -13,7 +13,7 @@ import { REFL_DEBUG, SSR_COMPOSITE_DEBUG, SSR_COMPOSITE_PARS, SSR_COMPOSITE_SPEC
 import { FullscreenQuad, quadMaterial } from './quad.ts';
 
 /** Uniform declarations: tC0 = att0 (HDR colour), tS1 = att1 (fallback specular x T, Ws x T), tN2 = att2 (oct view
- * normal, lobe roughness, 1 where written); all nearest, read with texelFetch; then the reflection inputs. */
+ * normal, lobe roughness, 1 where written); tWeight = att3 RGB BRDF weight x T. Read with texelFetch; then the reflection inputs. */
 export const MRT_COMPOSITE_PARS = /* glsl */ `
 precision highp float;
 precision highp int;
@@ -42,7 +42,7 @@ ${SSR_COMPOSITE_DEBUG}
 
 export function createMrtCompositeUniforms(): Record<string, THREE.IUniform> {
   return {
-    tC0: { value: null }, tS1: { value: null }, tN2: { value: null },
+    tC0: { value: null }, tS1: { value: null }, tN2: { value: null }, tWeight: { value: null },
     tSsr: { value: null }, tMeta: { value: null }, tDepth: { value: null }, uSsrP: { value: new THREE.Vector4() },
     uLin: { value: new THREE.Vector3(1, 1, 1) },
   };
@@ -70,12 +70,13 @@ export class MrtComposite {
     this.debug = REFL_DEBUG[mode] ?? 0;
   }
 
-  /** Resolve `src` (the 3-attachment sceneRT) into `dst`. */
+  /** Resolve `src` (the 4-attachment sceneRT) into `dst`. */
   render(renderer: THREE.WebGLRenderer, src: THREE.WebGLRenderTarget, dst: THREE.WebGLRenderTarget): void {
     const u = this.material.uniforms;
     u.tC0.value = src.textures[0];
     u.tS1.value = src.textures[1];
     u.tN2.value = src.textures[2];
+    u.tWeight.value = src.textures[3];
     u.tDepth.value = src.depthTexture;
     u.tSsr.value = this.ssr;
     u.tMeta.value = this.meta;

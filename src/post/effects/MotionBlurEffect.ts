@@ -69,7 +69,7 @@ export function motionShutter(low: number, strength: number): number {
 
 /** A camera cut: history must not be blurred across it. */
 export function isCameraCut(moved: number, turnedRad: number, dt: number, forced: boolean): boolean {
-  return forced || !(dt <= MOTION_BLUR.CUT_DT) || !(moved <= MOTION_BLUR.CUT_DISTANCE) || !(turnedRad <= (MOTION_BLUR.CUT_ANGLE_DEG * Math.PI) / 180);
+  return forced || !(dt > 0 && dt <= MOTION_BLUR.CUT_DT) || !(moved <= MOTION_BLUR.CUT_DISTANCE) || !(turnedRad <= (MOTION_BLUR.CUT_ANGLE_DEG * Math.PI) / 180);
 }
 
 /** TS twin of MB_FRAG's reprojection: the previous-frame uv of the pixel (uv, device depth). */
@@ -152,8 +152,8 @@ export class MotionBlurEffect extends Effect {
     const turned = this.hasPrev ? this.curQuat.angleTo(this.prevQuat) : 0;
     const cut = !this.hasPrev || isCameraCut(this.hasPrev ? this.curPos.distanceTo(this.prevPos) : 0, turned, dt, this.cutPending);
     const same = this.hasPrev && this.curVP.equals(this.prevVP);
-    const on = !cut && !same && this.taps > 0 && this.shutter > 0;
-    const dtc = Math.min(MOTION_BLUR.DT_MAX, Math.max(MOTION_BLUR.DT_MIN, dt));
+    const on = !cut && !same && this.taps > 0 && this.shutter > 0 && this.maxPx > 0;
+    const dtc = Number.isFinite(dt) ? Math.min(MOTION_BLUR.DT_MAX, Math.max(MOTION_BLUR.DT_MIN, dt)) : MOTION_BLUR.DT_MIN;
     if (on) {
       this.inv.copy(this.curVP).invert();
       this.uReproj.value.multiplyMatrices(this.prevVP, this.inv);

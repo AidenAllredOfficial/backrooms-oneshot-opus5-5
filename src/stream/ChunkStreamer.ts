@@ -532,6 +532,9 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   // ================================================================ upload queue helpers
 
   function queueStep(t: TileRec, step: number): void {
+    // A replacement build, quality rebake, eviction or failed step may abandon an unfinished live-tile swap.
+    // Release its unpublished textures and payload immediately, even when the displayed GPU build stays resident.
+    if (t.step === STEP_SWAP && step !== STEP_SWAP && t.gpu) uploader.cancelLightmapSwap(t.gpu);
     t.step = step;
     t.partial = false;
     if (step === STEP_NONE) {

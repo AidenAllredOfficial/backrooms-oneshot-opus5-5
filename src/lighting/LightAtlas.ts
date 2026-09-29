@@ -92,6 +92,25 @@ export function laInWindow(px: number, pz: number, camModX: number, camModZ: num
 export const laMaskIndex = (gi: number, gj: number): number =>
   ((gj % LA.CELLS) + LA.CELLS) % LA.CELLS * LA.CELLS + ((gi % LA.CELLS) + LA.CELLS) % LA.CELLS;
 
+/** Clamp a trilinear footprint away from missing atlas tiles. Coordinates are rel + camera mod SPAN, as in the
+ * shader; `valid` tests the mask at an unwrapped cell. Tile interiors and seams between loaded tiles stay exact. */
+export function laClampFootprint(
+  px: number, pz: number, camModX: number, camModZ: number, valid: (gi: number, gj: number) => boolean,
+): [number, number] {
+  const tx = Math.floor(px / TILE_SIZE), tz = Math.floor(pz / TILE_SIZE);
+  const lx = px - tx * TILE_SIZE, lz = pz - tz * TILE_SIZE, half = LV.STEP / 2;
+  const dx = lx < half ? -1 : lx > TILE_SIZE - half ? 1 : 0;
+  const dz = lz < half ? -1 : lz > TILE_SIZE - half ? 1 : 0;
+  const gi = Math.floor(px / CELL), gj = Math.floor(pz / CELL);
+  const loaded = (i: number, j: number): boolean => laInWindow((i + 0.5) * CELL, (j + 0.5) * CELL, camModX, camModZ) && valid(i, j);
+  const cx = (): void => { px = Math.min(Math.max(px, tx * TILE_SIZE + half), (tx + 1) * TILE_SIZE - half); };
+  const cz = (): void => { pz = Math.min(Math.max(pz, tz * TILE_SIZE + half), (tz + 1) * TILE_SIZE - half); };
+  if (dx !== 0 && !loaded(gi + dx, gj)) cx();
+  if (dz !== 0 && !loaded(gi, gj + dz)) cz();
+  if (dx !== 0 && dz !== 0 && !loaded(gi + dx, gj + dz)) { cx(); cz(); }
+  return [px, pz];
+}
+
 /** Shared uniform objects (the froxel inject and the motes bind them by reference). */
 export interface LightAtlasUniforms {
   uLaA: { value: THREE.Texture };
@@ -129,6 +148,25 @@ float brLaLvV( float y ) {
 	}
 	return ( min( k, ${f(LV.NY - 1)} ) + 0.5 ) * ${f(1 / LV.NY)};
 }
+// A missing tile's texels still hold its previous occupant. The centre mask alone cannot validate the other taps
+// of a trilinear footprint. Check neighbours only inside the half-texel band at a tile edge, including the diagonal.
+bool brLaValidCell( ivec2 cell, vec2 ct ) {
+	vec2 tile = floor( vec2( cell ) / ${f(TILE_CELLS)} );
+	if ( any( greaterThan( abs( tile - ct ), vec2( ${f(half)} ) ) ) ) return false;
+	ivec2 cm = cell - ${LA.CELLS} * ivec2( floor( vec2( cell ) * ${f(1 / LA.CELLS)} ) );
+	return ( int( texelFetch( uLaMask, cm, 0 ).r * 255.0 + 0.5 ) & ${LA_BIT.VALID} ) != 0;
+}
+vec2 brLaClampFootprint( vec2 p, ivec2 cell, vec2 ct ) {
+	vec2 lo = floor( p / ${f(TILE_SIZE)} ) * ${f(TILE_SIZE)};
+	vec2 local = p - lo;
+	ivec2 side = ivec2( local.x < ${f(LV.STEP / 2)} ? -1 : local.x > ${f(TILE_SIZE - LV.STEP / 2)} ? 1 : 0,
+		local.y < ${f(LV.STEP / 2)} ? -1 : local.y > ${f(TILE_SIZE - LV.STEP / 2)} ? 1 : 0 );
+	vec2 safe = clamp( p, lo + ${f(LV.STEP / 2)}, lo + ${f(TILE_SIZE - LV.STEP / 2)} );
+	if ( side.x != 0 && ! brLaValidCell( cell + ivec2( side.x, 0 ), ct ) ) p.x = safe.x;
+	if ( side.y != 0 && ! brLaValidCell( cell + ivec2( 0, side.y ), ct ) ) p.y = safe.y;
+	if ( side.x != 0 && side.y != 0 && ! brLaValidCell( cell + side, ct ) ) p = safe;
+	return p;
+}
 bool brLaSample( vec3 rel, out vec3 E, out float w, out vec3 Ld, out vec3 Ef ) {
 	E = vec3( 0.0 ); w = 0.0; Ld = vec3( 0.0, 1.0, 0.0 ); Ef = vec3( 0.0 );
 	vec3 p = rel + uLaCamMod;
@@ -146,6 +184,7 @@ bool brLaSample( vec3 rel, out vec3 E, out float w, out vec3 Ld, out vec3 Ef ) {
 	if ( ( m & ${LA_BIT.E} ) != 0 ) p.x = min( p.x, hi.x - ${f(LA.WALL_CLAMP)} );
 	if ( ( m & ${LA_BIT.S} ) != 0 ) p.z = min( p.z, hi.y - ${f(LA.WALL_CLAMP)} );
 	if ( ( m & ${LA_BIT.W} ) != 0 ) p.x = max( p.x, lo.x + ${f(LA.WALL_CLAMP)} );
+	p.xz = brLaClampFootprint( p.xz, cell, ct );
 	float y = p.y;
 	if ( ( m & ${LA_BIT.TOWER} ) != 0 ) y = 1.5 + mod( y - 1.5, ${f(STOREY_PITCH)} );
 	vec3 uvw = vec3( p.x * ${f(1 / LA.SPAN)}, brLaLvV( y ), p.z * ${f(1 / LA.SPAN)} );

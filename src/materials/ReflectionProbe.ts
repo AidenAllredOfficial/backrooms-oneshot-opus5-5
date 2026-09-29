@@ -12,7 +12,8 @@
 // - Refresh: a streamed tile arriving or leaving within the capture cube (PROBE.FAR on each axis from the anchor: the
 //   six faces' far planes bound a cube, not a sphere) marks every face stale (a new anchor
 //   starts over); stale faces are re-captured PROBE.BURST per frame and, once none is left, every face is re-filtered
-//   (the rough mips gather from all six). Otherwise one face is re-captured every PROBE.STEADY_EVERY frames round-robin and its mips re-filtered,
+//   (the rough mips gather from all six). Otherwise one face is re-captured every PROBE.STEADY_EVERY frames round-robin,
+//   its sharp level copied and every face's rough mips re-filtered,
 //   so flicker and moving props are at most 6 x STEADY_EVERY frames old. The box is re-estimated every
 //   PROBE.BOX_REFRESH frames, and on the next update after a chunk's layout arrives or leaves (the box rays read
 //   layouts: a still capture must not change once the stream has settled).
@@ -129,11 +130,13 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
 
   // the prefilter: a screen triangle drawn into one face / mip of the filtered cube
   const samples = new Float32Array(4 * PROBE.SAMPLES);
-  const sampleVecs = Array.from({ length: PROBE.SAMPLES }, () => new THREE.Vector4());
+  let kernels: { count: number; vectors: THREE.Vector4[] }[] = [];
+  let kernelSize = 0;
   const filter = new THREE.ShaderMaterial({
     name: 'br-probe-filter', glslVersion: THREE.GLSL3, vertexShader: QUAD_VERT, fragmentShader: PROBE_FILTER_FRAG,
     uniforms: {
-      tCube: { value: null }, uFace: { value: 0 }, uSize: { value: 1 }, uCount: { value: 1 }, uSamples: { value: sampleVecs },
+      tCube: { value: null }, uFace: { value: 0 }, uSize: { value: 1 }, uCount: { value: 1 },
+      uSamples: { value: Array.from({ length: PROBE.SAMPLES }, () => new THREE.Vector4()) },
     },
     depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false,
   });
@@ -259,16 +262,24 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
     const rt = filteredRT!;
     const u = filter.uniforms;
     u.tCube.value = captureRT!.texture;
+    // These kernels depend only on the preset. A steady capture used to rebuild all GGX samples every four frames.
+    if (kernelSize !== size) {
+      kernels = Array.from({ length: levels }, (_, k) => {
+        const r = k / (levels - 1);
+        const count = probeSamples(r * r, size, samples);
+        return { count, vectors: Array.from({ length: PROBE.SAMPLES }, (_, i) => new THREE.Vector4().fromArray(samples, 4 * i)) };
+      });
+      kernelSize = size;
+    }
     for (let k = 0; k < levels; k++) {
-      const r = k / (levels - 1);
-      const n = probeSamples(r * r, size, samples);
-      for (let i = 0; i < PROBE.SAMPLES; i++) sampleVecs[i].fromArray(samples, 4 * i);
-      u.uCount.value = n;
+      u.uCount.value = kernels[k].count;
+      u.uSamples.value = kernels[k].vectors;
       const s = Math.max(1, size >> k);
       u.uSize.value = s;
       rt.viewport.set(0, 0, s, s);
       for (let f = 0; f < 6; f++) {
-        if ((mask & (1 << f)) === 0) continue;
+        // Rough GGX samples cross cube faces. A change on +X affects rough lookups on its neighbours too.
+        if (k === 0 && (mask & (1 << f)) === 0) continue;
         u.uFace.value = f;
         renderer.setRenderTarget(rt, f, k);
         renderer.render(quadScene, quadCam);
@@ -372,9 +383,9 @@ export function createReflectionProbe(globals: MaterialGlobals, q: QualityConfig
               liveValid = true;
               pending = false;
             }
-          } else {
-            // the last stale face: every face's rough mips gather from all six
-            prefilter(renderer, wasDirty && dirty === 0 ? ALL_FACES : faces);
+          } else if (!wasDirty || dirty === 0) {
+            // Keep the last complete cube published while a streamed change refreshes the six capture faces.
+            prefilter(renderer, wasDirty ? ALL_FACES : faces);
           }
         } finally {
           for (const o of hidden) o.visible = true;

@@ -93,6 +93,8 @@ class FakeUploader implements TileUploader {
   calls: Call[] = [];
   frame = 0;
   disposed = new Set<string>();
+  stagedSwaps = new Set<string>();
+  cancelledSwaps: string[] = [];
   fades = new Map<string, number>();
   failTex = new Set<string>();
   work = { t: 0 };
@@ -131,7 +133,14 @@ class FakeUploader implements TileUploader {
     return done;
   }
   swapLightmap(gpu: TileGpu, lm: LightmapData, more: () => boolean): boolean {
-    return this.run('swap', gpu.key, lm, this.swapUnits, more);
+    const done = this.run('swap', gpu.key, lm, this.swapUnits, more);
+    if (done) this.stagedSwaps.delete(gpu.key); else this.stagedSwaps.add(gpu.key);
+    return done;
+  }
+  cancelLightmapSwap(gpu: TileGpu): void {
+    this.cancelledSwaps.push(gpu.key);
+    this.stagedSwaps.delete(gpu.key);
+    this.cur.delete('swap' + gpu.key);
   }
   setFade(gpu: TileGpu, f: number): void { this.fades.set(gpu.key, f); }
   attachDynamic(): DynamicMeshHandle { return { setOffset() {}, dispose() {} }; }
@@ -593,6 +602,37 @@ describe('residency state machine', () => {
     // the displayed tiles stay until their replacement is uploaded
     expect(r.st.isReady(1, false)).toBe(true);
   });
+
+  it.each(['same atlas quality', 'new atlas quality', 'eviction', 'reset'] as const)(
+    '%s cancels unfinished live-tile lightmap uploads immediately', async (action) => {
+      const r = rig({ ...QUALITY.low, streamRadius: 0 });
+      r.tick(C / 2, C / 2);
+      await r.answerLayouts();
+      await r.answerBuilds();
+      for (let i = 0; i < 60; i++) r.tick(C / 2, C / 2, 20);
+      const displayed = [...r.st.tiles()].find((t) => t.key.q === 0)!;
+      const materials = displayed.materials;
+      r.up.swapUnits = 9;
+      r.up.unitMs = 1.2;
+      expect(await r.answerBakes((k) => k.q === 0)).toBe(1);
+      r.tick(C / 2, C / 2);
+      expect(r.up.stagedSwaps.has(displayed.keyStr)).toBe(true);
+      if (action === 'same atlas quality' || action === 'new atlas quality') {
+        await r.st.setQuality({ ...(action === 'same atlas quality' ? QUALITY.medium : QUALITY.high), streamRadius: 0 });
+        expect(displayed.materials).toBe(materials);
+        expect(r.st.stats().tilesResident).toBe(4);
+      } else if (action === 'eviction') {
+        r.tick(10 * C, 10 * C);
+      } else {
+        await r.st.reset({
+          opts: { seed: 2, seedText: '2', forceZone: null, forceMood: null, forceLandmark: null, testScene: null, lights: 'default' },
+          bake: bakeQualityOf({ ...QUALITY.low, streamRadius: 0 }), bakeTerm: 'all', validate: false,
+        });
+      }
+      expect(r.up.stagedSwaps.size).toBe(0);
+      expect(r.up.cancelledSwaps).toContain(displayed.keyStr);
+    },
+  );
   it('a residency step that throws fails that tile once (logged) instead of throwing every frame', async () => {
     const r = rig({ ...QUALITY.low, streamRadius: 0 });
     r.up.failTex.add('0:0:0:1');
