@@ -4558,6 +4558,10 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - No uniforms and no samplers are added. `tests/materials/samplerBudget.test.ts` pins high and ultra at shell 16,
     props 16, decal 15 and water 13 units, and takes a census of fragment uniform vectors. High and ultra pack to
     218-219 of the WebGL2 minimum of 224, all of the growth from MAT_COUNT 30.
+  - Cost: while a feature's const array is all zeros, the compiler drops its code. Once any row sets a value, every
+    surface program pays for it through register pressure, whether or not such pixels are on screen. At ultra
+    (2560x1440) that is about 0.1-0.3 ms per feature (TEX2.md). At high, EON, dirt, wear, tint and specular
+    occlusion on concrete and CMU together cost +0.05-0.12 ms.
 
 **Must NOT touch:** lightmap encoding (WP7) and post (WP11). All tuning constants live in `materials/chunks/*.ts`.
 

@@ -68,6 +68,17 @@ v2 conventions").
   against a ray-marched reference, and the grime helpers. samplerBudget pins the high / ultra units (16 / 16 / 15 / 13)
   and adds a fragment uniform-vector census: at most +10 vec4 over a5c03e1, packed ≤ 224. High and ultra pack to
   218-219, so 5 vec4 of headroom is left, and nothing in v2 may add a uniform. params.test covers the wiring points.
+- **Cost** (`__backrooms.gpuBench`, whole frame, 3 interleaved rounds against 0a):
+  - At the defaults: +0.01 / −0.02 ms at high (1600x900, g05 / g08), and +0.05 to +0.14 ms at ultra (2560x1440,
+    within round-to-round noise).
+  - All-zero const arrays let the compiler drop a feature's code. Once any layer sets a parameter, every surface
+    program carries that code, and the register pressure costs the whole shader even with no such pixel on
+    screen. Presence-only cost at ultra, with the parameter set on the unplaced METAL_BARE: EON +0.16 to +0.28 ms,
+    dirt +0.08 to +0.32, wear +0.17 to +0.24 (brRel's 1x1-mip fetch), detSO +0.12 to +0.16, detTint ~0.
+  - With all of them on CONCRETE_FLOOR and CMU_PAINTED and in view, high costs +0.05 ms (g05) and +0.12 ms (g08,
+    a CMU wall filling the screen).
+  - Lanes that switch these on should say so in their cost reports. The integrator should budget the union, since
+    each program is shared across layers.
 - **Consumers affected:**
   - Lanes A-E set `sigma`, `pile`, `dirt`, `wear`, `reliefM`, `detRep`, `detTint` and `detSO` in their rows.
   - Lane A: a pile layer (`pile.x > 0`) loses the cavity visibility of the baked light, so its textile hooks must
