@@ -4126,12 +4126,12 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 | Layer | Recipe essentials |
 |---|---|
 | WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls with ±2% shade offset. Faint damask/chevron SDF motif on a 0.3 m diamond lattice (±4% value, embossed height 0.2 mm). Vertical roll-seam ridge. Paper fibre fbm at 1 mm (supersampled), slight cockle (~0.25 mm over 7 cm). Satin vinyl, roughness 0.63–0.72. (Lifted edges and fading come from the WP7 mask.) |
-| CARPET_L0 | Loop-pile micro grid (period 3 mm, **supersampled 4×**: it is below the 2.3 mm texel Nyquist limit, so the texture holds its filtered average plus pile normals) × Worley tufts. Isotropic strand speckle (no directional streaks: the layer uses hex tiling without rotation). Colour mottling (±6%). Roughness 0.95. (Macro blotches come from the mask.) |
+| CARPET_L0 | Worn cut pile (saxony), 1.2 m frame, hex tiled at 0.6 m (no autocorrelation peak above 0.02 at 0.6 or 1.2 m lags, top-down view=albedo). ormh.r = pile visibility V (mean 0.61, p5 0.24: 3.3 mm tuft tips shifted along their lean, dark cracks and holes between them, clumps of ~20 mm that differ in fullness ±15 % and part in short dark runs where neighbours lean apart, ~20 % matted patches); ormh.b/a = the pile lean (aux `lean`). Albedo = the fibre colour: per-clump ±5 % and per-tuft ±7 % value, ±2 % hue, heathered off-shade tufts (5 % olive-brown, 3 % straw, 1 % near-black), paler and less saturated tips, ±4 % mottle, sparse lint; no crown / crease shading (that is V). heightScale 4 mm, normalStrength 0.45, roughness 0.86-1. Detail D0. Shading, nap and grime: Lane A below. |
 | CEILING_TILE | 2×2 tiles of 0.6 m. Mineral-fibre fissures (thresholded warped ridged noise, "worm holes") plus pinholes. Raised 24 mm off-white T-bar grid (roughness 0.45, metal 0.3, height step). Per-tile brightness ±3%. Slight yellowing. |
 | PANEL_LENS | Prismatic pyramid grid (4 mm) in the normal map. Two tube hot-stripes in the emissive mask (`ormh.a`, used by the low preset only; scaled so the lens mean matches the old framed texture). One continuous sheet: no frame per 0.6 m repeat (a 2x4 used to read as two squares, a sky panel as four). Albedo pale grey-white. |
 | TRIM_PAINT | Semi-gloss paint, orange peel, edge scuffs. |
 | WALLPAPER_MANILA | Beige vertical pinstripes, 0.15 m pitch, linen emboss, cockle; satin roughness ~0.72. |
-| CARPET_OFFICE | 0.6 m carpet tiles, pile direction rotated per tile (roughness and normal sheen), blue-grey speckle. |
+| CARPET_OFFICE | Level-loop carpet tiles (0.6 m) over a 1.2 m frame; the loop rows run along u in every tile and the shader's per-tile rotation lays them quarter-turn / random. Tweed flecks 5-15 mm long along the rows (charcoal 45 %, slate 33 %, light grey 13 %, black 7 %, teal or rust 2 %, a palette that hits the table albedo within 3.5 %) on 2.34 mm rows of exactly 2 texels (rows off the texel grid beat into moire), per-row streaks, ±3 % dye per texture tile, a fine seam hidden by the pile in 10-40 mm runs. V 0.78 (row gaps), lean = the row direction × 0.3, roughness 0.86-0.92. Detail D1. |
 | DRYWALL | Roller stipple, eggshell. |
 | VINYL_VCT | 0.3 m tiles. Calendered vinyl chips in three populations (dark 30 %, light 25 %, accents and charcoal 12 %) stretched 3:1 along u (the per-tile rotation lays them quarter-turn) over faint marbling; 30–40 % of the face is > 6 % off the tile median. Tile tone ±3 %, 4 % other-lot tiles at ±6 %. Continuous 0.3 mm butt joints with a 1 mm dirt fillet, dirt-filled corner chips on 5 % of the tiles. Wax 0.2–0.28 (joints 0.6); glaze lobe 0.22, rough component 0.7. |
 | CONCRETE_FLOOR | Square 2.4 m generator frame (2.34 mm texels, hex cell 1.2 m; the tower risers, v = y / 3.0, stretch it 1.25×). A hard-troweled slab is flat, so it reads through tone and sheen: soft clouds, lacy hydration mottle, flush aggregate shadows, dark specks and light / dark flecks, 4–8 mm pinholes with dirty cores (2 mm deep: pits, never beads), serpentine power-trowel passes (0.45–0.58 m discs, the last pass wins: fish-scale rims and partial blade arcs) with burnished zones (darker, glossier) and chalky laitance, dragged-load scratches, ±1 mm waviness; roughness 0.35–0.8, darker = glossier. ormh.a (`mask`) holds the trowel swirl outside the laitance. Detail D12 SLAB. Joints, spalls, cracks, pours, traffic lanes and finish classes are world-space (WP9, lane B). (Oil spots are decals.) |
@@ -4142,8 +4142,9 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 | POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.76. Hand-set joints: each face is inset 1.2–1.9 mm per side with a ±0.25 mm wobble. A fat-edge glaze ridge on the cushion; batch shade ±4 %, 5 % cream and 3 % blue-white tiles; crazing (a 0.8 mm net plus hairlines) on 12 %; conchoidal chips showing the buff bisque on 6 %; a hazy glaze rim at the joint. Sanded grout sRGB (176, 178, 170), concave, roughness 0.8. `ormh.a` is the grout coverage: the shader colours the grout along its lines in world space. |
 | POOL_MOSAIC | 2.5 cm glass mosaic on 0.3 m sheets, with wider joints at the sheet edges. Chips with 2 mm rounded corners (grout diamonds), a 1 mm edge round, a 0.15 mm dome, lippage ±0.25 mm and tilt ±0.5°. Five related hues (±6°, value 0.83–1.19) plus 5 % accents. The colour sits inside the glass: cloud (±8 %), streaks, bubbles in 5 % of the chips, a darker, more saturated edge band. Chip roughness 0.05–0.08, grout 0.8; `ormh.a` is the grout coverage. |
 | METAL_PAINTED, METAL_RUST, METAL_GRATE | Lane E (below): a neutral wear-ready topcoat with oil-canning, a wear field (ormh.a) and a scratch field (albedo.a); the corrosion order and its stages (paint remnants at runtime); galvanised 19-W-4 grating with dark holes. |
+| FABRIC_PARTITION | Polyester basket weave seen from 1-3 m (the 1.17 mm threads are detail D7's): faint horizontal barre streaks (±3 % and ±2 %), two-tone heather (× 0.82 / × 1.14, softened along the thread axes), 2 % slubs 4-10 mm long, 2 % pills, cloth waviness (0.8 mm over 5-20 cm, normalStrength 2) for the grazing sheen. V 0.88, roughness 1. Also dresses upholstery, seats, bags and mattresses. |
 | WOOD, PLASTIC, RUBBER | Lane E (below): boards cut from their own logs (cathedral arches, butt joints, finish-wear field); moulded plastic with flow lines, sink marks and a scuff field; black rubber with bloom and crazing. |
-| FABRIC_PARTITION, PLENUM | Standard recipes. |
+| PLENUM | Standard recipe. |
 | FLOOR_PAINT | A 0.25 mm film (yellow or white by tint). On stripes u runs across and v along (mesh/decals.ts): wheel-track bands with tyre dirt, wear that takes the slab's high points first (a pore stipple, not blobs), roughness 0.4 fresh to 0.6 worn. Edge flakes, joints, the slab's detail and wetness come from the shader. |
 | TERRAZZO | 0.6 m precast tiles (repeat 1.2, tileSize 0.6): polygonal crushed-marble chips (Voronoi cells shrunk by a per-chip gap at 15, 6 and 3 mm lattices, ~70–75 % coverage) in a restrained palette (white, light grey, buff, charcoal, rare muted accents) with per-chip value, a tone gradient and veins; chips 0.07–0.1, matrix 0.16–0.22 (and ~20 µm lower), pits 0.4, 1.5 mm grout 0.7; per-tile tilt ±0.15° and lippage, so reflections step at the joints. Detail D13 POLISH. |
 | METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms, white-rust blooms and drip lines in the rib bottoms (lane E). Frame 1.2 m. |
@@ -4214,6 +4215,68 @@ wide or grazing light, lighter where the old cone had blacked them out. With `DI
 reports each layer's aux range (`stats().auxRange`).
 
 #### Lane A: textiles
+Pile under overhead light reads through occlusion and view dependence, not through normals (the baked light on floors
+is ~0.5-0.6 directional and near vertical). The recipes (table above) store the pile visibility V in ormh.r and, on
+the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades them (TS twins `pileVisibility`,
+`napDiffuse`; tests/materials/textile.test.ts):
+- **Pile visibility** (matPost, layers with `phys.pile` [kp, kv]: L0 [1, 0.8], office [1, 1.2], fabric [0.6, 1.5]):
+  the diffuse albedo the lights see (`material.diffuseContribution`: punctual, baked and ambient alike) × Dv = 1 − kp
+  (1 − V) μv^kv (μv = n_g · v): looking down the gaps between the tufts show dark, at grazing the tips hide them.
+  Linear in V, so the mips are unbiased (the same floor area at 1.5 m and 6 m under the same angle, over view=albedo:
+  +1-2 % far against near; a5c03e1 +7 %). Dv stands for the generic texture-cavity multiply, which postLight divides back out of the
+  ambient, and for 0b's cavity visibility on the baked direct light, which skips pile layers; wet pile uses
+  V^(1 + 0.6 × absorbed water) (its valleys open). The Level 0 fibre trap T = 0.69 × chroma^0.3 now multiplies only
+  the diffuse (it was 0.55 on the whole radiance, sheen and specular included). The gaps keep their luminance but are
+  deeper in colour than the tips (their light has crossed more dyed fibre; a grey multiplier left them olive-grey up
+  close): the visibility K = Dv × the detail's becomes K + (1 − K) 0.15 (c / m − 1) per channel, c = (albedo / max
+  channel)^1.5 and m its luminance-weighted mean (TS twin `pileGap`), linear in K. Under standing water and a saturated
+  film, postWet raises ormh.r to 1 on pile layers (Dv keeps the saved V): the generic specular occlusion and the SSR
+  weight read ormh.r, and with V there a puddle's reflection was occluded by the tuft gaps (specular occlusion ~0.47
+  instead of ~0.93 at the mean V, grazing; +1-2 % on the damp patch of the LOBBY pitch −12° framing).
+- **EON** (lane 0b): σ 0.75 (L0), 0.5 (office), 0.4 (fabric). It darkens rough pile seen at grazing under overhead
+  light (forward scattering), which the trap absorbs: the gallery 11 carpet / wall luminance ratio is −4 % at high and
+  +3 % at medium against a5c03e1. Under the torch it flattens the spot a little (0.6 R over the centre 0.806 against
+  0.804 in a5c03e1 and 0.774 before EON).
+- **Detail on pile layers:** the detail map's multiplier (tuft cracks, ply splits) is applied as visibility with the
+  same view hiding, 1 + (am − 1)(0.35 + 0.65 μv^kv), not as albedo (view=albedo keeps the fibre colour).
+- **Nap** (cut pile): s = v_t · lean, v_t the unit tangent direction to the camera; the diffuse × clamp(1 − 0.32 s
+  sin θv, 0.6, 1.4) (fibre ends in view when the pile leans toward the camera: darker) and the sheen × clamp(1 − 0.6 s,
+  0.2, 1.8). The lean is the texel clump lean (× 0.6) plus, on Level 0 floors, a world nap along each 3.84 m broadloom
+  roll (20 % of the widths laid reversed, ±25° wobble over 0.6 m, magnitude 0.5 + 0.5 × wear), flipped inside
+  pile-reversal patches (~15 % of the floor where a 0.96 m value noise plus a 0.3 / 0.1 m wobble crosses a threshold:
+  0.3-1.2 m blotches with a crisp edge, one noise instead of a disc loop). Yaw 0 against yaw 180 at pitch −25° from one
+  eye: the floor changes by 10 % relative to the base (EON's backscatter takes back part of it).
+- **Office tiles:** the loop-pile detail turns with its tile (rotated about the tile centre by the tile's M, its slope
+  turned back); k = (v_t · row)² shades the diffuse × (0.96 + 0.08 k (1 − μv)) and the sheen × (0.6 + 0.8 k); a world
+  dye lot per 0.6 m tile (±3 %, one in 12 a replacement from another lot at ±8 %), one in 20 with a lifted edge, and the
+  seam drawn analytically (1.5 mm × 0.6, anti-aliased by the footprint, so it survives the mips).
+- **Sheen:** colour = amount (L0 0.3, office 0.3, fabric 0.45) × mix(sqrt(albedo), its luma, 0.3) (fibre surfaces
+  reflect nearly white), × (1 − 0.8 × absorbed water) (damp fibres keep a little grazing gloss; at half, damp patches
+  read grey at grazing), × (1 − 0.7 film), × (1 − 0.2 wear), none under standing water.
+- **Carpet grime** (profile 1): the damp patch ends at a wicking front ~3 cm wide, ragged by ±2 cm, sized in metres
+  through the wet field's slope (a shallow field crossing the threshold draws a contour, not a speckled band), then
+  deepens inward; a dried tide ring 2.5 cm outside it; worn lanes close the pile (V → mix(V, 0.9, 0.7 w)) and hold soil
+  (× (0.90, 0.87, 0.82)) instead of lightening; spills of 5-30 cm (25 % of 2.4 m cells, at most one per cell and kept inside
+  it, so a pixel hashes its own cell only) with a sharp blotchy edge and a darker 1.5 cm rim. Thin world features are filtered by the pixel footprint: the spill edge and rim widen to it (the
+  rim keeps its coverage), the reversal-patch edge is no sharper than fwidth of its field, and the front's 2.5 cm
+  raggedness fades out before its cells shrink below a pixel (unfiltered, they alias into dots that crawl in motion).
+- **Detail lattices:** a regular period that is not a power-of-two number of texels beats in the box-filtered mips
+  (94 tuft rows at 5.4 texels drew horizontal streaks 1-2 m away): the tuft rows, the loop pitch and the weave use 2, 4
+  or 8 texels.
+- Debug view 25 `textile`: r = Dv, g = the nap diffuse factor / 2, b = 0.5 + 0.5 s.
+- **Cost** (RTX 5070 Ti laptop; whole frame, `gpuBench(20)` after `waitForIdle`, tex-integ 3eb5d47 against lane A,
+  median of 2 interleaved rounds; the rounds agree within ~0.02 ms at high, ~0.08 at ultra): high (1600 × 900) +0.24 ms
+  on gallery 00, +0.26 Level 0 straight down, +0.09 EXECUTIVE_SUITE −55°, +0.03 on a frame without textiles
+  (CONCRETE −55°); ultra (2240 × 1260) +0.55, +0.65, +0.18, ±0.02. Where it goes, measured by reverting one part at a
+  time against the earlier tex-integ ff42a23 at high: SMAA ~0.1 ms on a carpet-filled frame (the pile's pixel-scale
+  contrast gives it edges everywhere: without SMAA the straight-down difference drops from +0.34 to +0.25); the 1.2 m
+  frame's finer mips ~0.03-0.05; the pile shading (Dv, nap, detail visibility, trap) ~0.1, and removing any one of its
+  parts saved at most 0.03; EON's presence 0.06 on every frame, which lanes B and C now share. The spill lookup that
+  reads one feature cell instead of 3 × 3, and the office's lazy outline wobble, took 0.05-0.08 off. Reading `BR_L_SIGMA` and `BR_L_PILE` through compares instead of dynamically indexed const arrays
+  (lane 0's materialPost.ts and pom.ts) measured a further 0.01-0.04 ms at high. textures.genMs 210 against 213,
+  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB. All of this is over the lane's +0.03 / +0.07 ms.
+- Not done: the torch retro term (it needs the punctual share of the direct diffuse, which the hooks do not see); lint
+  / hair SDFs and buckling ripples.
 
 #### Lane B: concrete, terrazzo, floor paint
 Under overhead lamps a slab shows almost no diffuse relief (for Lambert, Σ n·Lᵢ = n·ΣLᵢ), so real concrete reads
