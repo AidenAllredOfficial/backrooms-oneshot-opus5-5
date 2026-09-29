@@ -153,7 +153,7 @@ void gen(vec2 uv, inout Surf s) {
 export const WALL_RECIPES: RecipeTable = {
   [Mat.WALLPAPER_L0]: {
     glsl: WALLPAPER_L0, normalStrength: 1.5, heightScale: 0.0004, trim: [1.007, 1.018, 1.037],
-    phys: phys(0.35, { det: 2, detS: 1, sigma: 0.2 }), aux: 'detailMask',
+    phys: phys(0.35, { det: 2, detS: 1, detRep: 0.5, sigma: 0.2 }), aux: 'detailMask',
   },
   [Mat.WALLPAPER_MANILA]: {
     glsl: WALLPAPER_MANILA, normalStrength: 2.0, heightScale: 0.0006, trim: [1.009, 1.011, 1.014],
