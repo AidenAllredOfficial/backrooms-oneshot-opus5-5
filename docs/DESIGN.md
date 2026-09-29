@@ -4241,8 +4241,9 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
   turned back); k = (v_t · row)² shades the diffuse × (0.96 + 0.08 k (1 − μv)) and the sheen × (0.6 + 0.8 k); a world
   dye lot per 0.6 m tile (±3 %, one in 12 a replacement from another lot at ±8 %), one in 20 with a lifted edge, and the
   seam drawn analytically (1.5 mm × 0.6, anti-aliased by the footprint, so it survives the mips).
-- **Sheen:** colour = amount × mix(sqrt(albedo), its luma, 0.3) (fibre surfaces reflect nearly white), × (1 − 0.5 ×
-  absorbed water) (damp fibres keep a grazing gloss), × (1 − 0.7 film), × (1 − 0.2 wear), none under standing water.
+- **Sheen:** colour = amount (L0 0.3, office 0.3, fabric 0.45) × mix(sqrt(albedo), its luma, 0.3) (fibre surfaces
+  reflect nearly white), × (1 − 0.8 × absorbed water) (damp fibres keep a little grazing gloss; at half, damp patches
+  read grey at grazing), × (1 − 0.7 film), × (1 − 0.2 wear), none under standing water.
 - **Carpet grime** (profile 1): the damp patch ends at a wicking front ~3 cm wide, ragged by ±2 cm, sized in metres
   through the wet field's slope (a shallow field crossing the threshold draws a contour, not a speckled band), then
   deepens inward; a dried tide ring 2.5 cm outside it; worn lanes close the pile (V → mix(V, 0.9, 0.7 w)) and hold soil
