@@ -59,7 +59,8 @@ v2 conventions").
   flakes). Other decals are unchanged. Consumer: `chunks/family/concrete.ts` (edge flakes); tests/mesh/decals.test.ts.
 - **WP7 mask A (`src/bake/mask.ts`, the floor damage block):** the carpet traffic wear (corridors, thresholds, lanes
   between openings) also runs on CONCRETE_FLOOR, TERRAZZO and VINYL_VCT at 0.8 x the carpet amplitude; on those hard
-  floors, texels in a rack aisle (1.0-4.2 m between occluder boxes reaching 1-2.5 m above the floor and at least
+  floors every opening also wears an entry fan into its rooms (3 m deep, widening from the door), and texels in a rack
+  aisle (1.0-4.2 m between occluder boxes reaching 1-2.5 m above the floor and at least
   0.9 m long along the aisle, near occluders over 1.8 m) get two wheel tracks 0.45 m either side of the aisle centre
   (one in aisles under 1.6 m), at (0.7 + 0.3 decay) amplitude. Under a rack: 0. Consumers: the concrete (burnished
   lanes) and terrazzo (polish loss) responses in `chunks/family/concrete.ts`; VINYL_VCT's response is lane C's.

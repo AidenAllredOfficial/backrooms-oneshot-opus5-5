@@ -493,9 +493,25 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
         }
         a = Math.max(a, amp * w);
       }
-      // rack aisles on hard floors: forklift / pallet-jack wheel tracks between tall shelving on both sides (daily
-      // traffic whatever the decay)
-      if (hard && job.boxTop9[c] > floorY + AISLE_MIN_H) a = Math.max(a, (0.7 + 0.3 * decay) * (0.75 + 0.25 * wn) * aisleTracks(job, x, z, floorY, c));
+      if (hard) {
+        // entry fans: traffic funnels through every opening and spreads into the room (3 m deep, widening), so a
+        // single-door room (a restroom) still wears from its door
+        if (!cache.open) wearNear(g, cache, c);
+        const o = cache.open as Float64Array, room = g.room[c];
+        let f = 0;
+        for (let k = 0; k < cache.nOpen; k++) {
+          const i = k * 5;
+          if (o[i + 3] !== room && o[i + 4] !== room) continue;
+          const dn = Math.abs(o[i + 2] === 0 ? x - o[i] : z - o[i + 1]) * CELL;
+          const dt = Math.abs(o[i + 2] === 0 ? z - o[i + 1] : x - o[i]) * CELL;
+          if (dn > 3 || dt > 2) continue;
+          f = Math.max(f, (1 - sstep(0.3, 3, dn)) * (1 - sstep(0.4 + 0.2 * dn, 0.7 + 0.35 * dn, dt)));
+        }
+        a = Math.max(a, amp * 0.75 * f);
+        // rack aisles: forklift / pallet-jack wheel tracks between tall shelving on both sides (daily traffic
+        // whatever the decay)
+        if (job.boxTop9[c] > floorY + AISLE_MIN_H) a = Math.max(a, (0.7 + 0.3 * decay) * (0.75 + 0.25 * wn) * aisleTracks(job, x, z, floorY, c));
+      }
     }
   }
   maskOut.r = r > 1 ? 1 : r; maskOut.g = gr > 1 ? 1 : gr; maskOut.b = b > 1 ? 1 : b; maskOut.a = a > 1 ? 1 : a;

@@ -1,16 +1,17 @@
 // tests/bake/mask.test.ts — surface mask (WP7 bake/mask.ts) details that the lightmap-level tests do not isolate: the
 // pool splash zone (package B): wet deck within 1.2 m of a pool's water edge, nothing on the pool's own floor or far
 // from it, and the same value at the same world point whichever tile's bake evaluates it (seamless tiles); the
-// hard-floor traffic wear of texture realism v2 lane B (corridor wear at 0.8 x carpet, rack-aisle wheel tracks).
+// hard-floor traffic wear of texture realism v2 lane B (corridor wear at 0.8 x carpet, rack-aisle wheel tracks, entry
+// fans from the doors).
 
 import { describe, expect, it } from 'vitest';
 import { CELL } from '../../src/core/constants.ts';
-import { Mat, PropKind } from '../../src/core/ids.ts';
+import { EdgeKind, Mat, PropKind } from '../../src/core/ids.ts';
 import type { TileKey } from '../../src/core/grid.ts';
 import { cellIdx } from '../../src/core/grid.ts';
 import { createJob } from '../../src/bake/job.ts';
 import { createMaskCache, maskAt, maskOut } from '../../src/bake/mask.ts';
-import { carveRoom, handNeighborhood, Q_HIGH, solidLayout } from './helpers.ts';
+import { carveRoom, handNeighborhood, Q_HIGH, setEx, solidLayout } from './helpers.ts';
 
 describe('surface mask: pool splash zone', () => {
   const l = solidLayout({ s: 0, cx: 0, cz: 0 });
@@ -101,5 +102,21 @@ describe('surface mask: hard-floor traffic wear (texture realism v2 lane B)', ()
     // carpet keeps its own (corridor / threshold / lane) wear: no aisle tracks
     for (let c = 0; c < 1024; c++) l.floorMat[c] = Mat.CARPET_L0;
     expect(wearAt(l, 9.1, 13.05)).toBe(0);
+  });
+
+  it('hard floors wear in a fan from each door into the room', () => {
+    const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+    carveRoom(l, 2, 2, 10, 12);
+    carveRoom(l, 10, 2, 20, 12);
+    setEx(l, 10, 6, EdgeKind.DOORWAY); // the door: line x = 12 m, z 7.2-8.4 m
+    for (let c = 0; c < 1024; c++) { l.decay[c] = 128; l.humidity[c] = 0; l.floorMat[c] = Mat.TERRAZZO; }
+    const zd = 6.5 * CELL;
+    const near = wearAt(l, 12 + 1.0, zd), mid = wearAt(l, 12 + 2.0, zd), far = wearAt(l, 12 + 4.5, zd);
+    expect(near).toBeGreaterThan(0.2);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(near);
+    expect(far).toBe(0);
+    expect(wearAt(l, 12 + 1.0, zd + 2.2)).toBe(0); // beside the fan
+    expect(wearAt(l, 12 - 1.0, zd)).toBeGreaterThan(0.2); // both rooms
   });
 });
