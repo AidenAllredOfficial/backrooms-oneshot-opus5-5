@@ -184,7 +184,7 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
   vec3 blk = TABLE_ALBEDO * (1.0 + 0.08 * (r2.x - 0.5)) * batch * (1.0 + 0.05 * fbm(uv, PM(30.0), 3, 83));
   blk *= 1.0 - 0.5 * voidM * fM;
   blk *= mix(1.0, 0.8, chipM * fM);
-  vec3 mort = srgb8(160.0, 156.0, 146.0) * (1.0 + 0.06 * fbm(uv, PM(25.0), 2, 84)) * (0.94 + 0.12 * vnoise(uv, PM(250.0), 85));
+  vec3 mort = TABLE_ALBEDO * vec3(1.16, 1.15, 1.12) * (1.0 + 0.06 * fbm(uv, PM(25.0), 2, 84)) * (0.94 + 0.12 * vnoise(uv, PM(250.0), 85));
   float eff = smoothstep(0.3, 0.7, fbm(uv, PM(6.0), 3, 86)) * (1.0 - smoothstep(0.0, 0.015, e));
   vec3 col = mix(mort, blk, fM);
   col = mix(col, saturation(col, 0.6) * 1.15, 0.6 * eff);
@@ -203,7 +203,7 @@ export const MASONRY_RECIPES: RecipeTable = {
     phys: phys(0.3, { pomTop: 0.95, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.2 }),
   },
   [Mat.CMU_RAW]: {
-    glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.984, 0.99, 1.0], aux: 'detailMask',
+    glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.99, 0.993, 1.001], aux: 'detailMask',
     phys: phys(0.6, { pomTop: 0.95, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.3 }),
   },
 };

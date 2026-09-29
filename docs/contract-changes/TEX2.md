@@ -107,9 +107,10 @@ v2 conventions").
 
 ### 2026-09-28 — C: CMU and tile recipes, D6 / D14 / D15, world block variation, CMU_RAW placement — APPLIED
 - **Status:** APPLIED by lane C on its branch. `LAYER_DEFS` rows 8, 12, 13 and 14 keep their numbers (the recipes are
-  trimmed to them). Row 28 CMU_RAW `albedoMean` [0.22, 0.215, 0.2] -> [0.28, 0.274, 0.255] (sRGB 144, 143, 138): D15
-  folds the grain cavity into its albedo multiplier (mean 0.887), so the rendered face is ~0.25, the middle of natural
-  grey block; at 0.22 the PIPEWORKS walls rendered at ~0.195 and read near-black under the zone's bulbs.
+  trimmed to them). Row 28 CMU_RAW `albedoMean` [0.22, 0.215, 0.2] -> [0.38, 0.372, 0.346] (sRGB 166, 164, 159),
+  light natural grey block; at 0.22-0.28 the PIPEWORKS walls read near-black brown under the zone's bulbs. D15's
+  albedo multiplier does not lower it: the shader divides it by the detail's 1x1-mip mean, so the rendered face
+  averages the table value.
 - **Channels:** CMU_PAINTED and CMU_RAW use aux `'detailMask'` (ormh.a 1 on faces, 0.3 in the joints; the masonry hooks
   also read it as the face / joint share). POOL_TILE and POOL_MOSAIC use aux `'mask'` = grout coverage (the tile hooks
   colour the grout along its lines in world space and the tile grime reads it instead of the roughness heuristic).
@@ -128,12 +129,12 @@ v2 conventions").
   +0.08 ms, ultra -0.05 to +0.27 ms on gallery 05, 08, 09 and 12; without the CMU sigma the head measures at or below
   tex-integ, so the remainder is EON (+0.3-0.6 ms at ultra on CMU-filled frames).
 - **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
-  (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. Raw block reflects about half of what the
-  painted block did, so PIPEWORKS frames are darker: frame mean luminance -35 % (gallery 09) and -46 % (gallery 10, a
-  wall close-up) at high. That is the material, not a bug; if the zone should keep its old brightness, its bulbs
-  (lighting, not lane C) are the knob. `world/content/decals.ts` places wall CRACK
-  decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost theirs (not lane C's file; adding CMU_RAW to
-  that filter restores them).
+  (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. Raw block reflects three quarters of what the
+  painted block did, so PIPEWORKS frames are darker: frame mean -24 % (gallery 09) and -27 % (gallery 10, a wall
+  close-up) at high, +6 % under the torch. Closing the rest would take an albedo of ~0.45, too light for raw grey
+  block; if the zone should keep its old brightness, its bulbs (lighting, not lane C) are the knob.
+  `world/content/decals.ts` places wall CRACK decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost
+  theirs (not lane C's file; adding CMU_RAW to that filter restores them).
 - **Hooks (chunks/family/masonry.ts):** main-scope names `brMsOn`, `brMsDet` (postSample; read by postDetail and
   grime); `brMsKey()` and `BR_M_CMU_PAINTED` / `BR_M_CMU_RAW` in pars. postDetail scales the detail by the block's
   texture class only (0b's detail block applies the 'detailMask' channel; the pre-0b shim is gone). The rough hook adds
