@@ -34,8 +34,9 @@ import type { FamilyHooks } from './index.ts';
 /** Textile shading constants (GLSL #defines BR_TX_* in the pars hook). */
 export const TEXTILE = {
   /** Level 0 pile trap on the diffuse: T = TRAP x (albedo / max channel)^TRAP_SAT. With Dv (mean V 0.62, kv 0.8) it
-   * gives 0.39 looking down, 0.53 at mu_v 0.35 (a typical 3-4 m view; the old constant trap was 0.55 on the whole
-   * radiance, sheen and specular included) and 0.59 at mu_v 0.1. Set so the gallery 11 carpet / wall ratio stays. */
+   * gives 0.43 looking down, 0.58 at mu_v 0.35 (a typical 3-4 m view; the old constant trap was 0.55 on the whole
+   * radiance, sheen and specular included) and 0.64 at mu_v 0.1. Set so the gallery 11 carpet / wall ratio stays with
+   * EON sigma 0.75, which darkens rough pile seen at grazing under overhead light. */
   TRAP: 0.69,
   TRAP_SAT: 0.3,
   /** Wet pile clumps into spiky bundles, its valleys open and darken: V_eff = V^(1 + WET_V x absorbed water). */
@@ -68,7 +69,7 @@ export const TEXTILE = {
    * DAMP_EDGE of the full damp look, FRONT_W metres half-wide and ragged by +-FRONT_AMP metres over FRONT_CELL; the damp
    * then deepens inward to DAMP_IN (field units). The dried tide ring lies TIDE_OUT metres outside the front, TIDE_HW
    * metres half-wide (colour multiplier and amount). */
-  DAMP_AT: 0.3,
+  DAMP_AT: 0.25,
   DAMP_IN: 0.62,
   DAMP_EDGE: 0.25,
   FRONT_W: 0.015,
@@ -371,7 +372,7 @@ if ( BR_TX_PILE_ON( brL ) ) {
 	vec4 brLD = uBrLayerD[ brL ];
 	vec3 brTxSq = sqrt( max( diffuseColor.rgb, vec3( 0.0 ) ) );
 	float brTxShK = clamp( 1.0 - BR_TX_NAP_SHEEN * brTxS, 0.2, 1.8 ) * ( brL == BR_TX_M_OFFICE ? BR_TX_ROW_SHEEN0 + BR_TX_ROW_SHEEN1 * brTxRow : 1.0 );
-	material.sheenColor = brLD.z * mix( brTxSq, vec3( brLuma( brTxSq ) ), 0.3 ) * brTxShK * ( 1.0 - 0.5 * brAbs ) * ( 1.0 - 0.7 * brFilm ) * ( 1.0 - 0.2 * brWear ) * ( 1.0 - brPuddle );
+	material.sheenColor = brLD.z * mix( brTxSq, vec3( brLuma( brTxSq ) ), 0.3 ) * brTxShK * ( 1.0 - 0.8 * brAbs ) * ( 1.0 - 0.7 * brFilm ) * ( 1.0 - 0.2 * brWear ) * ( 1.0 - brPuddle );
 	material.sheenRoughness = clamp( brLD.w, 0.07, 1.0 );
 }
 #endif

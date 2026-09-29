@@ -4216,23 +4216,27 @@ Pile under overhead light reads through occlusion and view dependence, not throu
 is ~0.5-0.6 directional and near vertical). The recipes (table above) store the pile visibility V in ormh.r and, on
 the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades them (TS twins `pileVisibility`,
 `napDiffuse`; tests/materials/textile.test.ts):
-- **Pile visibility** (postLight, layers with `phys.pile` [kp, kv]: L0 [1, 0.8], office [1, 1.2], fabric [0.6, 1.5]):
-  the diffuse, direct and ambient, × Dv = 1 − kp (1 − V) μv^kv (μv = n_g · v): looking down the gaps between the
-  tufts show dark, at grazing the tips hide them. Linear in V, so the mips are unbiased (the same patch at 1.5 m and
-  6 m under the same angle: +3-5 % against a5c03e1, near the 5 % limit). Dv stands for the generic texture-cavity
-  multiply, which is divided back out of the ambient; wet pile uses V^(1 + 0.6 × absorbed water) (its valleys open).
-  The Level 0 fibre trap T = 0.63 × chroma^0.3 now multiplies only the diffuse (it was 0.55 on the whole radiance,
-  sheen and specular included). Calibration: the gallery 11 carpet / wall luminance ratio is within 1 % of
-  a5c03e1 at high and medium.
+- **Pile visibility** (matPost, layers with `phys.pile` [kp, kv]: L0 [1, 0.8], office [1, 1.2], fabric [0.6, 1.5]):
+  the diffuse albedo the lights see (`material.diffuseContribution`: punctual, baked and ambient alike) × Dv = 1 − kp
+  (1 − V) μv^kv (μv = n_g · v): looking down the gaps between the tufts show dark, at grazing the tips hide them.
+  Linear in V, so the mips are unbiased (the same patch at 1.5 m and 6 m under the same angle: +3-5 % against a5c03e1,
+  near the 5 % limit). Dv stands for the generic texture-cavity multiply, which postLight divides back out of the
+  ambient, and for 0b's cavity visibility on the baked direct light, which skips pile layers; wet pile uses
+  V^(1 + 0.6 × absorbed water) (its valleys open). The Level 0 fibre trap T = 0.69 × chroma^0.3 now multiplies only
+  the diffuse (it was 0.55 on the whole radiance, sheen and specular included).
+- **EON** (lane 0b): σ 0.75 (L0), 0.5 (office), 0.4 (fabric). It darkens rough pile seen at grazing under overhead
+  light (forward scattering), which the trap absorbs: the gallery 11 carpet / wall luminance ratio is −4 % at high and
+  +3 % at medium against a5c03e1. Under the torch it flattens the spot a little (0.6 R over the centre 0.806 against
+  0.804 in a5c03e1 and 0.774 before EON).
 - **Detail on pile layers:** the detail map's multiplier (tuft cracks, ply splits) is applied as visibility with the
   same view hiding, 1 + (am − 1)(0.35 + 0.65 μv^kv), not as albedo (view=albedo keeps the fibre colour).
-- **Nap** (cut pile): s = v_t · lean, v_t the unit tangent direction to the camera; the diffuse × clamp(1 − 0.28 s
+- **Nap** (cut pile): s = v_t · lean, v_t the unit tangent direction to the camera; the diffuse × clamp(1 − 0.32 s
   sin θv, 0.6, 1.4) (fibre ends in view when the pile leans toward the camera: darker) and the sheen × clamp(1 − 0.6 s,
   0.2, 1.8). The lean is the texel clump lean (× 0.6) plus, on Level 0 floors, a world nap along each 3.84 m broadloom
   roll (20 % of the widths laid reversed, ±25° wobble over 0.6 m, magnitude 0.5 + 0.5 × wear), flipped inside
   pile-reversal patches (~15 % of the floor where a 0.96 m value noise plus a 0.3 / 0.1 m wobble crosses a threshold:
   0.3-1.2 m blotches with a crisp edge, one noise instead of a disc loop). Yaw 0 against yaw 180 at pitch −25° from one
-  eye: the floor changes by 11 % relative to the base.
+  eye: the floor changes by 10 % relative to the base (EON's backscatter takes back part of it).
 - **Office tiles:** the loop-pile detail turns with its tile (rotated about the tile centre by the tile's M, its slope
   turned back); k = (v_t · row)² shades the diffuse × (0.96 + 0.08 k (1 − μv)) and the sheen × (0.6 + 0.8 k); a world
   dye lot per 0.6 m tile (±3 %, one in 12 a replacement from another lot at ±8 %), one in 20 with a lifted edge, and the
@@ -4253,9 +4257,10 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
   straight down), with ±0.1-0.2 ms between runs; SMAA +0.03-0.04 ms (the pile detail gives it more edges). The same
   tree with the textile hooks reverted measured ±0.01 ms (the 1.2 m frame and the new textures cost nothing); the
   textile shading is applied before the lighting so nothing of it is live across it. textures.genMs 210 against 213,
-  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB.
-- Not done: the EON σ of the textiles (L0 0.75, office 0.5, fabric 0.4) waits for lane 0b; the torch retro term (it
-  needs the punctual share of the direct diffuse, which the hooks do not see); lint / hair SDFs and buckling ripples.
+  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB. These were measured before 0b; setting a σ turns
+  on 0b's EON code in the whole surface shader, whose cost 0b records (TEX2.md).
+- Not done: the torch retro term (it needs the punctual share of the direct diffuse, which the hooks do not see); lint
+  / hair SDFs and buckling ripples.
 
 #### Lane B: concrete, terrazzo, floor paint
 
