@@ -300,10 +300,11 @@ describe('surface sampler budget (16 texture units)', () => {
     });
   }
 
-  it('high / ultra use exactly shell 16, props 16, decal 15 and water 13 units (texture realism v2 adds none)', () => {
+  it('high / ultra use exactly shell 16, props 16, decal 16 and water 13 units (texture realism v2 adds only the decal detail map)', () => {
+    // decal 15 -> 16: FLOOR_PAINT stripes fetch the slab's D12 detail (lane B) so the speckle continues under the film
     for (const n of ['high', 'ultra']) {
       const units = Object.fromEntries(CASES.find(([c]) => c === n)![1].map((b) => [b.variant, unitsOf(b.samplers)]));
-      expect(units, n).toEqual({ shell: 16, props: 16, decal: 15, water: 13 });
+      expect(units, n).toEqual({ shell: 16, props: 16, decal: 16, water: 13 });
     }
   });
 
