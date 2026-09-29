@@ -330,6 +330,11 @@ describe('texture realism v2 per-layer constants (recipe rows -> BR_L_* const ar
     }
   });
 
+  it('the relief-aware dirt / wear block compiles in only when some layer sets an amount (all 0 today)', () => {
+    const on = LAYER_RECIPES_FULL.some((r) => r.phys.dirt[3] > 0 || r.phys.wear[3] > 0);
+    expect(g).toContain(`#define BR_RELIEF_GRIME ${on ? 1 : 0}`);
+  });
+
   it('grime profiles: paint (7) on DRYWALL and TRIM_PAINT, masonry (8) on CMU', () => {
     expect([GRIME_ID.paint, GRIME_ID.masonry]).toEqual([7, 8]);
     for (const m of [Mat.DRYWALL, Mat.TRIM_PAINT]) expect(LAYER_DEFS[m].grime).toBe('paint');

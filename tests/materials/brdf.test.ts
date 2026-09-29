@@ -1,6 +1,7 @@
 // tests/materials/brdf.test.ts — texture realism v2 (0b) shading maths: the EON rough diffuse (chunks/brdf.ts TS twin,
 // white furnace, the published single-scattering ratios, the RE_Direct override text), the linear cavity visibility of
-// the baked light (chunks/pom.ts dirVis) against a ray-marched height-field reference.
+// the baked light (chunks/pom.ts dirVis) against a ray-marched height-field reference, and the grime helpers
+// (chunks/grimeLib.ts).
 
 import { describe, expect, it } from 'vitest';
 import { ShaderChunk, ShaderLib } from 'three';
@@ -10,6 +11,7 @@ import {
 } from '../../src/materials/chunks/brdf.ts';
 import { DIRVIS, dirVis, dirVisG, FRAG_DIRVIS_GLSL } from '../../src/materials/chunks/pom.ts';
 import { f } from '../../src/materials/chunks/params.ts';
+import { GRIME_LIB_GLSL, heightBlend, STAIN_FRONT, stainFront } from '../../src/materials/chunks/grimeLib.ts';
 import { buildSurfaceFragment } from '../../src/materials/SurfaceMaterial.ts';
 
 describe('EON rough diffuse (chunks/brdf.ts)', () => {
@@ -190,5 +192,36 @@ describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', (
     for (const v of [DIRVIS.RD_W, DIRVIS.CB_LOW, DIRVIS.K]) expect(FRAG_DIRVIS_GLSL).toContain(f(v));
     expect(FRAG_DIRVIS_GLSL).toContain('if ( BR_L_PILE[ brL ].x <= 0.0 ) {');
     expect(FRAG_DIRVIS_GLSL).not.toContain('smoothstep'); // the legacy cone is off
+  });
+});
+
+describe('grime helpers (chunks/grimeLib.ts)', () => {
+  it('brHeightBlend fills the low relief first and is 0 / 1 at the mask extremes', () => {
+    expect(heightBlend(0.2, -1)).toBeGreaterThan(heightBlend(0.2, 0));
+    expect(heightBlend(0.2, 0)).toBeGreaterThan(heightBlend(0.2, 1));
+    expect(heightBlend(0.2, 0)).toBeGreaterThan(0);
+    for (const r of [-1, 0, 1]) { expect(heightBlend(0, r)).toBe(0); expect(heightBlend(1, r)).toBe(1); }
+  });
+
+  it('brStainFront: nested tide lines, sharp outside and softer inside; inside covers the wet side', () => {
+    const w = 0.01, l0 = 0.44;
+    const at = (s: number) => stainFront(s, l0, w, 0.5, 0.5);
+    expect(at(l0).tide).toBeCloseTo(1, 6);
+    // asymmetric deposit: 2 w outside it has faded far more than 2 w inside
+    expect(at(l0 - 2 * w).tide).toBeLessThan(0.05);
+    expect(at(l0 + 2 * w).tide).toBeGreaterThan(0.5);
+    // a second front lies inside the first, weaker
+    const l1 = l0 + STAIN_FRONT.A1 + STAIN_FRONT.B1 * 0.5;
+    expect(at(l1).tide).toBeCloseTo(1 - STAIN_FRONT.NEST_FADE, 2);
+    expect(at(l0 - 5 * w).inside).toBe(0);
+    expect(at(l0 + 5 * w).inside).toBe(1);
+    expect(GRIME_LIB_GLSL).toContain('void brStainFront( float s, float fine, float L0, out float inside, out float tide )');
+    expect(GRIME_LIB_GLSL).toContain('float brHeightBlend( float m, float rel, float K, float E )');
+  });
+
+  it('the helpers are in the surface program before the family hooks', () => {
+    const frag = buildSurfaceFragment(ShaderLib.physical.fragmentShader);
+    expect(frag.indexOf('void brStainFront(')).toBeGreaterThan(0);
+    expect(frag.indexOf('void brStainFront(')).toBeLessThan(frag.indexOf('// ---- family hooks: pars'));
   });
 });

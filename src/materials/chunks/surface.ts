@@ -399,7 +399,29 @@ if ( brGrime != 0 ) {
 	// different rounding (1 px of the 32 A/B framings moved by one level)
 	if ( false ) {
 	}
-${familyHook('grime')}}
+${familyHook('grime')}	// ---- relief-aware dirt and wear (texture realism v2; BR_L_DIRT / BR_L_WEAR [rgb, amount], amount 0 = off; per-face
+	// layer: quad-uniform). Dirt settles in the concavities (the cavity 1 - ormh.r), more where the WP7 mask holds grime
+	// (G) and in the kick zone at the foot of walls: albedo x dirt colour, rougher. Wear rubs the convexities (brRel above
+	// the layer's mean plane, in units of BR_L_RELIEF) where there is traffic (floors: mask A; walls: below hand height):
+	// albedo toward the wear colour. Both inputs are linear in the filtered texture, so distance does not bias them.
+	// Compiled in only when some layer sets an amount (BR_RELIEF_GRIME: the idle block moved a torch pixel by a level).
+#if BR_RELIEF_GRIME
+	vec4 brDirtC = BR_L_DIRT[ brL ];
+	vec4 brWearC = BR_L_WEAR[ brL ];
+	if ( brDirtC.a > 0.0 ) {
+		float brFoot = brHoriz ? 0.0 : 1.0 - smoothstep( 0.05, 0.6, vBrLocal.y );
+		float brConc = clamp( 1.0 - brOrmh.r, 0.0, 1.0 );
+		float brDirt = brDirtC.a * brConc * sqrt( brConc ) * clamp( 0.35 + 1.2 * brMask.g + 0.4 * brFoot, 0.0, 1.0 );
+		brA *= mix( vec3( 1.0 ), brDirtC.rgb, brDirt );
+		brOrmh.g = min( brOrmh.g + 0.12 * brDirt, 1.0 );
+	}
+	if ( brWearC.a > 0.0 ) {
+		float brTraffic = brHoriz ? ( brNWg.y > 0.0 ? brMask.a : 0.0 ) : 1.0 - smoothstep( 0.3, 1.5, vBrLocal.y );
+		float brConv = clamp( brRel / BR_L_RELIEF[ brL ], 0.0, 1.0 );
+		brA = mix( brA, brWearC.rgb, brWearC.a * pow( brConv, 1.2 ) * brTraffic );
+	}
+#endif
+}
 #ifdef BR_WATER_WETBAND
 {
 	float brBand = brWaterWetBand( vBrLocal, brNWg, brHoriz ); // splash / wicking band above a water line (package E)
