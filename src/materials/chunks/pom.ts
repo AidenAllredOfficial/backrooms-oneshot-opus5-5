@@ -20,8 +20,13 @@ import { f } from './params.ts';
  * cap within 0.1 in g). Linear in V, so the mip-filtered cavity gives the filtered visibility (no brightening with
  * distance). Fitted against a ray-marched height-field reference (grooves, tooled joints, pits, rough fields; caps of
  * 25-85 degrees at 0-75 degrees from the normal): rms error 0.066 in visibility, bias +0.003 (the plan's cone-scaled
- * form: 0.123); tests/materials/brdf.test.ts re-runs a reduced version. Skipped on pile layers (BR_L_PILE.x > 0: the
- * textile family's view-dependent pile visibility carries it).
+ * form: 0.123). A narrow light near the horizon shadows even shallow relief (a texel is dark once the light sinks below
+ * its horizon, so the shadowed share grows like cot(elevation), not like the cap's mean sin^2): there g takes the larger
+ * GRAZE n^2 (1 / c - 1), n = (cos beta - GRAZE_CB) / (1 - GRAZE_CB), 0 at normal incidence and for wide caps. On rough
+ * fields under 8-40 degree caps 70-84 degrees from the normal that cuts the rms error from 0.217 to 0.177 and the bias
+ * from +0.10 to +0.06 (the old cone: bias -0.23, rms 0.37). There the clamp at 0 makes distant (mip-averaged) grout a
+ * little darker than near. tests/materials/brdf.test.ts re-runs reduced versions of both fits. Skipped on pile layers
+ * (BR_L_PILE.x > 0: the textile family's view-dependent pile visibility carries it).
  */
 export const DIRVIS = {
   /** false: the legacy smoothstep cone (N.L against sqrt(1 - V)), kept for A/B checks */
@@ -32,6 +37,9 @@ export const DIRVIS = {
   CB_LOW: 0.55,
   /** scale of the closed-form 2m (fitted: zero mean bias against the reference) */
   K: 1.04,
+  /** narrow light near the horizon: g >= GRAZE ((cos(beta) - GRAZE_CB) / (1 - GRAZE_CB))^2 (1 / c - 1) */
+  GRAZE: 1.0,
+  GRAZE_CB: 0.8,
 } as const;
 
 /** Half-width (in N.L) of the soft edge of the legacy cavity cone (DIRVIS.LINEAR false). */
@@ -42,9 +50,11 @@ export const CAV_CONE_SOFT = 0.15;
 export function dirVisG(w: number, c: number): number {
   const rd = Math.min(1, Math.max(0, w / DIRVIS.RD_W));
   const cc = Math.min(1, Math.max(0, c));
-  const cb = Math.max(Math.min(1, Math.max(0, 2 * rd - 1)), Math.min(Math.sqrt(1 - cc * cc), DIRVIS.CB_LOW));
+  const cb0 = Math.min(1, Math.max(0, 2 * rd - 1));
+  const cb = Math.max(cb0, Math.min(Math.sqrt(1 - cc * cc), DIRVIS.CB_LOW));
   const cb2 = cb * cb, c2 = cc * cc;
-  return DIRVIS.K * (2 - (1 + cb2) * c2 - 1.5 * (1 - cb2) * (1 - c2));
+  const n = Math.max(cb0 - DIRVIS.GRAZE_CB, 0) / (1 - DIRVIS.GRAZE_CB);
+  return Math.max(DIRVIS.K * (2 - (1 + cb2) * c2 - 1.5 * (1 - cb2) * (1 - c2)), DIRVIS.GRAZE * n * n * (1 / Math.max(cc, 0.05) - 1));
 }
 
 /** Visibility of the baked directional light for the texture cavity V (TS twin of FRAG_DIRVIS_GLSL). */
@@ -88,13 +98,17 @@ float brPomH( vec2 uv, vec2 cells, uint salt, float lf, float lod, inout vec2 ce
 const DIRVIS_LINEAR_GLSL = /* glsl */ `
 	// the texture cavity's visibility of the baked light (DIRVIS, TS twin dirVis), linear in V (mip-safe): the light
 	// as a cap around brLv with cos(beta) = 2 R_d - 1, R_d ~ w / RD_W; g = K 2m, m the cap's cosine-weighted mean
-	// sin^2 (hemisphere: 1/2), its part below the horizon cut (cb >= min(sin theta_L, CB_LOW)). Not on pile layers.
+	// sin^2 (hemisphere: 1/2), its part below the horizon cut (cb >= min(sin theta_L, CB_LOW)); a narrow light near the
+	// horizon shadows at least GRAZE n^2 (1 / c - 1) (cot(elevation) growth). Not on pile layers.
 	if ( BR_L_PILE[ brL ].x <= 0.0 ) {
 		float brVc = min( brNgL, 1.0 );
 		float brVc2 = brVc * brVc;
-		float brVcb = max( clamp( 2.0 * brW / ${f(DIRVIS.RD_W)} - 1.0, 0.0, 1.0 ), min( sqrt( 1.0 - brVc2 ), ${f(DIRVIS.CB_LOW)} ) );
+		float brVcb0 = clamp( 2.0 * brW / ${f(DIRVIS.RD_W)} - 1.0, 0.0, 1.0 );
+		float brVcb = max( brVcb0, min( sqrt( 1.0 - brVc2 ), ${f(DIRVIS.CB_LOW)} ) );
 		float brVcb2 = brVcb * brVcb;
-		float brVg = ${f(DIRVIS.K)} * ( 2.0 - ( 1.0 + brVcb2 ) * brVc2 - 1.5 * ( 1.0 - brVcb2 ) * ( 1.0 - brVc2 ) );
+		float brVn = max( brVcb0 - ${f(DIRVIS.GRAZE_CB)}, 0.0 ) * ${f(+(1 / (1 - DIRVIS.GRAZE_CB)).toPrecision(6))};
+		float brVg = max( ${f(DIRVIS.K)} * ( 2.0 - ( 1.0 + brVcb2 ) * brVc2 - 1.5 * ( 1.0 - brVcb2 ) * ( 1.0 - brVc2 ) ),
+			${f(DIRVIS.GRAZE)} * brVn * brVn * ( 1.0 / max( brVc, 0.05 ) - 1.0 ) );
 		brDirVis *= max( 1.0 - ( 1.0 - clamp( brOrmh.r, 0.0, 1.0 ) ) * brVg, 0.0 );
 	}
 `;

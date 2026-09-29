@@ -151,6 +151,26 @@ function feature(kind: 'groove' | 'tooled' | 'pit', size: number, depth: number)
   return { h, pts };
 }
 
+/** A periodic smooth value-noise height field (amplitude a texels, cells per N) and sample points on it. */
+function roughField(a: number, cells: number, seed: number): { h: Float64Array; pts: [number, number][] } {
+  let st = seed;
+  const rnd = (): number => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+  const g = Array.from({ length: cells * cells }, rnd);
+  const h = new Float64Array(N * N);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const xx = (x * cells) / N, yy = (y * cells) / N, x0 = Math.floor(xx), y0 = Math.floor(yy);
+      let fx = xx - x0, fy = yy - y0;
+      fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+      const x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+      h[y * N + x] = a * (g[y0 * cells + x0] * (1 - fx) * (1 - fy) + g[y0 * cells + x1] * fx * (1 - fy) + g[y1 * cells + x0] * (1 - fx) * fy + g[y1 * cells + x1] * fx * fy - 0.5);
+    }
+  }
+  const pts: [number, number][] = [];
+  for (let i = 0; i < 24; i++) pts.push([Math.floor(rnd() * N), Math.floor(rnd() * N)]);
+  return { h, pts };
+}
+
 describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', () => {
   it('fits a ray-marched reference better than the cone-scaled form, without bias', () => {
     const feats = [
@@ -182,6 +202,27 @@ describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', (
     expect(rmse).toBeLessThan(0.8 * rmsePlan);
   });
 
+  it('a narrow light near the horizon shadows rough relief more than the cap model alone predicts (GRAZE term)', () => {
+    const fields = [roughField(2, 16, 7), roughField(3, 32, 11), roughField(4, 8, 13)];
+    let biasNew = 0, biasCap = 0, n = 0;
+    for (const { h, pts } of fields) {
+      const V = pts.map(([x, y]) => cavity(h, x, y));
+      for (const thD of [78, 84]) {
+        const th = (thD * Math.PI) / 180, beta = (8 * Math.PI) / 180, c = Math.cos(th);
+        const w = DIRVIS.RD_W * (1 + Math.cos(beta)) / 2;
+        const capOnly = DIRVIS.K * (2 - 2 * c * c); // the closed form at cos(beta) ~ 1
+        pts.forEach(([x, y], i) => {
+          const ref = [0, Math.PI / 3, (2 * Math.PI) / 3].reduce((acc, p) => acc + capVis(h, x, y, th, beta, p) / 3, 0);
+          biasNew += dirVis(V[i], w, c) - ref;
+          biasCap += Math.max(0, 1 - (1 - V[i]) * capOnly) - ref;
+          n++;
+        });
+      }
+    }
+    expect(Math.abs(biasNew / n)).toBeLessThan(Math.abs(biasCap / n));
+    expect(biasCap / n).toBeGreaterThan(0); // the cap model alone leaves grazing relief too bright
+  });
+
   it('is linear in V (the mip-filtered cavity gives the filtered visibility) and exact at the limits', () => {
     for (const [w, c] of [[0.3, 1], [0.6, 0.9], [0.8, 0.5], [0.5, 0.2]]) {
       const vs = [0.55, 0.7, 0.85, 1];
@@ -198,7 +239,7 @@ describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', (
 
   it('the GLSL uses the DIRVIS constants and skips pile layers', () => {
     expect(DIRVIS.LINEAR).toBe(true);
-    for (const v of [DIRVIS.RD_W, DIRVIS.CB_LOW, DIRVIS.K]) expect(FRAG_DIRVIS_GLSL).toContain(f(v));
+    for (const v of [DIRVIS.RD_W, DIRVIS.CB_LOW, DIRVIS.K, DIRVIS.GRAZE, DIRVIS.GRAZE_CB]) expect(FRAG_DIRVIS_GLSL).toContain(f(v));
     expect(FRAG_DIRVIS_GLSL).toContain('if ( BR_L_PILE[ brL ].x <= 0.0 ) {');
     expect(FRAG_DIRVIS_GLSL).not.toContain('smoothstep'); // the legacy cone is off
   });
