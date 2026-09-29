@@ -4133,13 +4133,14 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 | WALLPAPER_MANILA | Beige vertical pinstripes, 0.15 m pitch, linen emboss, cockle; satin roughness ~0.72. |
 | CARPET_OFFICE | 0.6 m carpet tiles, pile direction rotated per tile (roughness and normal sheen), blue-grey speckle. |
 | DRYWALL | Roller stipple, eggshell. |
-| VINYL_VCT | 0.3 m tiles, ±4% tint per tile, chips, wax sheen (roughness 0.3–0.45). |
+| VINYL_VCT | 0.3 m tiles. Calendered vinyl chips in three populations (dark 30 %, light 25 %, accents and charcoal 12 %) stretched 3:1 along u (the per-tile rotation lays them quarter-turn) over faint marbling; 30–40 % of the face is > 6 % off the tile median. Tile tone ±3 %, 4 % other-lot tiles at ±6 %. Continuous 0.3 mm butt joints with a 1 mm dirt fillet, dirt-filled corner chips on 5 % of the tiles. Wax 0.2–0.28 (joints 0.6); glaze lobe 0.22, rough component 0.7. |
 | CONCRETE_FLOOR | Square 2.4 m generator frame (2.34 mm texels, hex cell 1.2 m; the tower risers, v = y / 3.0, stretch it 1.25×). A hard-troweled slab is flat, so it reads through tone and sheen: soft clouds, lacy hydration mottle, flush aggregate shadows, dark specks and light / dark flecks, 4–8 mm pinholes with dirty cores (2 mm deep: pits, never beads), serpentine power-trowel passes (0.45–0.58 m discs, the last pass wins: fish-scale rims and partial blade arcs) with burnished zones (darker, glossier) and chalky laitance, dragged-load scratches, ±1 mm waviness; roughness 0.35–0.8, darker = glossier. ormh.a (`mask`) holds the trowel swirl outside the laitance. Detail D12 SLAB. Joints, spalls, cracks, pours, traffic lanes and finish classes are world-space (WP9, lane B). (Oil spots are decals.) |
 | CONCRETE_WALL | Frame 2.4 × 1.5 m, plywood-formed (`formFace`, shared with CONCRETE_CEIL): 1.2 × 1.5 m sheets with their own tone (±10 %), bleed toward the lift bottom, lippage and stud pillowing; clustered log-normal bug holes (0.6–7 mm, denser toward the top of each lift, taller than wide, 30 % half-skinned); fins intact or broken into scars, grout-leak lines, one-sided sand streaks; the rotary-cut plywood grain with boat patches; satin skin (0.72) with matte torn patches and satin form-oil blotches. heightScale 20 mm with the face at 0.9 (POM top 0.92; lippage only sets sheets back) and 18 mm deep snap-tie cones: open with a rusty rod end (60 %), grout plugs (25 %), plastic cones (15 %). The shader adds a per-sheet world tone and sheen. |
 | CONCRETE_CEIL | Square 2.4 m frame: the plywood-formed face at 1.2 × 2.4 m sheets, few bug holes, rebar ghosting on some sheets, tie-wire rust dots. |
-| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses), recessed mortar with pooled (glossier, darker) paint, paint over pores and bridged voids, each block face tilted ±0.35°. heightScale 14 mm: ~6 mm tooled joints (POM). |
-| POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.75. Crazing on a quarter of the tiles, a hazy glaze rim at the joint. 3 mm grout, light grey, roughness 0.7. |
-| POOL_MOSAIC | 2.5 cm aqua mosaic, per-chip tilt ±0.5°. |
+| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses, third bond), from the `cmuBlock()` body it shares with CMU_RAW. Each block's face is inset 4–6 mm per side with a ±0.6 mm wavy arris (joints 8–12 mm), rounded over 2 mm; the mortar is tooled concave (7 mm jointer, 4.5 mm deep) with burrs on ~12 % of the joint length. Faces: lippage ±0.45 mm (each world block is tilted ±0.37° by the shader), 6–10 mm aggregate pits up to 1.6 mm deep and low crowns, an open-texture field per block that drives the ≥ 3 mm voids (painted: shallow, rim-rounded, albedo × 0.96), chips on 10 % of the edges and 25 % of the corners (≤ 8 mm, 65 % painted over), roller lap bands, joints × 0.86 (pooled paint and dust). Roughness: face 0.52, voids 0.72, joints 0.58, fresh chips 0.85. `ormh.a` is the detail mask (1 on faces, 0.3 in joints). Everything under 3 mm is D14 CMU_FACE's. heightScale 6 mm with the face at 0.79, POM top 0.95 (the relief fills the height range, so the march spends no steps above the faces). |
+| CMU_RAW | The same blocks unpainted: light natural grey, salt-and-pepper, sRGB (166, 164, 159), ±4 % per block (the shader adds ±6 %) and 20 % batch casts, voids × 0.5, fresh chips × 0.8, a lighter sandy mortar (the block colour × 1.16 / 1.15 / 1.12, sRGB (177, 175, 167)) with a faint efflorescence haze, roughness 0.9 / 0.92, detail D15 CMU_RAW. PIPEWORKS walls, service corridors and loading bays. |
+| POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.76. Hand-set joints: each face is inset 1.2–1.9 mm per side with a ±0.25 mm wobble. A fat-edge glaze ridge on the cushion; batch shade ±4 %, 5 % cream and 3 % blue-white tiles; crazing (a 0.8 mm net plus hairlines) on 12 %; conchoidal chips showing the buff bisque on 6 %; a hazy glaze rim at the joint. Sanded grout sRGB (176, 178, 170), concave, roughness 0.8. `ormh.a` is the grout coverage: the shader colours the grout along its lines in world space. |
+| POOL_MOSAIC | 2.5 cm glass mosaic on 0.3 m sheets, with wider joints at the sheet edges. Chips with 2 mm rounded corners (grout diamonds), a 1 mm edge round, a 0.15 mm dome, lippage ±0.25 mm and tilt ±0.5°. Five related hues (±6°, value 0.83–1.19) plus 5 % accents. The colour sits inside the glass: cloud (±8 %), streaks, bubbles in 5 % of the chips, a darker, more saturated edge band. Chip roughness 0.05–0.08, grout 0.8; `ormh.a` is the grout coverage. |
 | METAL_PAINTED, METAL_RUST, METAL_GRATE | Chipped paint; rust mask (fbm threshold plus downward streaks); grate with dark holes (albedo plus height). |
 | WOOD, PLASTIC, FABRIC_PARTITION, PLENUM, RUBBER | Standard recipes. |
 | FLOOR_PAINT | A 0.25 mm film (yellow or white by tint). On stripes u runs across and v along (mesh/decals.ts): wheel-track bands with tyre dirt, wear that takes the slab's high points first (a pore stipple, not blobs), roughness 0.4 fresh to 0.6 worn. Edge flakes, joints, the slab's detail and wetness come from the shader. |
@@ -4261,6 +4262,66 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
   textures.genMs +15 ms (200 → 215), detail genMs ±0. Both frame budgets (+0.03 / +0.07 ms) are exceeded.
 
 #### Lane C: masonry and tile
+Block walls read as concrete block at every distance, and the tile layers as fired, set and waxed tile.
+- **CMU below 3 mm: D14 CMU_FACE / D15 CMU_RAW** (`detailRecipes/masonry.ts`). Grit (3.3 mm) and sand (1.6 mm)
+  crowns stand out of a paste of fine sand; crevices open where three grits meet; 0.8-2.5 mm voids cluster in
+  under-compacted 'open' patches. D14 is painted: the film rounds and levels the relief (x 0.6), bridges voids under
+  ~0.9 mm and lines the rest as shallow pits in the face colour, so voids read through shading and the cavity, not
+  dark albedo (rms slope 0.39). D15 keeps the full relief, deep voids at x 0.65 and a salt-and-pepper tone per grain
+  (rms slope 0.44). The painted face therefore reads as sandpaper rather than a plastic sheet with holes (gallery 09's
+  pits at < 0.6 x the local mean: 2.9 % of the near wall before, 0.2 % on raw block now).
+- **CMU base v2** (`layers/masonry.ts`, table above): `cmuBlock()` is shared by both layers. Joints vary block to
+  block and are tooled concave; chips, voids and lap bands are resolved at the base texel. The detail mask (ormh.a,
+  0.3 in the joints) keeps the tooled mortar smoother than the face. The base also carries 6-10 mm aggregate pits (up
+  to 1.6 mm deep) and low crowns, which are the whole face texture on medium and low, where no detail maps are bound:
+  at 0.7 mm the medium face read as a smooth sheet with a few voids (1.5 px high-pass at gallery 08's 0.45 m: 0.8 %,
+  now 1.1 %, base 2.7 %; at 1.5 m 2.3 %, now 2.6 %, base 3.0 %). The painted joints are 14 % darker than the face
+  (pooled paint and dust; 0b's cavity visibility alone leaves tooled joints faint at mid range).
+- **World block variation** (`chunks/family/masonry.ts` postSample / postDetail): a key from the wall position follows
+  the texture's third bond (wrapping at NOISE_WRAP / 0.4 m and 15 courses per storey, so it never jumps at a tile
+  edge) and gives every world block a paint lot (+-4.5 % value, +-1 % warmth; raw +-6 %), first-coat flashing (+-0.05
+  roughness), a +-0.37 deg tilt (lippage: sheen steps between blocks at mid range), a texture class (6 % touch-up, 4 %
+  heavily filled, 10 % open) and its own patch of the aggregate (a detail-uv offset). Faces only: the joint share
+  comes from the detail mask. The flashing is kept small because the probe's roughness fade (0.5-0.65) turns sheen
+  differences into lamp-reflection steps, and the rough hook caps painted CMU at 0.67 so that no block straddles SSR's
+  G-buffer eligibility cut (0.7), where blocks popped between the two paths with distance. The same hook undoes the
+  cotangent frame's u / v scaling on these walls (TEX2.md, lane C: a core issue on every layer with repeatY !=
+  repeat), which had shaded head joints, tilts and chips at 42 % of their slope. Without detail maps, the rough hook
+  adds D14 / D15's unresolved slope variance (0.12 / 0.18) to alpha^2, so the walls keep their matte sheen.
+- **CMU_RAW** is placed on PIPEWORKS walls, the transition service corridors and the loading bays; CONCRETE, WAREHOUSE
+  and the towers stay painted. Its table albedo is 0.38, light natural grey block (LRV 35-40; the detail multiplier is
+  divided by its 1x1-mip mean, so the rendered face averages the table value). That is three quarters of the painted
+  block's 0.5, so PIPEWORKS frames at high are 24 % (gallery 09) and 27 % (gallery 10) darker than with painted walls,
+  and 6 % brighter under the torch (EON backscatter). At 0.28 the walls read near-black brown under the zone's bulbs.
+- **Masonry grime** (profile 8): in the damp band of painted block the paint flakes in ragged patches that show the raw
+  block at the same uv (CMU_RAW's albedo and relief, two trilinear fetches in one branch on the smooth damp field, raw
+  roughness, the aggregate roughened) with a salt bloom and a lifted film edge, and 2-8 mm blisters dome the film where
+  it holds. Seepage stains are brownish and wick further along the joints; efflorescence crusts the drying front and
+  blooms three times as strongly in the joints of the bottom 0.6 m; dirt gathers on the joint ledges and in the joints
+  of the bottom courses; rubber scuffs mark the cart and boot heights.
+- **0b switches:** EON sigma is the facet roughness below the detail map (painted 0.2, raw 0.3; 0b adds the
+  unresolved detail variance, so far walls reach ~0.33 / 0.43). The relief-aware dirt and brStainFront are not used:
+  measured at ultra, the dirt amount compiles 0b's block into every surface program (+0.63 ms in POOLROOMS with no CMU
+  on screen) and the nested fronts cost 0.2 ms on a full-screen CMU wall.
+- **Tile** (`layers/tile.ts`, table above; `chunks/family/tile.ts`): POOL_TILE and POOL_MOSAIC store their grout
+  coverage in ormh.a. The shader colours the grout along its lines in world space: per-tile rotation would split a
+  texture-space variation down the middle of each line. Dry, up-facing pool deck glaze is dulled to 0.17 (art
+  direction: no slip-resistant matte variant), and a splash film still turns it glossy. Up-facing VCT takes lane wear
+  from mask A (lane B's hard-floor wear: +0.22 roughness, a little lighter and greyer where A passes 0.25, so mostly in
+  decayed areas), an amber, glossier wax band 2-5 cm from the walls, and heel marks. D6 GLAZE is now long-wave waviness (25 and 12 mm,
+  rms slope 0.0046) plus sparse pinholes. At detail strength 0.3 against 1, the ragged edges of the lamp reflections
+  on the pool walls are unchanged (gallery 12), so D6 is not their cause.
+- **Costs** (gpuProfile RenderPass medians of 3 interleaved fresh boots against tex-integ ff42a23; run-to-run noise
+  about +-0.2 ms at high and +-0.3 ms at ultra). High 1920x1080: gallery 05 +0.05, 08 +0.08, 09 +0.00, 12 +0.07 ms.
+  Ultra 2560x1440: 05 -0.05, 08 +0.27, 09 +0.27, 12 +0.12 ms. The same tree without the CMU sigma measures at or below
+  tex-integ everywhere, so the lane's recipes and hooks are within noise and EON is the cost: +0.3-0.6 ms at ultra
+  where CMU fills the frame (08, 09), shared with the other layers that set sigma. A later review (same method, 5
+  trees interleaved in one session) measured more on the painted close-up, gallery 08 at ultra: +0.63 ms against
+  ff42a23 and +0.66 / +0.41 ms against tex-integ 9b8a06f (lane B merged, so EON is already compiled in), +0.21 ms at
+  high; gallery 09 (raw block) -0.12 ms ultra and -0.09 ms high. With lane B merged, dropping the CMU sigma or the
+  per-block key does not lower it, so it is not EON. Texture generation +21 ms (200 ms
+  against 179 ms, median of 6 fresh harness boots; the recipes evaluate only the part each output pass needs), detail
+  maps +3 ms, no memory beyond the reserved CMU_RAW layer and the D14 / D15 slots.
 
 #### Lane D: walls and ceilings
 

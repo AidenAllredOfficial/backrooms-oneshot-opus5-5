@@ -142,6 +142,58 @@ v2 conventions").
 
 ## Lane C: masonry and tile
 
+### 2026-09-28 — C: CMU and tile recipes, D6 / D14 / D15, world block variation, CMU_RAW placement — APPLIED
+- **Status:** APPLIED by lane C on its branch. `LAYER_DEFS` rows 8, 12, 13 and 14 keep their numbers (the recipes are
+  trimmed to them). Row 28 CMU_RAW `albedoMean` [0.22, 0.215, 0.2] -> [0.38, 0.372, 0.346] (sRGB 166, 164, 159),
+  light natural grey block; at 0.22-0.28 the PIPEWORKS walls read near-black brown under the zone's bulbs. D15's
+  albedo multiplier does not lower it: the shader divides it by the detail's 1x1-mip mean, so the rendered face
+  averages the table value.
+- **Channels:** CMU_PAINTED and CMU_RAW use aux `'detailMask'` (ormh.a 1 on faces, 0.3 in the joints; the masonry hooks
+  also read it as the face / joint share). POOL_TILE and POOL_MOSAIC use aux `'mask'` = grout coverage (the tile hooks
+  colour the grout along its lines in world space and the tile grime reads it instead of the roughness heuristic).
+- **Detail slots:** D14 CMU_FACE and D15 CMU_RAW filled (rms slope 0.39 / 0.44, cavity folded in at exponent 1); D6
+  GLAZE rewritten (waviness at 25 and 12 mm, rms slope 0.0046, sparse pinholes; heightScale 0.00018, S 0.02, roughK
+  0.1, cavity 0.3).
+- **SurfacePhys:** CMU_PAINTED `det: 14, detS: 1, pomTop: 0.95, sigma: 0.2`; CMU_RAW `det: 15, detS: 1, pomTop: 0.95,
+  tok: 0.8, sigma: 0.3` (sigma is the facet roughness below the detail map: 0b adds the unresolved detail variance, so
+  far walls reach ~0.33 / 0.43); POOL_TILE `pomTop: 0.76, roughComp: 0.8`; POOL_MOSAIC `pomTop: 0.8, roughComp: 0.8`;
+  VINYL_VCT `glaze: 0.22, roughComp: 0.7`. No `dirt` / `wear`.
+- **0b costs measured by lane C** (ultra 2560x1440, gpuProfile RenderPass, 3 interleaved rounds against tex-integ at
+  ff42a23): a relief dirt amount on CMU compiled the dirt / wear block into every surface program, +0.63 ms in
+  POOLROOMS with no CMU on screen (so lane C sets none); brStainFront on every CMU wall pixel +0.2 ms on a full-screen
+  wall (not used); EON on CMU (sigma 0.2) +0.65 ms on a full-screen CMU wall (g08), kept. The integrator budgets EON
+  once for the union of layers that set sigma. Final lane head against tex-integ (RenderPass, 3 rounds): high +0.00 to
+  +0.08 ms, ultra -0.05 to +0.27 ms on gallery 05, 08, 09 and 12; without the CMU sigma the head measures at or below
+  tex-integ, so the remainder is EON (+0.3-0.6 ms at ultra on CMU-filled frames). Review re-measure (one session, 5
+  trees interleaved): gallery 08 ultra +0.63 ms against ff42a23 and +0.41-0.66 ms against 9b8a06f (lane B merged), not
+  lowered by dropping the CMU sigma or the block key once lane B's sigma has compiled EON in; gallery 09 within noise.
+  The integrator should profile the painted-CMU close-up.
+- **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
+  (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. Raw block reflects three quarters of what the
+  painted block did, so PIPEWORKS frames are darker: frame mean -24 % (gallery 09) and -27 % (gallery 10, a wall
+  close-up) at high, +6 % under the torch. Closing the rest would take an albedo of ~0.45, too light for raw grey
+  block; if the zone should keep its old brightness, its bulbs (lighting, not lane C) are the knob.
+  `world/content/decals.ts` places wall CRACK decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost
+  theirs (not lane C's file; adding CMU_RAW to that filter restores them).
+- **Hooks (chunks/family/masonry.ts):** main-scope names `brMsOn`, `brMsDet` (postSample; read by postDetail and
+  grime); `brMsKey()` and `BR_M_CMU_PAINTED` / `BR_M_CMU_RAW` in pars. postDetail scales the detail by the block's
+  texture class only (0b's detail block applies the 'detailMask' channel; the pre-0b shim is gone). The rough hook adds
+  D14 / D15's E[s^2] (0.12 / 0.18) to alpha^2 under
+  `#ifndef BR_DETAIL_MAPS`, then caps painted CMU at `CMU_PAINTED_MAX_ROUGH` = SSR.ELIG_ROUGH - 0.03 (imported from
+  `post/ssr/ssrGlsl.ts`): blocks around the G-buffer eligibility cut switched paths per block with distance.
+- **Found for the SSR / probe owners:** the probe's roughness fade (ROUGH0 0.5 to ROUGH1 0.65) sits inside painted
+  CMU's range (0.52 close, 0.67 far), so small roughness steps become lamp-reflection steps (the inline fallback of a
+  0.65 lobe has no lamp reflection at all). Painted CMU's flashing is kept at +-0.05 for it.
+- **Core issue found (lane 0):** `FRAG_NORMAL_GLSL`'s cotangent frame keeps |T| : |B| = |grad u| : |grad v|, so on
+  vertical faces of layers with repeatY != repeat every metric slope along u is scaled by repeatY / repeat (CMU 0.42,
+  CONCRETE_WALL 0.63, CONCRETE_FLOOR / CEIL on walls 0.63, METAL_PAINTED 0.83). The masonry postSample undoes it for the
+  CMU layers (`brNrm.x *= brLB.x / brLB.y`); **remove that line if the core frame gets normalised per axis.**
+- **Hooks (chunks/family/tile.ts):** pars defines `BR_M_POOL_MOSAIC`, `BR_M_VINYL_VCT`; postSample declares
+  `brTlWear` (read by rough). VCT lane wear reads mask A on up-facing VINYL_VCT, which lane B's hard-floor wear bake
+  writes (entry fans and lanes at 0.8 x the carpet amplitude). It shows where A plus its noise passes 0.25, so mainly
+  in decayed areas; maintained floors keep their wax (`VCT_SYNTH_WEAR` is a development switch).
+- **Consumers affected:** lane 0 (the shim, the frame issue), lane B (mask A on VCT floors), the integrator (golden).
+
 ## Lane D: walls and ceilings
 
 ## Lane E: props
