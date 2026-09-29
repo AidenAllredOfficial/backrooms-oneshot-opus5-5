@@ -2,7 +2,7 @@
 // pool splash zone (package B): wet deck within 1.2 m of a pool's water edge, nothing on the pool's own floor or far
 // from it, and the same value at the same world point whichever tile's bake evaluates it (seamless tiles); the
 // hard-floor traffic wear of texture realism v2 lane B (corridor wear at 0.8 x carpet, rack-aisle wheel tracks, entry
-// fans from the doors).
+// fans from the doors); and the seepage tongue (lane D): a smooth outline the shader's drying fronts can follow.
 
 import { describe, expect, it } from 'vitest';
 import { CELL } from '../../src/core/constants.ts';
@@ -10,7 +10,7 @@ import { EdgeKind, Mat, PropKind } from '../../src/core/ids.ts';
 import type { TileKey } from '../../src/core/grid.ts';
 import { cellIdx } from '../../src/core/grid.ts';
 import { createJob } from '../../src/bake/job.ts';
-import { createMaskCache, maskAt, maskOut } from '../../src/bake/mask.ts';
+import { createMaskCache, maskAt, maskOut, SEEP_R0, SEEP_TIP, seepZoneR } from '../../src/bake/mask.ts';
 import { carveRoom, handNeighborhood, Q_HIGH, setEx, solidLayout } from './helpers.ts';
 
 describe('surface mask: pool splash zone', () => {
@@ -125,5 +125,48 @@ describe('surface mask: hard-floor traffic wear (texture realism v2 lane B)', ()
     expect(far).toBe(0);
     expect(wearAt(l, 12 + 1.0, zd + 2.2)).toBe(0); // beside the fan
     expect(wearAt(l, 12 - 1.0, zd)).toBeGreaterThan(0.2); // both rooms
+  });
+});
+
+describe('surface mask: seepage tongue', () => {
+  const len = 1.0;
+  /** Width (m) of the tongue's part at or above level v at dTop, scanning du in 5 mm steps. */
+  const widthAt = (dTop: number, v: number, hw0 = 0.22, n = 0.5, cap = false): number => {
+    let w = 0;
+    for (let du = -0.5; du <= 0.5; du += 0.005) if (seepZoneR(du, dTop, hw0, len, n, n, cap) >= v) w += 0.005;
+    return w;
+  };
+
+  it('falls smoothly to 0 at its outline (no straight texel-traced step for the fronts to follow)', () => {
+    for (let dTop = 0; dTop < len + SEEP_TIP; dTop += 0.05) {
+      for (const [nL, nR] of [[0, 1], [1, 0], [0.5, 0.5]]) {
+        let prev = seepZoneR(-0.5, dTop, 0.34, len, nL, nR, false);
+        expect(prev).toBe(0);
+        for (let du = -0.495; du <= 0.5; du += 0.005) {
+          const r = seepZoneR(du, dTop, 0.34, len, nL, nR, false);
+          expect(r).toBeGreaterThanOrEqual(0);
+          expect(r).toBeLessThanOrEqual(1);
+          expect(Math.abs(r - prev), `dTop ${dTop} du ${du}`).toBeLessThan(0.06); // <= 10 per metre: a >= 0.15 m ramp
+          prev = r;
+        }
+        expect(prev).toBe(0);
+      }
+    }
+  });
+
+  it('narrows down the wall, ends in a rounded tip and keeps a runnel core under the ceiling', () => {
+    expect(widthAt(0.9 * len, 0.44)).toBeLessThan(0.8 * widthAt(0.1 * len, 0.44));
+    // the runnel core (R >= SEEP_R0) of the narrowest tongue is still ~0.15 m wide under the ceiling (the bilinear
+    // mask keeps it above SEEP_R0) ...
+    expect(widthAt(0.02, SEEP_R0, 0.22, 0)).toBeGreaterThanOrEqual(0.15);
+    // ... and the tip past len holds a stain (R < SEEP_R0: no runnels) that closes by SEEP_TIP
+    expect(seepZoneR(0, len + 0.05, 0.22, len, 0.5, 0.5, false)).toBeGreaterThan(0.44);
+    expect(seepZoneR(0, len + 0.05, 0.22, len, 0.5, 0.5, false)).toBeLessThan(SEEP_R0);
+    expect(widthAt(len + 0.12, 0.01)).toBeLessThan(widthAt(len + 0.02, 0.01));
+    expect(seepZoneR(0, len + SEEP_TIP, 0.22, len, 0.5, 0.5, false)).toBe(0);
+    // with cap (drips from inside a leak band) the top is rounded as well; without, it starts at the ceiling
+    expect(seepZoneR(0, -0.05, 0.22, len, 0.5, 0.5, true)).toBeGreaterThan(0);
+    expect(seepZoneR(0, -SEEP_TIP, 0.22, len, 0.5, 0.5, true)).toBe(0);
+    expect(seepZoneR(0, -0.05, 0.22, len, 0.5, 0.5, false)).toBe(0);
   });
 });

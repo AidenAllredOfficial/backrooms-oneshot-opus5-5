@@ -1,10 +1,12 @@
 // src/bake/mask.ts — surface mask RGBA8 (WP7 §Algorithms 9). Pure module; deterministic from world position,
 // fields and leaks (never from the tile), so it is seamless across tiles.
-//   R stain:  walls within 1.2 m (horizontally, same light region) of a leak: a tide-line band from the ceiling
-//             down to ceil - (0.4 + 0.8 * strength) with drip streaks in hashed 3-8 cm columns;
+//   R stain:  walls within 1.2 m (horizontally, same light region) of a leak: a stain band from the ceiling down to
+//             ceil - (0.4 + 0.8 * strength) with drip runnel zones in hashed 0.3 m columns below it;
 //             every wall (leak-independent, B3): rising damp (a wavy tide band from the floor, height grows with
-//             humidity) and old ceiling seepage streaks (hashed 0.3 m world columns, 8-45 cm wide, 0.3-1.6 m long);
-//             ceilings within 0.9 m of a leak: concentric rings; floors: none.
+//             humidity) and old ceiling seepage runnel zones (hashed 0.3 m world columns, 22-47 cm wide, 0.3-1.6 m long);
+//             ceilings within 0.9 m of a leak: the wet extent (highest at the leak). Walls keep stains at or below
+//             STAIN_MAX and encode runnel zones as SEEP_R0..1 (texture realism v2: the shader draws the ragged drying
+//             fronts, tide lines, runnels and efflorescence; no rings or outlines are baked); floors: none.
 //   G grime:  decay * (0.6 * cornerness + 0.4 * baseboardBand), cornerness = 1 - AO over nearby walls (ceilings: only
 //             within 0.4 m of a wall), baseboard band = wall texels below 0.25 m above the floor; walls add a hand-
 //             smudge band (0.9-1.5 m) near jambs / wall ends / outside corners and a dust line under the ceiling;
@@ -33,12 +35,38 @@ const SEED_TIDE = 0x5eed05 ^ SALT.BAKE, SEED_SEEP = 0x5eed06 ^ SALT.BAKE, SEED_H
 const SEED_SPLASH = 0x5eed08 ^ SALT.BAKE;
 /** Pool splash zone: wetness up to SPLASH_MAX at the coping, gone SPLASH_REACH metres from the water's edge. */
 const SPLASH_MAX = 0.75, SPLASH_REACH = 1.2;
+/** Wall R ranges (texture realism v2, chunks/family/walls.ts): stains (leak bands, rising damp) stay at or below
+ * STAIN_MAX, and seepage runnel zones take SEEP_R0..1, encoding the runnel's progress t (0 at its top, 1 at its end)
+ * as R = SEEP_R0 + (1 - SEEP_R0)(1 - t). */
+export const STAIN_MAX = 0.65, SEEP_R0 = 0.7;
+const seepR = (t: number): number => SEEP_R0 + (1 - SEEP_R0) * (1 - Math.min(1, Math.max(0, t)));
 
 const sstep = (e0: number, e1: number, x: number): number => {
   const t = (x - e0) / (e1 - e0);
   const u = t < 0 ? 0 : t > 1 ? 1 : t;
   return u * u * (3 - 2 * u);
 };
+
+/** Seepage tongue edge falloff and tip length (m): the edge is at least one mask texel (CELL / 8). */
+export const SEEP_EDGE = 0.15, SEEP_TIP = 0.15;
+/**
+ * R of a seepage runnel zone at lateral offset du (m) from its centre line and dTop (m) below its top, for a zone of
+ * top half-width hw0 whose runnels run len metres: a tongue that narrows down the wall (x (1 - 0.35 t^1.3), t = dTop /
+ * len), whose sides wander +-15 % by the caller's side noise nL / nR (0..1, sampled along the wall's height) and which
+ * ends in a rounded tip SEEP_TIP past len (with cap, it also starts with a rounded top SEEP_TIP above dTop = 0).
+ * Inside, R = SEEP_R0..1 encodes t; over the last SEEP_EDGE metres to the outline it falls smoothly to 0. So the
+ * shader's drying fronts (R 0.44-0.69) follow the tongue's wandering outline rather than a rectangle traced along the
+ * mask's texels, and a tip too narrow for the bilinear filter to keep above SEEP_R0 holds a stain but no runnels.
+ */
+export function seepZoneR(du: number, dTop: number, hw0: number, len: number, nL: number, nR: number, cap: boolean): number {
+  if (dTop >= len + SEEP_TIP || dTop < (cap ? -SEEP_TIP : 0)) return 0;
+  const t = Math.min(1, Math.max(0, dTop / len));
+  let hw = hw0 * (1 - 0.35 * t ** 1.3) * (0.85 + 0.3 * (nL + (nR - nL) * sstep(-0.05, 0.05, du)));
+  const k = dTop > len ? (dTop - len) / SEEP_TIP : dTop < 0 ? -dTop / SEEP_TIP : 0;
+  hw *= Math.sqrt(1 - k * k);
+  const d = hw - Math.abs(du);
+  return d <= 0 ? 0 : seepR(t) * sstep(0, SEEP_EDGE, d);
+}
 
 export const maskOut = { r: 0, g: 0, b: 0, a: 0 };
 
@@ -313,29 +341,36 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
     } else if (g.region[lc] !== g.region[c]) continue;
     const fall = 1 - dh / 1.2;
     if (isWall) {
+      // a wet band from the ceiling down to ceil - (0.4 + 0.8 * strength): stain R up to STAIN_MAX, falling over the
+      // band's lower 45 % so the shader's nested drying fronts spread along that edge (chunks/family/walls.ts)
       const band = 0.4 + 0.8 * s;
       const depth = ceilY - y;
       let v = 0;
-      if (depth < band) v = 0.35 + 0.65 * sstep(0.55 * band, band, depth); // darkest at the tide line
-      // drip streaks: hashed columns (3-8 cm wide) along the wall
+      if (depth < band) v = 1 - sstep(0.55 * band, band, depth);
+      r = Math.max(r, STAIN_MAX * (0.45 + 0.55 * s) * v * Math.sqrt(fall));
+      // drips below it: hashed 0.3 m columns hold seepage tongues (seepZoneR) from inside the band, 0.4-0.48 m wide
+      // at the top (a runnel core of R >= SEEP_R0 at least ~2 mask texels wide; the shader draws the runnels)
       const along = Math.abs(nx) > 0.5 ? wz : wx;
-      const col = Math.floor(along / 0.1);
-      const h = hash3(col, g.leakId[k], SEED_RING ^ SALT.LEAK);
-      if (hash01(h) < 0.35) {
-        const centre = (col + 0.2 + 0.6 * hash01(hash3(h, 1, 7))) * 0.1;
-        const width = 0.03 + 0.05 * hash01(hash3(h, 2, 9));
-        if (Math.abs(along - centre) < width * 0.5) {
-          const len = band + (0.3 + 0.9 * hash01(hash3(h, 3, 11))) * s;
-          if (depth < len) v = Math.max(v, 0.75 * (1 - Math.max(0, depth - band) / (len - band + 1e-6)));
+      if (fall > 0.2) {
+        const col0 = Math.floor(along / 0.3);
+        for (let dc = -1; dc <= 1; dc++) {
+          const col = col0 + dc;
+          const h = hash3(col, g.leakId[k], SEED_RING ^ SALT.LEAK);
+          if (hash01(h) >= 0.45) continue;
+          const centre = (col + 0.4 + 0.2 * hash01(hash3(h, 1, 7))) * 0.3;
+          const hw0 = 0.2 + 0.04 * hash01(hash3(h, 2, 9));
+          const top = 0.75 * band;
+          const len = band + (0.3 + 0.9 * hash01(hash3(h, 3, 11))) * s - top;
+          if (Math.abs(along - centre) >= hw0 * 1.15 || depth > top + len + SEEP_TIP) continue;
+          const nL = valueNoise2(SEED_SEEP + 5, col * 7.1 + g.leakId[k] * 3.3, depth / 0.25);
+          const nR = valueNoise2(SEED_SEEP + 6, col * 7.1 + g.leakId[k] * 3.3, depth / 0.25);
+          r = Math.max(r, seepZoneR(along - centre, depth - top, hw0, len, nL, nR, true));
         }
       }
-      r = Math.max(r, v * s * Math.sqrt(fall));
       if (v > 0 && hy > 0) a = Math.max(a, 0.5 * v * s * decay);
     } else if (isCeil && dh < 0.9) {
-      const rr = dh / 0.9;
-      const ring = 0.5 + 0.5 * Math.cos(2 * Math.PI * dh / 0.11 + 6.283 * hash01(hash3(g.leakId[k], 5, SEED_RING)));
-      const edge = sstep(0.75, 0.95, rr) * (1 - sstep(0.95, 1.0, rr)); // outer tide ring
-      r = Math.max(r, s * ((1 - rr) * (0.55 + 0.45 * ring) + 0.6 * edge));
+      // wet extent only: the shader draws the ragged nested drying fronts and their tide lines (chunks/family/ceiling.ts)
+      r = Math.max(r, (0.5 + 0.5 * s) * (1 - dh / 0.9));
     } else if (isFloor) {
       // irregular puddle outline: the radius is noise-warped by up to +-0.3 m
       const pw = 1 - (dh + 0.6 * (fbm2(SEED_PUDDLE + 23, wx / 0.8, wz / 0.8, 2) - 0.5)) / 1.2;
@@ -346,7 +381,8 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
   if (isWall && !towerCell && hy >= 0) {
     const alongX = Math.abs(nx) > 0.5;
     const along = alongX ? wz : wx;
-    // rising damp: a wavy tide band from the floor; the shader's stain threshold (~0.42-0.5) draws its tide line.
+    // rising damp: a wavy tide band from the floor (R 0.52-0.64, rising toward the floor); the shader's nested drying
+    // fronts (from R 0.44 up) draw its tide lines and the efflorescence above the outermost.
     // Its presence varies in ~3 m stretches along each wall (a slow noise on the gate), its height with humidity.
     const plane0 = Math.round((alongX ? wx : wz) / CELL);
     const nA = valueNoise2(SEED_TIDE + 2, along / 2.8, plane0 * 3.7);
@@ -357,26 +393,29 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
       const tideH = (wetCell ? 0.35 : 0.08) + 0.5 * hum * (0.4 + 0.6 * valueNoise2(SEED_TIDE, along / 1.6, plane0 * 1.3)) + 0.07 * (valueNoise2(SEED_TIDE + 1, along / 0.35, 0) - 0.5);
       if (hy < tideH) r = Math.max(r, k * (0.52 + 0.12 * (1 - hy / tideH)));
     }
-    // old ceiling seepage: hashed 0.3 m world columns (a streak can overlap the neighbouring columns)
+    // old ceiling seepage: hashed 0.3 m world columns (a zone can overlap the next two columns), tongues
+    // (seepZoneR) 0.44-0.68 m wide under the ceiling whose runnels run 0.3-1.6 m (R SEEP_R0..1 by the progress t; the
+    // shader draws the runnels, their teardrop ends and the damp halo under the ceiling)
     const depth = ceilY - y;
     const pSeep = 0.03 + 0.15 * hum * (0.5 + decay);
-    if (depth < 1.7 && depth >= 0) {
+    if (depth < 1.6 + SEEP_TIP && depth >= 0) {
       const plane = Math.round((alongX ? wx : wz) / CELL) * 2 + ((alongX ? nx : nz) > 0 ? 1 : 0);
       const col0 = Math.floor(along / 0.3);
-      for (let dc = -1; dc <= 1; dc++) {
+      for (let dc = -2; dc <= 2; dc++) { // a tongue reaches up to 0.41 m from its centre
         const col = col0 + dc;
         const h = hash3(col, plane, SEED_SEEP);
         if (hash01(h) >= pSeep) continue;
         const len = 0.3 + 1.3 * hash01(hash3(h, 3, 11));
-        if (depth > len) continue;
-        const t = depth / len; // 0 at the ceiling, 1 at the streak's end
-        const w = (0.08 + 0.37 * hash01(hash3(h, 2, 9))) * (0.7 + 0.5 * t);
+        if (depth >= len + SEEP_TIP) continue;
+        // top half-width 0.22-0.34 m: the runnel core (R >= SEEP_R0, ~0.09 m inside the outline) is >= ~0.18 m wide
+        // under the ceiling (a narrower zone blurs below SEEP_R0)
+        const hw0 = 0.22 + 0.12 * hash01(hash3(h, 2, 9));
         const wob = 0.04 * (valueNoise2(SEED_SEEP + 3, along * 0.3 + col * 7.1, depth / 0.25) - 0.5);
         const centre = (col + 0.2 + 0.6 * hash01(hash3(h, 1, 7))) * 0.3 + wob;
-        const du = Math.abs(along - centre) / (w * 0.5);
-        if (du >= 1) continue;
-        const v = (0.55 + 0.25 * hash01(hash3(h, 4, 13))) * (1 - sstep(0.55, 1, du)) * (1 - sstep(0.35, 1, t));
-        r = Math.max(r, v);
+        if (Math.abs(along - centre) >= hw0 * 1.15) continue;
+        const nL = valueNoise2(SEED_SEEP + 5, col * 7.1 + plane * 3.3, depth / 0.25);
+        const nR = valueNoise2(SEED_SEEP + 6, col * 7.1 + plane * 3.3, depth / 0.25);
+        r = Math.max(r, seepZoneR(along - centre, depth, hw0, len, nL, nR, false));
       }
     }
   }
