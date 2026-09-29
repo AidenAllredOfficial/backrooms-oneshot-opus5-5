@@ -189,10 +189,10 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
 export const MASONRY_RECIPES: RecipeTable = {
   [Mat.CMU_PAINTED]: {
     glsl: cmuBlock(true), normalStrength: 1.0, heightScale: CMU_HS, trim: [1.007, 1.007, 1.008], aux: 'detailMask',
-    phys: phys(0.3, { pomTop: 0.9, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.3, dirt: [0.62, 0.57, 0.5, 2.5] }),
+    phys: phys(0.3, { pomTop: 0.9, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.3, dirt: [0.45, 0.41, 0.35, 1] }),
   },
   [Mat.CMU_RAW]: {
     glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.96, 0.965, 0.98], aux: 'detailMask',
-    phys: phys(0.6, { pomTop: 0.9, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.45, dirt: [0.7, 0.66, 0.6, 2.0] }),
+    phys: phys(0.6, { pomTop: 0.9, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.45, dirt: [0.55, 0.52, 0.46, 1] }),
   },
 };

@@ -46,6 +46,35 @@ v2 conventions").
 
 ## Lane C: masonry and tile
 
+### 2026-09-28 — C: CMU and tile recipes, D6 / D14 / D15, world block variation, CMU_RAW placement — APPLIED
+- **Status:** APPLIED by lane C on its branch. No `src/core/*` change: `LAYER_DEFS` rows 8, 12, 13, 14 and 28 keep
+  their numbers (the recipes are trimmed to them).
+- **Channels:** CMU_PAINTED and CMU_RAW use aux `'detailMask'` (ormh.a 1 on faces, 0.3 in the joints; the masonry hooks
+  also read it as the face / joint share). POOL_TILE and POOL_MOSAIC use aux `'mask'` = grout coverage (the tile hooks
+  colour the grout along its lines in world space and the tile grime reads it instead of the roughness heuristic).
+- **Detail slots:** D14 CMU_FACE and D15 CMU_RAW filled (rms slope 0.375 / 0.44); D6 GLAZE rewritten (waviness at 25 and
+  12 mm, rms slope 0.0046, sparse pinholes; heightScale 0.00018, S 0.02, roughK 0.1, cavity 0.3).
+- **SurfacePhys:** CMU_PAINTED `det: 14, detS: 1, pomTop: 0.9, sigma: 0.3, dirt: [0.45, 0.41, 0.35, 1]`; CMU_RAW
+  `det: 15, detS: 1, pomTop: 0.9, tok: 0.8, sigma: 0.45, dirt: [0.55, 0.52, 0.46, 1]` (sigma and dirt take effect with
+  0b); POOL_TILE `pomTop: 0.76, roughComp: 0.8`; POOL_MOSAIC `pomTop: 0.8, roughComp: 0.8`; VINYL_VCT `glaze: 0.22,
+  roughComp: 0.7`.
+- **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
+  (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. `world/content/decals.ts` places wall CRACK
+  decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost theirs (not lane C's file; adding CMU_RAW to
+  that filter restores them).
+- **Hooks (chunks/family/masonry.ts):** main-scope names `brMsOn`, `brMsJ`, `brMsDet`, `brMsTilt` (postSample; read by
+  postDetail, grime, normal); `brMsKey()` in pars. postDetail applies `brAux` as the detail strength on CMU while
+  `DETAIL_MASK_SHIM = 1`: **set it to 0 when 0b's detail block applies the 'detailMask' channel itself**, or the joints
+  get the mask twice. The rough hook adds D14 / D15's E[s^2] (0.12 / 0.18) to alpha^2 under `#ifndef BR_DETAIL_MAPS`.
+- **Core issue found (lane 0):** `FRAG_NORMAL_GLSL`'s cotangent frame keeps |T| : |B| = |grad u| : |grad v|, so on
+  vertical faces of layers with repeatY != repeat every metric slope along u is scaled by repeatY / repeat (CMU 0.42,
+  CONCRETE_WALL 0.63, CONCRETE_FLOOR / CEIL on walls 0.63, METAL_PAINTED 0.83). The masonry postSample undoes it for the
+  CMU layers (`brNrm.x *= brLB.x / brLB.y`); **remove that line if the core frame gets normalised per axis.**
+- **Hooks (chunks/family/tile.ts):** pars defines `BR_M_POOL_MOSAIC`, `BR_M_VINYL_VCT`; postSample declares
+  `brTlWear` (read by rough). VCT lane wear reads mask A on up-facing VINYL_VCT: dormant until the hard-floor wear bake
+  (lane B) writes A there (`VCT_SYNTH_WEAR` is a development switch).
+- **Consumers affected:** lane 0 (the shim, the frame issue), lane B (mask A on VCT floors), the integrator (golden).
+
 ## Lane D: walls and ceilings
 
 ## Lane E: props
