@@ -2,11 +2,14 @@
 // 2 mm off its surface, clipped to this tile's cells (split at cell lines, owner = cell faced), in the separate
 // `decals` buffer. Atlas slot uv follows the core/layout.ts `rot` convention (+v = forwardXZ(rot) on floors and
 // ceilings; +v = +Y rotated counter-clockwise by rot as seen by a viewer in front of a wall). DECAL_PAINT_STRIPE uses
-// FLOOR_PAINT with metre uv. The lightmap uv is borrowed from the surface underneath. Pure module.
+// FLOOR_PAINT with stripe-local metre uv (u across the stripe from 0 at one edge, v along it from a hashed offset) and
+// its width in mm in aux.x, so the shader knows the distance to the painted edge (edge flakes) and the recipe's wear
+// bands run across the stripe (texture realism v2 lane B). The lightmap uv is borrowed from the surface underneath.
+// Pure module.
 
 import { CELL, CHUNK_SIZE, TILE_SIZE } from '../core/constants.ts';
 import { DECAL_PAINT_STRIPE, DecalKind, Mat, VFlag } from '../core/ids.ts';
-import { hash3 } from '../core/rng.ts';
+import { hash01, hash3 } from '../core/rng.ts';
 import type { DecalPlacement } from '../core/layout.ts';
 import type { CeilCharts } from './ceilings.ts';
 import type { VFaceIndex } from './faceIndex.ts';
@@ -112,9 +115,12 @@ function emitQuad(plan: Plan, g: TileGrid, idx: VFaceIndex, cc: CeilCharts, d: D
   const slot = d.kind & 15;
   const col = d.color ?? [1, 1, 1];
   const alpha = Math.max(0, Math.min(1, d.alpha ?? 1));
-  const st = state(layer, VFlag.DECAL | VFlag.NO_GRIME, tintRGB(col[0], col[1], col[2], Math.round(alpha * 255)), d.emit ?? 0, 0, BUF_DECALS);
+  // stripes: aux.x = width in mm; their v starts at a per-stripe hashed offset (the wear pattern differs per stripe)
+  const auxX = stripe ? Math.max(1, Math.min(255, Math.round(hw * 2000))) : 0;
+  const st = state(layer, VFlag.DECAL | VFlag.NO_GRIME, tintRGB(col[0], col[1], col[2], Math.round(alpha * 255)), d.emit ?? 0, auxX, BUF_DECALS);
   const floorLike = n[1] > 0.9, ceilLike = n[1] < -0.9;
   const rep = matRepeat(layer);
+  const vOff = stripe ? hash01(hash3(Math.round(d.px * 100), Math.round(d.pz * 100), Math.round((d.py + d.h) * 100) ^ 0x2f1d)) : 0; // tile-independent
   for (const [pp, uv] of splitByCells(p, ab, 2, CELL, TILE_SIZE)) {
     const nv = pp.length / 3;
     let mx = 0, my = 0, mz = 0;
@@ -126,7 +132,7 @@ function emitQuad(plan: Plan, g: TileGrid, idx: VFaceIndex, cc: CeilCharts, d: D
     if (g.isSolid(k)) continue;
     const muv: number[] = [];
     for (let i = 0; i < nv; i++) {
-      if (stripe) muv.push(pp[i * 3] / rep, pp[i * 3 + 2] / rep);
+      if (stripe) muv.push((uv[i * 2] * 2 * hw) / rep, (uv[i * 2 + 1] * 2 * hh) / rep + vOff);
       else muv.push(((slot % 4) + uv[i * 2]) / 4, (Math.floor(slot / 4) + uv[i * 2 + 1]) / 4);
     }
     const f = mkFace(pp, muv, n[0], n[1], n[2], st);

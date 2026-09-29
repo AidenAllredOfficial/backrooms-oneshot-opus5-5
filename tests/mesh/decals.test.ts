@@ -97,12 +97,15 @@ describe('decal buffer contents', () => {
       expect(m.lmUv[v * 2] * 512).toBeCloseTo(m.position[v * 3] / t + 1, 4);
     }
   });
-  test('signage layer, paint stripes in metres, decals split at cell lines and clipped to the tile', () => {
+  test('signage layer, paint stripes in stripe-local metres, decals split at cell lines and clipped to the tile', () => {
     let m = onlyDecal(D({ sign: true, kind: 3 }));
     expect(m.layer[0]).toBe(Mat.SIGNAGE);
+    // rot 0: the stripe's width runs along +x (u), from the edge at px - w / 2; aux.x = the width in mm (clamped)
     m = onlyDecal(D({ kind: DECAL_PAINT_STRIPE, w: 2.0, h: 0.1, px: 6.0 }));
     expect(m.layer[0]).toBe(Mat.FLOOR_PAINT);
-    for (let v = 0; v < m.vertexCount; v++) expect(m.uv[v * 2]).toBeCloseTo(m.position[v * 3] / 1.2, 6);
+    for (let v = 0; v < m.vertexCount; v++) expect(m.uv[v * 2]).toBeCloseTo((m.position[v * 3] - 5.0) / 1.2, 6);
+    expect(m.aux[0]).toBe(255);
+    expect(onlyDecal(D({ kind: DECAL_PAINT_STRIPE, w: 0.12, h: 2.0, px: 6.0 })).aux[0]).toBe(120);
     // a 2 m stripe centred on a cell line is split into pieces that never cross x = k * CELL
     for (let t = 0; t < m.indexCount / 3; t++) {
       const xs = [0, 1, 2].map((k) => m.position[m.index[t * 3 + k] * 3]);
