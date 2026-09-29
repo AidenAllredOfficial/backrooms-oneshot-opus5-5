@@ -271,8 +271,9 @@ v2 conventions").
 - **`src/mesh/ceilings.ts`** (plenum throat tint only): the diffuser throat's PLENUM tint 0.08 → 0.35.
 - **Cost** (against tex-integ, gpuBench whole frame, gallery 03 / 11 / 14 / LOBBY ceiling): high +0.19 / +0.17 /
   +0.14 / +0.09 ms, ultra +1.84 / +1.37 / +1.17 / +0.55 ms, over the plan's +0.02 / +0.04 ms. Where it goes is in the
-  DESIGN.md lane D section (a per-block bisect; part of it is occupancy of the shared surface program). genMs and
-  memory unchanged.
+  DESIGN.md lane D section (a per-block bisect; part of it is occupancy of the shared surface program). Against
+  tex-integ c7ca203 (lanes A, B and C in): high +0.17 / +0.15 / +0.13 / +0.08 ms, ultra (gallery 03 / 11) +1.31 /
+  +0.25 ms. genMs and memory unchanged.
 - **Consumers affected:**
   - The concrete and masonry grime profiles (lanes B and C) still draw R above their threshold as a flat darkening.
     Seepage zones are now 0.44-0.68 m tongues (the old wall streaks were 8-45 cm), so on CMU and concrete walls they

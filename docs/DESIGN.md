@@ -4442,7 +4442,9 @@ all these is a world-space height gradient added in the family `normal` hooks.
   exceeds the total), which suggests part of the cost is occupancy of the one surface program, not work on wall pixels.
   Sharing the derivatives and skipping the edge solves off the peel won back 0.1-0.2 ms at ultra; dropping EON on the
   wall layers and the fissure dust 0.02-0.04 ms at high. Lens aging and D2's 0.15 m repeat measured within noise.
-  textures.genMs 207.6 → 198.8 ms (noise), detail genMs 18.7 → 18.6 ms; no new memory.
+  textures.genMs 207.6 → 198.8 ms (noise), detail genMs 18.7 → 18.6 ms; no new memory. After merging lanes A, B and C
+  (tex-integ c7ca203, which already carries EON and relief dirt): high +0.17 / +0.15 / +0.13 / +0.08 ms, ultra (gallery
+  03 / 11) +1.31 / +0.25 ms.
 
 **Limits.** At 2-3 m the fissures are sub-pixel: their mean darkening is right, but a linear-in-V term cannot draw
 the raking shadows that make a fissured tile read under a bulb from across a room; the sparse 22 mm fissure family
