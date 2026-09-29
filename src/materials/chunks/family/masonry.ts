@@ -69,6 +69,10 @@ bool brMsOn = false;
 float brMsJ = 0.0, brMsDet = 1.0;
 vec2 brMsTilt = vec2( 0.0 );
 if ( brMsOn ) {
+	// the base normal is a metric slope, but FRAG_NORMAL's cotangent frame keeps |T| : |B| = |grad u| : |grad v| =
+	// repeatY : repeat (u spans 2.4 m, v 1.0 m on walls), which shrank every slope along u (head joints, tilts, chips)
+	// to 0.42: undo it for these layers
+	brNrm.x *= brLB.x / brLB.y;
 	uint brMsH = brMsKey( brPW, brNWg, brUv - vBrUv, brLB.xy, vBrLocal.y );
 	brMsJ = clamp( ( 1.0 - brAux ) / 0.7, 0.0, 1.0 );
 	bool brMsRaw = brL == BR_M_CMU_RAW;
