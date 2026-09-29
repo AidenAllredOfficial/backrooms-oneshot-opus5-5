@@ -3,8 +3,9 @@
 // `decals` buffer. Atlas slot uv follows the core/layout.ts `rot` convention (+v = forwardXZ(rot) on floors and
 // ceilings; +v = +Y rotated counter-clockwise by rot as seen by a viewer in front of a wall). DECAL_PAINT_STRIPE uses
 // FLOOR_PAINT with stripe-local metre uv (u across the stripe from 0 at one edge, v along it: the world coordinate plus
-// a per-line hashed offset, so the pieces of a stripe clipped at chunk edges continue) and its width in mm in aux.x, so the shader knows the distance to the painted edge (edge flakes) and the recipe's wear
-// bands run across the stripe (texture realism v2 lane B). The lightmap uv is borrowed from the surface underneath.
+// a per-line hashed offset, so the pieces of a stripe clipped at chunk edges continue) and its width in mm in aux.x,
+// so the shader knows the distance to the painted edge (edge flakes) and the recipe's wear bands run across the
+// stripe (texture realism v2 lane B). The lightmap uv is borrowed from the surface underneath.
 // Pure module.
 
 import { CELL, CHUNK_SIZE, TILE_SIZE } from '../core/constants.ts';

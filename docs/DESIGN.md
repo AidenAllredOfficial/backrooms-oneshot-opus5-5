@@ -4229,8 +4229,9 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
   kerf cannot make a far joint flicker). Early-outs keep the cost to a few hashes away from joints and cracks.
 - **Traffic lanes:** WP7 mask A covers the hard floors (bake/mask.ts; TEX2.md). On concrete the lanes are burnished:
   roughness × 0.62, albedo × 0.88 and a little warmer, the detail stronger (exposed fines, LEAN micro-scratches),
-  dust at their edges; every door wears an entry fan into its rooms and rack aisles get two wheel tracks. On terrazzo the lanes lose the polish (roughness × 3.5, the
-  rough lobe covers 40 % more) and the edges by the walls keep yellowed wax.
+  dust at their edges; every door wears an entry fan into its rooms and rack aisles get two wheel tracks, which fade
+  out over 2 m past the end of a rack row. On terrazzo the lanes lose the polish (roughness × 3.5, the rough lobe
+  covers 40 % more) and the edges by the walls keep yellowed wax.
 - **Finish class** per room (the FLOOR_AUX region key): sealed 35 % (roughness × 0.6, the trowel swirl stronger
   through ormh.a), plain 45 %, dusty 20 % (roughness × 1.3, albedo × 1.06, detail × 0.7). Risers drop the swirl.
 - **Walls and soffits:** oil only drips onto floors; on walls and soffits the same grime fields are matte soot. Each

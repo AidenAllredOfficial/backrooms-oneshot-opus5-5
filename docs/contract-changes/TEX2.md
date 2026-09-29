@@ -115,19 +115,23 @@ v2 conventions").
   - TERRAZZO (26): `repeat` 2.4 → 1.2, `tileSize` 0 → 0.6 (precast tiles: the shader rotates / flips whole tiles).
   - `albedoMean` unchanged on every row (the bake still bounces the same colours); the trims are re-measured.
 - **Mesh output (`src/mesh/decals.ts`, DECAL_PAINT_STRIPE only):** stripe uv is stripe-local metres / repeat: u runs
-  across the stripe from 0 at one painted edge to width / repeat, v along it from a per-stripe hashed offset (tile
-  independent: hashed from the placement). `aux.x` = the stripe width in mm (1-255; 255 = 255 mm or wider, no edge
-  flakes). Other decals are unchanged. Consumer: `chunks/family/concrete.ts` (edge flakes); tests/mesh/decals.test.ts.
+  across the stripe from 0 at one painted edge to width / repeat, v along it: the world coordinate along the line
+  plus a hash of the line (its across coordinate and height), modulo the texture period (`stripeV0`), so the pieces
+  a layout clips at chunk edges continue one wear pattern and parallel lines differ. `aux.x` = the stripe width in
+  mm (1-255; 255 = 255 mm or wider, no edge flakes). Other decals are unchanged. Consumer:
+  `chunks/family/concrete.ts` (edge flakes); tests/mesh/decals.test.ts.
 - **WP7 mask A (`src/bake/mask.ts`, the floor damage block):** the carpet traffic wear (corridors, thresholds, lanes
   between openings) also runs on CONCRETE_FLOOR, TERRAZZO and VINYL_VCT at 0.8 x the carpet amplitude; on those hard
   floors every opening also wears an entry fan into its rooms (3 m deep, widening from the door), and texels in a rack
-  aisle (1.0-4.2 m between occluder boxes reaching 1-2.5 m above the floor and at least
-  0.9 m long along the aisle, near occluders over 1.8 m) get two wheel tracks 0.45 m either side of the aisle centre
-  (one in aisles under 1.6 m), at (0.7 + 0.3 decay) amplitude. Under a rack: 0. Consumers: the concrete (burnished
-  lanes) and terrazzo (polish loss) responses in `chunks/family/concrete.ts`; VINYL_VCT's response is lane C's.
-- **Detail maps:** D12 SLAB (heightScale 0.6 mm, S 0.3, roughK 0.3, cavity 1) and D13 POLISH (20 µm, S 0.05) replace
-  their neutral placeholders; D4 CONCRETE_FINE gets stronger grains (±15 %) and more, larger pinholes (4 %, r × 1.3),
-  which also reaches its other users (PLENUM, METAL_RUST and the CMU_RAW placeholder).
+  aisle (1.0-4.2 m between occluder boxes reaching 1-2.5 m above the floor and at least 0.9 m long along the aisle,
+  near occluders over 1.8 m) get two wheel tracks 0.45 m either side of the aisle centre (one in aisles under 1.6 m),
+  at (0.7 + 0.3 decay) amplitude, fading out over 2 m past the end of a rack row. Under a rack: 0. Consumers: the
+  concrete (burnished lanes) and terrazzo (polish loss) responses in `chunks/family/concrete.ts`; VINYL_VCT's
+  response is lane C's.
+- **Detail maps:** D12 SLAB (heightScale 0.6 mm, S 0.15, roughK 0.3, cavity 1) and D13 POLISH (heightScale 0.8 mm,
+  exaggerated to carry the unresolved scratches' slope variance; S 0.045, roughK 0, cavity 0) replace their neutral
+  placeholders; D4 CONCRETE_FINE gets stronger grains (±15 %) and more, larger pinholes (4 %, r × 1.3), which also
+  reaches its other users (PLENUM, METAL_RUST and the CMU_RAW placeholder).
 - **Samplers:** the decal variant references `uBrDetail` (FLOOR_PAINT stripes fetch D12, world-anchored, under
   BR_DETAIL_MAPS): 15 → 16 units at high / ultra. The shell, props and water variants are unchanged.
 - **SurfacePhys v2 fields set** (read by the 0b shading block): `sigma` CONCRETE_FLOOR 0.25 (scaled by 1 − the
