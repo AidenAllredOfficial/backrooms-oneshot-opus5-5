@@ -330,6 +330,33 @@ describe('texture realism v2 per-layer constants (recipe rows -> BR_L_* const ar
     }
   });
 
+  it('the relief-aware dirt / wear block compiles in only when some layer sets an amount (all 0 today)', () => {
+    const on = LAYER_RECIPES_FULL.some((r) => r.phys.dirt[3] > 0 || r.phys.wear[3] > 0);
+    expect(g).toContain(`#define BR_RELIEF_GRIME ${on ? 1 : 0}`);
+  });
+
+  it('0b wiring: detail repeat, detail mask and tint, dirt / wear, detail specular occlusion, EON sigma', () => {
+    const frag = buildSurfaceFragment(ShaderLib.physical.fragmentShader);
+    const at = (s: string): number => { const i = frag.indexOf(s); expect(i, s).toBeGreaterThanOrEqual(0); return i; };
+    // the detail uv, footprint and ripple follow BR_L_DETREP before the postSample hooks see them
+    expect(at('brDetUv /= brDetRep;')).toBeLessThan(at('// ---- family hooks: postSample'));
+    expect(at('brDetDx /= brDetRep;')).toBeGreaterThan(at('vec2 brDetDx = dFdx( brDetUv );'));
+    expect(frag).toContain('float brRk = BR_DETAIL_REPEAT / BR_RIPPLE_SCALE * brDetRep;');
+    // 'detailMask' layers scale the strength after postSample (which may edit brAux), before the fetch
+    expect(at('if ( brAuxK == BR_AUX_DETAILMASK ) brDetL.y *= brAux;')).toBeGreaterThan(at('// ---- family hooks: postSample'));
+    expect(at('if ( brAuxK == BR_AUX_DETAILMASK ) brDetL.y *= brAux;')).toBeLessThan(at('vec4 brDt = brDetailFetch('));
+    // the tint follows the grey multiplier
+    expect(at('brA *= 1.0 + ( brAm - 1.0 ) * brDetL.y * BR_L_DETTINT[ brL ];')).toBeGreaterThan(at('brA *= mix( 1.0, brAm, brDetL.y );'));
+    // dirt / wear inside the grime block after every family's profile branch, before the wet band
+    expect(at('#if BR_RELIEF_GRIME')).toBeGreaterThan(at('// ---- family props: grime'));
+    expect(at('#if BR_RELIEF_GRIME')).toBeLessThan(at('float brBand = brWaterWetBand('));
+    // detail specular occlusion after the aomap replacement, before the families' postLight hooks
+    expect(at('// ---- detail specular occlusion')).toBeGreaterThan(at('reflectedLight.indirectSpecular += brRefl;'));
+    expect(at('// ---- detail specular occlusion')).toBeLessThan(at('// ---- family hooks: postLight'));
+    // the EON sigma is set before the family matPost hooks (they may rescale it)
+    expect(at('brDiffSigma = min( 1.0, sqrt(')).toBeLessThan(at('// ---- family hooks: matPost'));
+  });
+
   it('grime profiles: paint (7) on DRYWALL and TRIM_PAINT, masonry (8) on CMU', () => {
     expect([GRIME_ID.paint, GRIME_ID.masonry]).toEqual([7, 8]);
     for (const m of [Mat.DRYWALL, Mat.TRIM_PAINT]) expect(LAYER_DEFS[m].grime).toBe('paint');
