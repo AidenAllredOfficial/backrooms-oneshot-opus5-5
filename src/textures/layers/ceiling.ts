@@ -146,14 +146,13 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). CEILING_TILE's dirt is grey dust
-// in the fissures (0b's relief-aware block: x the cavity, more near walls and fixtures where the mask holds grime); the
-// wall layers set none, since their hand and kick zones are drawn by the walls family from the mask, and the relief term
-// has no concavity to fill on smooth paint and paper
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). EON sigma 0.6 on the mineral fibre
+// and the sprayed plenum; no relief-aware dirt (grey dust in the fissures read barely at all and cost ~0.02 ms at high
+// on every ceiling pixel)
 export const CEILING_RECIPES: RecipeTable = {
   [Mat.CEILING_TILE]: {
     glsl: CEILING_TILE, normalStrength: 1.5, heightScale: 0.004, trim: [0.997, 0.994, 0.985],
-    phys: phys(0.9, { tok: 0.8, det: 5, detS: 0.8, sigma: 0.6, dirt: [0.7, 0.68, 0.64, 0.4] }), aux: 'detailMask',
+    phys: phys(0.9, { tok: 0.8, det: 5, detS: 0.8, sigma: 0.6 }), aux: 'detailMask',
   },
   [Mat.PANEL_LENS]: {
     glsl: PANEL_LENS, normalStrength: 3.0, heightScale: 0.002, trim: [0.978, 0.978, 0.983],

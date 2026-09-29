@@ -153,22 +153,24 @@ void gen(vec2 uv, inout Surf s) {
 // detail maps (D2, D16, D17: rms slopes 0.05-0.07), which become LEAN roughness with distance. The old 6-10x made
 // the wallpaper's print a rubber stamp and the drywall stucco. Props that need a plain matte surface do not borrow
 // these layers (kraft boxes on DRYWALL read as stucco).
-// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). The wall layers keep Lambert
+// diffuse: EON at paint and paper's sigma ~0.2 moves a few percent at grazing angles, and (with the ceiling's fissure
+// dust, also dropped) it cost 0.02-0.04 ms at high on gallery 03, 11 and the LOBBY ceiling
 export const WALL_RECIPES: RecipeTable = {
   [Mat.WALLPAPER_L0]: {
     glsl: WALLPAPER_L0, normalStrength: 2.5, heightScale: 0.0004, trim: [1.007, 1.018, 1.037],
-    phys: phys(0.35, { det: 2, detS: 1, detRep: 0.5, sigma: 0.2 }), aux: 'detailMask',
+    phys: phys(0.35, { det: 2, detS: 1, detRep: 0.5 }), aux: 'detailMask',
   },
   [Mat.WALLPAPER_MANILA]: {
     glsl: WALLPAPER_MANILA, normalStrength: 2.0, heightScale: 0.0006, trim: [1.009, 1.011, 1.014],
-    phys: phys(0.35, { det: 17, detS: 1, detRep: 0.5, sigma: 0.2 }),
+    phys: phys(0.35, { det: 17, detS: 1, detRep: 0.5 }),
   },
   [Mat.DRYWALL]: {
     glsl: DRYWALL, normalStrength: 2.0, heightScale: 0.0005, trim: [0.998, 0.995, 1.001],
-    phys: phys(0.5, { det: 16, detS: 1, sigma: 0.2 }), aux: 'detailMask',
+    phys: phys(0.5, { det: 16, detS: 1 }), aux: 'detailMask',
   },
   [Mat.TRIM_PAINT]: {
     glsl: TRIM_PAINT, normalStrength: 4.0, heightScale: 0.0003, trim: [1.007, 1.01, 1.005],
-    phys: phys(0.1, { det: 3, detS: 0.5, sigma: 0.2 }),
+    phys: phys(0.1, { det: 3, detS: 0.5 }),
   },
 };

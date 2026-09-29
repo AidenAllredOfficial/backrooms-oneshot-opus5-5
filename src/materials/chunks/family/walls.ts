@@ -1,23 +1,22 @@
 // src/materials/chunks/family/walls.ts — texture realism v2 family hooks: wall coverings and paint (WALLPAPER_L0,
-// WALLPAPER_MANILA, DRYWALL, TRIM_PAINT). Owns grime profiles 2 (wallpaper) and 7 (paint: DRYWALL, TRIM_PAINT). Lane D's
-// file; hook points and rules in chunks/family/index.ts.
+// WALLPAPER_MANILA, DRYWALL, TRIM_PAINT). Owns grime profiles 2 (wallpaper) and 7 (paint: DRYWALL, TRIM_PAINT). Lane
+// D's file; hook points and rules in chunks/family/index.ts.
 //
 // Water stains (both profiles) are capillary fronts, not thresholds: the WP7 mask R is the wet extent (bake/mask.ts:
-// stains at or below STAIN_MAX, seepage runnel zones SEEP_R0..1), perturbed by a fine field (the layer's own relief,
+// stains at or below STAIN_MAX, seepage runnel tongues SEEP_R0..1), perturbed by a fine field (the layer's own relief,
 // the detail multiplier and two world value-noise octaves at 12 mm and 40 mm; no speckle: it broke the fronts into
-// grains), so the paper's
-// formation and emboss steer the edge. brWlFronts draws 3 nested drying fronts whose spacing varies along the wall,
-// each a deposit darkest at its outer edge (brStainFront's profile, chunks/grimeLib.ts) that keeps its integral when the
-// pixel footprint widens it (no darkening with distance), a pale halo inside the outermost, mould specks inside the
-// innermost where the wall stays damp, and white efflorescence just above a rising-damp front. Runnel zones get narrow
-// runnels (one per 0.1 m column, p 0.6) that wander, narrow down the wall and end in teardrop deposits. The ceiling
-// family (chunks/family/ceiling.ts) reuses brWlFronts.
+// grains), so the paper's formation and emboss steer the edge. brWlFronts draws 3 nested drying fronts whose spacing
+// varies along the wall, each a deposit darkest at its outer edge (brStainFront's profile, chunks/grimeLib.ts) that
+// keeps its integral when the pixel footprint widens it (no darkening with distance), a pale halo inside the outermost,
+// mould specks inside the innermost where the wall stays damp, and white efflorescence just above a rising-damp front.
+// Runnel zones get narrow runnels (one per 0.1 m column, p 0.6) that wander, narrow down the wall and end in teardrop
+// deposits. The ceiling family (chunks/family/ceiling.ts) reuses brWlFronts.
 //
 // Wallpaper also gets its roll seams (tight, open or lifted), the peel edge (torn fibres, a lifted flap showing its
 // white back and casting a shadow, the exposed face paper and adhesive) and damp cockle; paint gets scuffs, blisters
 // and flakes to the primer, and drywall its screw spots, pops and spackle patches (postSample: they change the detail
-// mask). The analytic relief of seams, flaps, cockle, pops and blisters is a world-space height gradient (brWlBump,
-// d h / d along and d h / d y) that the normal hook adds on the wall's world axes.
+// mask). The analytic relief of seams, flaps, cockle, pops and blisters is a world-space height gradient
+// (brWlBump, d h / d along and d h / d y) that the normal hook adds on the wall's world axes.
 
 import { SEEP_R0, STAIN_MAX } from '../../../bake/mask.ts';
 import { Mat } from '../../../core/ids.ts';
@@ -54,13 +53,14 @@ const WALL_PARS = /* glsl */ `
 #define BR_WL_M_DRYWALL ${Mat.DRYWALL}
 #define BR_WL_M_TRIM ${Mat.TRIM_PAINT}
 // nested drying fronts at the levels L0 < L1 < L2 of the field sp: brStainFront's deposit profile (a half Gaussian of
-// width wp on the dry side, an exponential of ${f(STAIN_FRONT.INNER)} wp inside, each inner front ${f(WALL_STAIN.NEST_FADE)} weaker). wp
-// is the deposit's physical width in s units: the caller converts BR_WL_TIDE_M metres with the field's metric
-// gradient, so the line is ~3 mm wide however steep or gentle the wet extent is. The pixel footprint wAA (the caller's fwidth of the field's
-// smooth part, taken in uniform flow) widens both sides in quadrature and lowers the peak so the deposit keeps its
-// integral (0.886 wp + ${f(STAIN_FRONT.INNER)} wp): a front neither darkens nor brightens a wall with distance, and it stays a
-// thin line wherever it is resolved. The fine field's noise is left out of wAA: it only moves the front, and its
-// octaves fade before they could alias. Callable in per-pixel branches
+// width wp on the dry side, an exponential of ${f(STAIN_FRONT.INNER)} wp inside, each inner front
+// ${f(WALL_STAIN.NEST_FADE)} weaker). wp is the deposit's physical width in s units: the caller converts BR_WL_TIDE_M
+// metres with the field's metric gradient, so the line is ~3 mm wide however steep or gentle the wet extent is. The
+// pixel footprint wAA (the caller's fwidth of the field's smooth part, taken in uniform flow) widens both sides in
+// quadrature and lowers the peak so the deposit keeps its integral (0.886 wp + ${f(STAIN_FRONT.INNER)} wp): a front
+// neither darkens nor brightens a wall with distance, and it stays a thin line wherever it is resolved. The fine
+// field's noise is left out of wAA: it only moves the front, and its octaves fade before they could alias. Callable in
+// per-pixel branches
 void brWlFronts( float sp, float wpIn, float wAA, float L0, float L1, float L2, out float inside, out float tide ) {
 	float wp = max( wpIn, 1e-5 );
 	float wo = sqrt( wp * wp + wAA * wAA );
