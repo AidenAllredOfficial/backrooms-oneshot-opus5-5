@@ -267,14 +267,14 @@ if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
 	brOrmh.g = min( brOrmh.g + 0.15 * brWpBl, 1.0 );
 }
 // tint headroom and topcoat mask. Props store tint / 2 (decoded x2 here); the tint colours the topcoat only (brWpTop):
-// exposed primer / steel / rust keep the recipe's colour. Whitened scratches and scuffs act on the tinted colour. The
-// surface multiplies by vBrTint after the grime and wetness, so brA is pre-divided (tint bytes are >= 1 on props); the
-// grime and wetness then act on the untinted colour as before lane E
+// exposed primer / steel / rust keep the recipe's colour. Whitened scratches and scuffs act on the tinted colour. From
+// here to postWet brA is the part's real albedo, so the grime and wetness act on it with their own colours (rust
+// run-off, efflorescence: not tinted by the paint, nor halved by the stored tint); postWet then divides out the stored
+// tint, which surface.ts multiplies back in
 if ( brWpProp || brWpOn ) {
 	vec3 brWpT = brWpProp ? vBrTint.rgb * 2.0 : vBrTint.rgb;
-	vec3 brWpC = brA * mix( vec3( 1.0 ), brWpT, brWpTop );
-	if ( brWpScr > 0.0 ) brWpC = mix( brWpC, vec3( brLuma( brWpC ) * 1.3 + 0.04 ), 0.7 * brWpScr ); // stress-whitened paint
-	brA = brWpC / max( vBrTint.rgb, vec3( 1.0 / 255.0 ) );
+	brA *= mix( vec3( 1.0 ), brWpT, brWpTop );
+	if ( brWpScr > 0.0 ) brA = mix( brA, vec3( brLuma( brA ) * 1.3 + 0.04 ), 0.7 * brWpScr ); // stress-whitened paint
 }
 }
 #endif
@@ -307,7 +307,19 @@ if ( brWpProp || brWpOn ) {
 		}
 	}
 `,
-  postWet: '',
+  postWet: /* glsl */ `
+// ---- lane E: from the real albedo (postSample's tint step) back to the stored-tint convention: surface.ts multiplies
+// by vBrTint next (tint bytes are >= 1 on props, so the division is safe)
+#ifndef BR_DECAL
+{
+	bool brWpDiv = BR_DETAIL == 1 && brAuxK == BR_AUX_WEAR;
+#ifdef BR_PROPS
+	brWpDiv = brWpDiv || ( ( brF & BR_F_PROP_AUX ) != 0 && vBrEmit <= 0.0 );
+#endif
+	if ( brWpDiv ) brA /= max( vBrTint.rgb, vec3( 1.0 / 255.0 ) );
+}
+#endif
+`,
   rough: /* glsl */ `
 // ---- lane E: the 'wear' layers carry their exposed roughness and the override-scaled topcoat in ormh.g (postSample):
 // replace the override with it (Toksvig and LEAN as above)

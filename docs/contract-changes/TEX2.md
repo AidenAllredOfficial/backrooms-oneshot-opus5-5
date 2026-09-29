@@ -245,8 +245,9 @@ v2 conventions").
 - **Status:** APPLIED by lane E on its branch.
 - **WP6 contract (props/builder.ts):**
   - Tint: non-emissive PROP_AUX parts store `byte(tint / 2)`, at least 1 (`tintByte`); the props family decodes
-    `vBrTint.rgb x 2` at the end of postSample (brA is pre-divided by the stored tint, since surface.ts multiplies by
-    it after the grime and wetness).
+    `vBrTint.rgb x 2` at the end of postSample, where brA becomes the part's real albedo; the props postWet hook
+    divides the stored tint out again, since surface.ts multiplies by it (so the grime and wetness colours act on the
+    real albedo and are neither tinted nor halved; the same holds on shell faces of the 'wear' layers).
     Emissive parts keep x1. METAL_RUST tints are relative to `RUST_PAINT_REF` 0.3, not the layer mean.
   - lmUv on props (was 0, 0): face-local edge coordinates, `edgeEncode(half mm, s) = 4 max(1, round(half)) + 1 + s`
     per axis (0 = no edge on this axis); decode `h = floor(|x| / 4)`, `s = |x| - 4h - 1`, distance `h (1 - |s|)`. The
@@ -273,8 +274,9 @@ v2 conventions").
   `PROP_COAT_NORMAL_GLSL`): the props clearcoat uses the shading normal (base map and detail slope).
 - **Hooks (chunks/family/props.ts):** one main-scope name, `brWpTop` (postSample; read by grime and matPost); the rest
   of the wear state is scoped inside postSample, which measurably lowered the programs' cost; pars
-  `brPropEdgeD`, `brPropEdgeHS`, `brWpExpose` and `BR_M_*` for the prop layers. The rough hook replaces the override
-  path for 'wear' layers (their ormh.g already holds the override-scaled topcoat and the exposed layers' roughness).
+  `brPropEdgeD`, `brPropEdgeHS`, `brWpExpose` and `BR_M_*` for the prop layers; postWet divides the stored tint out.
+  The rough hook replaces the override path for 'wear' layers (their ormh.g already holds the override-scaled topcoat
+  and the exposed layers' roughness).
 - **World output:** light-well window band, copier platen and control panel RUBBER -> PLASTIC; children's playroom
   floor RUBBER -> VINYL_VCT; pool lane rope RUBBER -> PLASTIC. tests/world/golden.json is unchanged (the golden chunks
   hash the layout, which these landmarks do not reach at seed 1).

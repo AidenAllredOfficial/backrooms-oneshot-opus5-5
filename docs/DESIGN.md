@@ -4398,8 +4398,11 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
 - **Tint headroom and topcoat mask.** Non-emissive prop parts store `byte(tint / 2)` (at least 1) and postSample decodes
   x2, so a part can be up to twice its layer mean: chrome, white enamel, pale woods and the rack orange no longer clamp
   to the layer colour. The tint colours only the topcoat: diffuse = recipe x mix(1, tint, brWpTop), so primer, steel
-  and rust keep their own colours (the old tint turned locker chips and scratches into black ink strokes). METAL_RUST
-  tints are relative to a neutral 0.3 paint (`RUST_PAINT_REF`), so a rusty part keeps its paint colour on the remnants.
+  and rust keep their own colours (the old tint turned locker chips and scratches into black ink strokes). From there
+  to postWet brA is the part's real albedo, so the grime and wetness colours (rust run-off, dust, efflorescence) stay
+  their own instead of taking the paint's tint; postWet divides the stored tint out again before surface.ts multiplies
+  it in. METAL_RUST tints are relative to a neutral 0.3 paint (`RUST_PAINT_REF`), so a rusty part keeps its paint
+  colour on the remnants.
 - **Edge coordinates.** Props light from the light volume, so their lmUv stream is free. The primitives write
   `4 round(half mm) + (1 + s)` per face axis (half the face's extent, s in [-1, 1] across it; affine over a planar face,
   so the interpolation is exact; within 0.5 mm at 1 m in float32). The distance to the nearer edge is half (1 - |s|).
