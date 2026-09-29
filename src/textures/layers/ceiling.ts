@@ -8,7 +8,9 @@ import { phys, type RecipeTable } from './types.ts';
  * ~12 % of the face) before the board dries; the factory latex covers their walls, so they read by occlusion (the
  * cavity AO, 0.35-0.6 in the slots), not by colour (albedo only -12 %). They are a capsule scatter on two jittered
  * cell grids (7 mm and 11 mm), each capsule with a hashed angle, length, bend, tapered half-width and depth, and ragged
- * walls. Between them: the granular paint-over-fibre surface (0.3-1.5 mm grains; the finer grain and the pinholes are
+ * walls, plus a sparse family of longer fissures (22 mm cells, up to ~35 mm) that stay resolvable at 2-3 m, where the
+ * short ones are sub-pixel and average into a uniform cavity term; the punching density varies in 8 cm patches
+ * (x0.55-1.45). Between them: the granular paint-over-fibre surface (0.3-1.5 mm grains; the finer grain and the pinholes are
  * D5) and the forming undulation (~40 mm). The bar is a dielectric enamel face (roughness 0.33) 1.3 mm proud of the
  * tile with a rounded hem, and the tile's cut mineral core shows as a thin darker line beside it. Per-tile brightness
  * +-3 %, slight yellowing. ormh.a is the detail mask (1 - bar): the D5 fibre never lands on the steel. The whole layer
@@ -59,10 +61,11 @@ void gen(vec2 uv, inout Surf s) {
   float bar = 1.0 - smoothstep(0.012 - w, 0.012 + w, e);
   // fissures (ragged walls: +-0.15 mm)
   float rag = 0.0003 * (vnoise(uv, PM(700.0), 3) - 0.5);
-  float clus = 0.75 + 0.5 * fbmV(uv, PM(12.0), 2, 5); // the roll punches unevenly: denser and sparser patches
+  float clus = 0.55 + 0.9 * fbmV(uv, PM(12.0), 2, 5); // the roll punches unevenly: denser and sparser patches
   float cov = 0.0, dep = 0.0;
   ctFissures(uv, PM(143.0), 0.6 * clus, 11, rag, cov, dep);
   ctFissures(uv, PM(91.0), 0.4 * clus, 23, rag, cov, dep);
+  ctFissures(uv, PM(45.0), 0.3 * clus, 37, rag, cov, dep);
   // painted fibre surface: grains and the forming undulation
   float gran = fbm(uv, PM(160.0), 3, 15);
   float und = fbm(uv, PM(25.0), 2, 17);
@@ -83,8 +86,9 @@ void gen(vec2 uv, inout Surf s) {
   s.height = mix(hTile, hBar, bar);
   s.rough = mix(0.92 + 0.05 * cov + 0.02 * gran, 0.33, bar);
   // a slot narrower than a texel only half-deepens its texel's height, so the cavity pass sees a shallow dip; the rest
-  // of its occlusion (a 1 x 2 mm slot's floor sees ~20 % of the sky) goes into the recipe AO
-  s.ao = 1.0 - 0.2 * cov * (1.0 - bar);
+  // of its occlusion (a 1 x 2 mm slot's floor sees ~20 % of the sky) goes into the recipe AO (harness ormh.r: mean
+  // 0.94, 22 % of texels < 0.9, cores ~0.55: under a bulb's grazing light, g ~2, the cores go dark)
+  s.ao = 1.0 - 0.3 * cov * (1.0 - bar);
   s.metal = 0.0;
   s.aux = 1.0 - bar;
 }
