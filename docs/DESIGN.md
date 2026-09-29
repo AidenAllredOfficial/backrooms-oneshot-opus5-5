@@ -4537,8 +4537,8 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
       from 0.25 on grazing-lit walls to 0.95 on floors under a lamp, while R_d stays at 0.85-1.0. The plan's
       `R_d ≈ w / 0.8` therefore read grazing walls as a hemisphere-wide cap and gave their joints and pits about
       twice the light the cap model gives at the baked R_d. The estimate is `R_d = clamp(0.95 + 0.15·w − 0.2·c)`,
-      fitted to those bakes: rms 0.055 in visibility against 0.097 for `w / 0.8`, weighted by the directional energy
-      (a sweep test re-checks it on two zones).
+      fitted to two tiles per zone of those bakes: rms 0.055 in visibility against 0.097 for `w / 0.8`, weighted by
+      the directional energy (the other two tiles: 0.053 against 0.092; a sweep test re-checks it on two zones).
     - `g ≤ 2`, so the clamp at 0 never engages above V = 0.5. The term stays linear in V over faces, joints and pits,
       and the same wall patch has the same mean at 1.5 m and at 6 m (−1.75 % and −1.80 % against no term; the old
       cone: −0.77 % and −0.15 %). A narrow light near the horizon would ask for more (shallow relief shadows like
