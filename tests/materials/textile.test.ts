@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { NOISE_WRAP } from '../../src/core/constants.ts';
 import { Mat } from '../../src/core/ids.ts';
 import { LAYER_DEFS } from '../../src/core/materials.ts';
-import { napDiffuse, pileVisibility, TEXTILE, TEXTILE_HOOKS } from '../../src/materials/chunks/family/textile.ts';
+import { napDiffuse, pileGap, pileVisibility, TEXTILE, TEXTILE_HOOKS } from '../../src/materials/chunks/family/textile.ts';
 import { f, TUNE } from '../../src/materials/chunks/params.ts';
 import { Det, DETAIL_RECIPES, DETAIL_SIZE } from '../../src/textures/detail.ts';
 import { LAYER_RECIPES_FULL } from '../../src/textures/registry.ts';
@@ -65,6 +65,41 @@ describe('pile visibility Dv = 1 - kp (1 - V) mu_v^kv', () => {
       const on = r.phys.pile[0] > 0;
       expect(on, LAYER_DEFS[r.layer].name).toBe((TEXTILES as readonly number[]).includes(r.layer));
     }
+  });
+});
+
+describe('pile gaps: deeper in colour at the same luminance', () => {
+  const Y = (c: readonly number[]): number => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const albedos = [Mat.CARPET_L0, Mat.CARPET_OFFICE, Mat.FABRIC_PARTITION].map((l) => LAYER_DEFS[l].albedoMean);
+
+  it('keeps the albedo-weighted luminance of K (the calibrations stand) and is linear in K (mip-unbiased)', () => {
+    for (const a of albedos) {
+      for (const K of [0.15, 0.4, 0.62, 0.9, 1]) {
+        const g = pileGap(K, a);
+        expect(Y(a.map((v, i) => v * g[i])) / Y(a), `${a} K ${K}`).toBeCloseTo(K, 9);
+        // the mean of the per-texel result is the result of the mean K (above the clamp at 0)
+        if (K < 0.3) continue;
+        const lo = pileGap(K - 0.1, a), hi = pileGap(Math.min(K + 0.1, 1), a), k2 = (K - 0.1 + Math.min(K + 0.1, 1)) / 2;
+        const mid = pileGap(k2, a);
+        for (let i = 0; i < 3; i++) expect((lo[i] + hi[i]) / 2).toBeCloseTo(mid[i], 9);
+      }
+    }
+  });
+
+  it('leaves the tips and grey fibre alone and saturates the Level 0 gaps without going negative', () => {
+    expect(pileGap(1, albedos[0])).toEqual([1, 1, 1]);
+    for (const c of pileGap(0.3, [0.3, 0.3, 0.3])) expect(c).toBeCloseTo(0.3, 9);
+    const g = pileGap(0.2, albedos[0]); // a gap pixel: red kept above K, blue below
+    expect(g[0]).toBeGreaterThan(0.2);
+    expect(g[2]).toBeLessThan(0.2 * 0.7);
+    expect(Math.min(...pileGap(0.1, albedos[0]))).toBeGreaterThan(0);
+  });
+
+  it('the GLSL matches the twin', () => {
+    expect(TEXTILE_HOOKS.pars).toContain(`#define BR_TX_GAP ${f(TEXTILE.GAP)}\n`);
+    expect(TEXTILE_HOOKS.pars).toContain(`#define BR_TX_GAP_SAT ${f(TEXTILE.GAP_SAT)}\n`);
+    expect(TEXTILE_HOOKS.matPost).toContain('brTxC = brTxC * ( brLuma( brTxA ) / max( brLuma( brTxA * brTxC ), 1e-6 ) ) - 1.0;');
+    expect(TEXTILE_HOOKS.matPost).toContain('max( vec3( brTxKv ) + ( 1.0 - brTxKv ) * BR_TX_GAP * brTxC, vec3( 0.0 ) ) * brTxNd');
   });
 });
 

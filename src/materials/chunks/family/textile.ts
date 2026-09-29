@@ -39,6 +39,12 @@ export const TEXTILE = {
    * EON sigma 0.75, which darkens rough pile seen at grazing under overhead light. */
   TRAP: 0.69,
   TRAP_SAT: 0.3,
+  /** The gaps between the tufts: what light comes out of them has crossed more dyed fibre, so at the same luminance it
+   * is deeper in colour than the tips (a grey visibility multiplier left them olive-grey). The pile visibility K (Dv x
+   * the detail's) becomes K + (1 - K) GAP (c / m - 1) per channel, c = (albedo / max channel)^GAP_SAT and m the
+   * luminance-weighted mean of c (pileGap): the luminance, and so every calibration above, is unchanged. */
+  GAP: 0.15,
+  GAP_SAT: 1.5,
   /** Wet pile clumps into spiky bundles, its valleys open and darken: V_eff = V^(1 + WET_V x absorbed water). */
   WET_V: 0.6,
   /** Detail-map view hiding on pile layers: brAm = 1 + (brAm - 1)(HIDE + (1 - HIDE) mu_v^kv). */
@@ -95,6 +101,19 @@ export function pileVisibility(V: number, muV: number, kp: number, kv: number): 
   return Math.max(1 - kp * (1 - V) * Math.pow(Math.min(Math.max(muV, 0), 1), kv), 0);
 }
 
+/** Rec. 709 luminance of a linear rgb triple (brLuma). */
+const luma = (c: readonly number[]): number => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+
+/** Pile visibility per channel (twin of the matPost GLSL): K the visibility (Dv x the detail's), albedo the linear
+ * diffuse albedo. Linear in K; the albedo-weighted luminance is K's (luma(albedo x result) = K luma(albedo)); a grey
+ * albedo gives K on every channel. Clamped at 0 (only K < ~0.1 on the Level 0 mustard reaches it). */
+export function pileGap(K: number, albedo: readonly [number, number, number]): [number, number, number] {
+  const mx = Math.max(albedo[0], albedo[1], albedo[2], 1e-4);
+  const c = albedo.map((a) => Math.pow(Math.max(a, 1e-4) / mx, TEXTILE.GAP_SAT));
+  const m = luma(albedo.map((a, i) => Math.max(a, 1e-4) * c[i])) / Math.max(luma(albedo.map((a) => Math.max(a, 1e-4))), 1e-6);
+  return c.map((ci) => Math.max(K + (1 - K) * TEXTILE.GAP * (ci / m - 1), 0)) as [number, number, number];
+}
+
 /** Nap diffuse factor (twin of the postLight GLSL): s = v_t . lean (> 0 leaning toward the camera; v_t the unit
  * tangent-plane direction to the camera), muV = n_g . v. The share of fibre ends against fibre sides in view changes
  * with the lean times sin(theta_v), linearly in the (mip-filtered) lean. */
@@ -119,6 +138,8 @@ export const TEXTILE_HOOKS: FamilyHooks = {
 #define BR_TX_M_OFFICE ${Mat.CARPET_OFFICE}
 #define BR_TX_TRAP ${f(T.TRAP)}
 #define BR_TX_TRAP_SAT ${f(T.TRAP_SAT)}
+#define BR_TX_GAP ${f(T.GAP)}
+#define BR_TX_GAP_SAT ${f(T.GAP_SAT)}
 #define BR_TX_WET_V ${f(T.WET_V)}
 #define BR_TX_HIDE ${f(T.HIDE)}
 #define BR_TX_NAP_DIFF ${f(T.NAP_DIFF)}
@@ -368,13 +389,17 @@ if ( BR_TX_PILE_ON( brL ) ) {
 	// wet pile clumps into bundles: its valleys open and darken
 	float brTxVv = pow( clamp( brTxVis, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs );
 	float brTxDv = max( 1.0 - brTxKp.x * ( 1.0 - brTxVv ) * pow( brTxMu, brTxKp.y ), 0.0 );
-	vec3 brTxK = vec3( brTxDv * brTxNd * brTxAm );
-	if ( brL == BR_M_CARPET_L0 ) {
-		// the Level 0 pile trap: what escapes the pile has crossed more dyed fibre (darker and more saturated than one
-		// fibre); the layer table albedo stays the fibre colour the bake bounces with
-		vec3 brTxA = max( diffuseColor.rgb, vec3( 1e-4 ) );
-		brTxK *= BR_TX_TRAP * pow( brTxA / max3( brTxA ), vec3( BR_TX_TRAP_SAT ) );
-	}
+	// the gaps (1 - Dv x the detail's visibility) keep their luminance but are deeper in colour than the tips: their light
+	// has crossed more dyed fibre (TS twin pileGap; linear in the visibility)
+	float brTxKv = brTxDv * brTxAm;
+	vec3 brTxA = max( diffuseColor.rgb, vec3( 1e-4 ) );
+	vec3 brTxLc = log2( brTxA / max3( brTxA ) );
+	vec3 brTxC = exp2( BR_TX_GAP_SAT * brTxLc );
+	brTxC = brTxC * ( brLuma( brTxA ) / max( brLuma( brTxA * brTxC ), 1e-6 ) ) - 1.0;
+	vec3 brTxK = max( vec3( brTxKv ) + ( 1.0 - brTxKv ) * BR_TX_GAP * brTxC, vec3( 0.0 ) ) * brTxNd;
+	// the Level 0 pile trap: what escapes the pile has crossed more dyed fibre (darker and more saturated than one
+	// fibre); the layer table albedo stays the fibre colour the bake bounces with
+	if ( brL == BR_M_CARPET_L0 ) brTxK *= BR_TX_TRAP * exp2( BR_TX_TRAP_SAT * brTxLc );
 	material.diffuseContribution *= brTxK;
 	if ( uDebugView == BR_DV_TEXTILE ) BR_DEBUG_EXIT( vec3( brTxDv, 0.5 * brTxNd, 0.5 + 0.5 * brTxS ) )
 }
