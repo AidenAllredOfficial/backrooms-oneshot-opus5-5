@@ -138,9 +138,9 @@ float brcJoint( float x, float al, int li, float t, float fx, bool filled, out f
 	return cov;
 }
 // A shrinkage crack of panel pid (4.8 m, world xz): with probability p, one crack between random points on two
-// different panel edges (so it ends at joints), warped at 0.4 m (6 cm) and 5 cm (1 cm), 0.1-0.6 mm half-width along
-// its length; 35 % carry a branch from a point on it to a third edge. Returns the crack core coverage-weighted
-// darkness (0..1) and its dirty halo (hal). pf = the pixel footprint (m).
+// different panel edges (so it ends at joints), wandering across its line by 6 cm at 0.4 m and 1 cm at 5 cm, 0.1-0.6 mm
+// half-width along its length; 35 % carry a branch from a point on it to a third edge. Returns the crack core
+// coverage-weighted darkness (0..1) and its dirty halo (hal). pf = the pixel footprint (m).
 vec2 brcCrackEnd( int e, float u ) {
 	return e == 0 ? vec2( u, 0.0 ) : e == 1 ? vec2( 1.0, u ) : e == 2 ? vec2( u, 1.0 ) : vec2( 0.0, u );
 }
@@ -157,38 +157,40 @@ float brcSlabCrack( vec2 s2, ivec2 pid, ivec2 pw, float p, float pf, out float h
 	hal = 0.0;
 	uint h = brcHash( pw, 1741u );
 	if ( brU01( h ) >= p ) return 0.0;
-	uint h1 = brPcg( h ), h2 = brPcg( h1 );
+	uint h1 = brPcg( h );
 	int e0 = int( h1 & 3u );
 	int e1 = ( e0 + 1 + int( ( ( h1 >> 2 ) & 255u ) % 3u ) ) & 3;
 	vec2 o = vec2( pid ) * BR_CONCRETE_JOINT;
 	vec2 A = o + brcCrackEnd( e0, mix( 0.15, 0.85, brcBits( h1, 10u ) ) ) * BR_CONCRETE_JOINT;
 	vec2 B = o + brcCrackEnd( e1, mix( 0.15, 0.85, brcBits( h1, 20u ) ) ) * BR_CONCRETE_JOINT;
-	// run the segment 15 cm past both edges: the warp may shift its ends, the panel boundary clips it at the joint
-	vec2 dAB = normalize( B - A ) * 0.15;
-	A -= dAB;
-	B += dAB;
+	// run the segment 15 cm past both edges: the wander may shift its ends, the panel boundary clips it at the joint
+	vec2 dir = normalize( B - A );
+	A -= dir * 0.15;
+	B += dir * 0.15;
+	float ta, tbr = 0.0;
+	float d = brcSegD( s2, A, B, ta );
+	uint h2 = brPcg( h1 );
 	bool br = brcBits( h2, 0u ) < 0.35;
-	float tb = mix( 0.25, 0.75, brcBits( h2, 10u ) );
-	vec2 C = A + ( B - A ) * tb;
-	int e2 = e0 == ( ( e1 + 1 ) & 3 ) ? ( e1 + 3 ) & 3 : ( e1 + 1 ) & 3;
-	vec2 D = o + brcCrackEnd( e2, mix( 0.2, 0.8, brcBits( h2, 20u ) ) ) * BR_CONCRETE_JOINT;
-	D += normalize( D - C ) * 0.15;
-	float hh;
-	float d0 = brcSegD( s2, A, B, hh );
-	float d0b = br ? brcSegD( s2, C, D, hh ) : 1e3;
-	if ( min( d0, d0b ) > 0.1 ) return 0.0; // beyond the warp amplitude plus the halo
-	// warp the lookup point (6 cm at 0.4 m, 1 cm at 5 cm): the crack wanders
-	vec2 q = s2 / 0.4;
-	vec2 w1 = vec2( brVNoise( q, ivec2( 3072 ), 1801u ), brVNoise( q + 17.3, ivec2( 3072 ), 1802u ) ) - 0.5;
-	vec2 q2 = s2 / 0.05;
-	vec2 w2 = vec2( brVNoise( q2, ivec2( 24576 ), 1803u ), brVNoise( q2 + 5.1, ivec2( 24576 ), 1804u ) ) - 0.5;
-	vec2 sw = s2 + 0.12 * w1 + 0.02 * w2;
-	float ta, tb2;
-	float d = brcSegD( sw, A, B, ta );
-	float hw = mix( 0.0001, 0.0006, brVNoise( vec2( ta * 12.0, 0.5 ), ivec2( 64, 1 ), h & 1023u ) );
+	vec2 C = A, D = A;
+	float db = 1e3;
 	if ( br ) {
-		float db = brcSegD( sw, C, D, tb2 );
-		float hwb = mix( 0.0001, 0.0004, brVNoise( vec2( tb2 * 8.0, 0.5 ), ivec2( 64, 1 ), ( h >> 10 ) & 1023u ) ) * ( 1.0 - 0.6 * tb2 );
+		C = mix( A, B, mix( 0.25, 0.75, brcBits( h2, 10u ) ) );
+		int e2 = e0 == ( ( e1 + 1 ) & 3 ) ? ( e1 + 3 ) & 3 : ( e1 + 1 ) & 3;
+		D = o + brcCrackEnd( e2, mix( 0.2, 0.8, brcBits( h2, 20u ) ) ) * BR_CONCRETE_JOINT;
+		D += normalize( D - C ) * 0.15;
+		db = brcSegD( s2, C, D, tbr );
+	}
+	if ( min( d, db ) > 0.1 ) return 0.0; // beyond the wander amplitude plus the halo
+	// the crack wanders: the lookup point shifts across it by 6 cm at 0.4 m and 1 cm at 5 cm
+	float wv = 0.12 * ( brVNoise( s2 / 0.4, ivec2( 3072 ), 1801u ) - 0.5 ) + 0.02 * ( brVNoise( s2 / 0.05, ivec2( 24576 ), 1803u ) - 0.5 );
+	vec2 sw = s2 + vec2( - dir.y, dir.x ) * wv;
+	d = brcSegD( sw, A, B, ta );
+	// the width breathes along the crack (0.1-0.6 mm half-width over ~0.2-0.8 m)
+	float ph = float( h2 >> 22 );
+	float hw = mix( 0.0001, 0.0006, clamp( 0.5 + 0.5 * sin( ta * 41.0 + ph ) * ( 0.6 + 0.4 * sin( ta * 97.0 + 2.0 * ph ) ), 0.0, 1.0 ) );
+	if ( br ) {
+		db = brcSegD( sw, C, D, tbr );
+		float hwb = mix( 0.0001, 0.0004, 0.5 + 0.5 * sin( tbr * 29.0 + 3.0 * ph ) ) * ( 1.0 - 0.6 * tbr );
 		if ( db < d ) { d = db; hw = hwb; }
 	}
 	// sub-pixel line: rendered at least 0.35 pixel wide with the darkness scaled by the true width (no shimmer)
