@@ -178,15 +178,15 @@ if ( brMsOn ) {
 		brA *= mix( vec3( 1.0 ), vec3( 0.62, 0.58, 0.52 ), clamp( brMask.g * ( 0.4 + g2.g ) * ( 1.0 + 0.6 * jM ), 0.0, 1.0 ) * 0.8 );
 		if ( ! brHoriz ) {
 			float y = vBrLocal.y;
+			// dust and mop splash in the joints of the bottom courses (the kick zone), more where the mask holds grime
+			brA *= 1.0 - 0.28 * jM * ( 1.0 - smoothstep( 0.1, 0.45, y ) ) * clamp( 0.45 + 1.2 * brMask.g, 0.0, 1.0 );
 			// damp and seepage: the stain threshold of the mask's R field, its edge ragged by the tide field and pushed
 			// out along the joints; brownish, not black
 			float wR = step( 0.02, brMask.r );
 			float s = brMask.r + ( g1.r - 0.5 ) * 0.3 * wR + 0.05 * jM * wR;
-			// nested, ragged tide fronts (0b's brStainFront), roughened by the grime speckle
-			float damp, front;
-			brStainFront( s, ( g2.g - 0.5 ) * 2.0, 0.46, damp, front );
-			damp *= wR;
-			front *= wR;
+			// (single smoothstep fronts: 0b's nested brStainFront cost 0.2 ms per ultra frame of CMU wall)
+			float damp = smoothstep( 0.42, 0.5, s );
+			float front = ( 1.0 - smoothstep( 0.0, 0.05, abs( s - 0.47 ) ) ) * wR;
 			brA *= mix( vec3( 1.0 ), ${v3(SEEPAGE)}, damp );
 			// efflorescence: salt crust along the drying front and blooming in the joints (salts migrate through the
 			// mortar), in streaks down the damp area of the bottom 0.6 m
