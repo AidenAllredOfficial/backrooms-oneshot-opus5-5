@@ -505,9 +505,12 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
     a = Math.max(a, decay * hum * 0.6 * (1 - sstep(0, 0.2, hy)));
   } else if (isFloor) {
     const fm = g.floorMat[c];
-    if (fm === Mat.CARPET_L0 || fm === Mat.CARPET_OFFICE) {
+    // hard floors (texture realism v2 lane B): the same traffic burnishes concrete into glossy lanes, dulls terrazzo's
+    // polish and wears VCT's wax, at 0.8 x the carpet amplitude (the shaders shape each response)
+    const hard = fm === Mat.CONCRETE_FLOOR || fm === Mat.TERRAZZO || fm === Mat.VINYL_VCT;
+    if (hard || fm === Mat.CARPET_L0 || fm === Mat.CARPET_OFFICE) {
       const wn = valueNoise2(SEED_WEAR, wx / 0.8, wz / 0.8);
-      const amp = (0.3 + 0.7 * decay) * (0.55 + 0.45 * wn);
+      const amp = (0.3 + 0.7 * decay) * (0.55 + 0.45 * wn) * (hard ? 0.8 : 1);
       if (corridorOf(job, cache, c) <= 3) a = Math.max(a, amp * sstep(0.25, 0.55, wallDist));
       // thresholds (ellipses across openings) and lanes between openings of the same room
       const wl = wearNear(g, cache, c);
@@ -529,10 +532,121 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
         }
         a = Math.max(a, amp * w);
       }
+      if (hard) {
+        // entry fans: traffic funnels through every opening and spreads into the room (3 m deep, widening), so a
+        // single-door room (a restroom) still wears from its door
+        const fo = fanOpenings(g, cache, c), o = cache.open as Float64Array;
+        let f = 0;
+        for (let q = 0; q < fo.length; q++) {
+          const i = fo[q] * 5;
+          const dn = Math.abs(o[i + 2] === 0 ? x - o[i] : z - o[i + 1]) * CELL;
+          const dt = Math.abs(o[i + 2] === 0 ? z - o[i + 1] : x - o[i]) * CELL;
+          if (dn > 3 || dt > 2) continue;
+          f = Math.max(f, (1 - sstep(0.3, 3, dn)) * (1 - sstep(0.4 + 0.2 * dn, 0.7 + 0.35 * dn, dt)));
+        }
+        a = Math.max(a, amp * 0.75 * f);
+        // rack aisles: forklift / pallet-jack wheel tracks between tall shelving on both sides (daily traffic
+        // whatever the decay)
+        if (job.boxTop9[c] > floorY + AISLE_MIN_H) a = Math.max(a, (0.7 + 0.3 * decay) * (0.75 + 0.25 * wn) * aisleTracks(job, x, z, floorY, c));
+      }
     }
   }
   maskOut.r = r > 1 ? 1 : r; maskOut.g = gr > 1 ? 1 : gr; maskOut.b = b > 1 ? 1 : b; maskOut.a = a > 1 ? 1 : a;
   void nz;
+}
+
+/** Per mask cache: per halo cell, the openings of the cell's room within an entry fan's reach (3 m), built lazily
+ * (a halo holds hundreds of openings: a loop over all of them per floor texel multiplied the mask time by ~10). */
+const fanNear = new WeakMap<MaskCache, (Int32Array | null)[]>();
+function fanOpenings(g: BakeJob['g'], mc: MaskCache, c: number): Int32Array {
+  let per = fanNear.get(mc);
+  if (!per) { per = new Array<Int32Array | null>(g.n * g.n).fill(null); fanNear.set(mc, per); }
+  let r = per[c];
+  if (r) return r;
+  if (!mc.open) buildOpenings(g, mc);
+  const o = mc.open as Float64Array, room = g.room[c];
+  const hi = c % g.n, hj = (c - hi) / g.n;
+  const reach = 3 / CELL + 0.75; // fan depth + half the cell diagonal (cells)
+  const list: number[] = [];
+  for (let k = 0; k < mc.nOpen; k++) {
+    const i = k * 5;
+    if (o[i + 3] !== room && o[i + 4] !== room) continue;
+    if (Math.abs(o[i] - (hi + 0.5)) < reach && Math.abs(o[i + 1] - (hj + 0.5)) < reach) list.push(k);
+  }
+  r = Int32Array.from(list);
+  per[c] = r;
+  return r;
+}
+
+/** Rack aisles (hard floors), near occluders at least AISLE_MIN_H tall (cars stay below): occluder boxes reaching
+ * between 1 and 2.5 m above the floor (rack decks, uprights, stacked goods) and at least AISLE_MIN_LEN long along the
+ * aisle count as shelving; an aisle is a gap of AISLE_MIN_W to AISLE_MAX_W between two of them. */
+const AISLE_MIN_H = 1.8, AISLE_MIN_LEN = 0.9, AISLE_MIN_W = 1.0, AISLE_MAX_W = 4.2, AISLE_FADE = 2.0;
+/** Per bake job: per halo cell, the shelving box rectangles (x0 z0 x1 z1, halo units) within 3 cells. */
+const aisleRects = new WeakMap<BakeJob, (Float64Array | null)[]>();
+/**
+ * Wheel-track wear (0..1) of a floor texel (x, z halo units) in a rack aisle: the gap to the nearest tall box on
+ * each side along x and along z (boxes whose extent along the aisle covers the texel, or ends within AISLE_FADE of
+ * it: past the end of a rack row the tracks fade out); a gap of at most AISLE_MAX_W is an aisle, worn in two tracks
+ * 0.45 m either side of its centre (one centre track in aisles under 1.6 m) and fading out next to the racks. 0 under
+ * a box or outside aisles.
+ */
+function aisleTracks(job: BakeJob, x: number, z: number, floorY: number, c: number): number {
+  const g = job.g;
+  let per = aisleRects.get(job);
+  if (!per) { per = new Array<Float64Array | null>(g.n * g.n).fill(null); aisleRects.set(job, per); }
+  let rl = per[c];
+  if (!rl) {
+    const hi = c % g.n, hj = (c - hi) / g.n;
+    const seen = new Set<number>();
+    const out: number[] = [];
+    for (let j = Math.max(0, hj - 3); j <= Math.min(g.n - 1, hj + 3); j++) {
+      for (let i = Math.max(0, hi - 3); i <= Math.min(g.n - 1, hi + 3); i++) {
+        const cc = j * g.n + i;
+        for (let k = g.boxStart[cc]; k < g.boxStart[cc + 1]; k++) {
+          const b = g.boxList[k];
+          if (seen.has(b)) continue;
+          seen.add(b);
+          const o = b * 6;
+          if (g.boxRamp[b] >= 0 || g.box[o + 4] < floorY + 1.0 || g.box[o + 1] > floorY + 2.5) continue;
+          out.push(g.box[o], g.box[o + 2], g.box[o + 3], g.box[o + 5]);
+        }
+      }
+    }
+    rl = Float64Array.from(out);
+    per[c] = rl;
+  }
+  const m = 0.1 / CELL, fade = AISLE_FADE / CELL, len = AISLE_MIN_LEN / CELL;
+  // per side (x left / right, z left / right): the gap to the chosen box and its weight, 1 beside the box and fading
+  // over AISLE_FADE past its end along the aisle (the traffic runs on where a rack row stops: the tracks fade out
+  // instead of ending in a straight line at the rack end); the highest weight wins, then the nearest box. A box
+  // straight ahead along the aisle (overlapping the texel across it) blocks that aisle direction by its weight: the
+  // texel lies beside a rack row's end or its side, not between two rows
+  const d = [Infinity, Infinity, Infinity, Infinity], k = [0, 0, 0, 0], blk = [0, 0];
+  const pick = (i: number, gap: number, wt: number): void => {
+    if (wt > k[i] || (wt === k[i] && gap < d[i])) { d[i] = gap; k[i] = wt; }
+  };
+  for (let q = 0; q < rl.length; q += 4) {
+    const x0 = rl[q], z0 = rl[q + 1], x1 = rl[q + 2], z1 = rl[q + 3];
+    if (x >= x0 && x <= x1 && z >= z0 && z <= z1) return 0;
+    if (z1 - z0 >= len) {
+      const wt = 1 - sstep(m, m + fade, Math.max(z0 - z, z - z1));
+      if (wt > 0) { if (x1 <= x) pick(0, x - x1, wt); else if (x0 >= x) pick(1, x0 - x, wt); else blk[0] = Math.max(blk[0], wt); }
+    }
+    if (x1 - x0 >= len) {
+      const wt = 1 - sstep(m, m + fade, Math.max(x0 - x, x - x1));
+      if (wt > 0) { if (z1 <= z) pick(2, z - z1, wt); else if (z0 >= z) pick(3, z0 - z, wt); else blk[1] = Math.max(blk[1], wt); }
+    }
+  }
+  let w = 0;
+  for (let a = 0; a < 4; a += 2) {
+    const dl = d[a] * CELL, dr = d[a + 1] * CELL, wd = dl + dr;
+    if (!(wd <= AISLE_MAX_W) || wd < AISLE_MIN_W) continue; // (the flue between back-to-back racks is no aisle)
+    const off = Math.abs(dl - dr) / 2; // metres from the aisle centre
+    const track = wd < 1.6 ? Math.exp(-((off / 0.35) ** 2)) : Math.exp(-(((off - 0.45) / 0.22) ** 2));
+    w = Math.max(w, Math.min(k[a], k[a + 1]) * (1 - blk[a / 2]) * track * sstep(0.15, 0.5, Math.min(dl, dr)));
+  }
+  return w;
 }
 
 /** Is the halo 0.6 m sub-tile (sx, sz) a VENT ceiling tile? */
