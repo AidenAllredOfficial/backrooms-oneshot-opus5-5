@@ -136,6 +136,8 @@ if ( brWpOn ) {
 		brOrmh.g = brWpTr * brWpTop + 0.7 * brWpPrim + mix( 0.3, 0.75, 1.0 - brWpStM ) * brWpCore;
 		brOrmh.b = brWpStM * brWpCore;
 		brWpScr *= brWpTop;
+		// oil-canning is a flat sheet's waviness: tubes and rails (curved sides: no edge across) are drawn smooth
+		if ( brWpProp && ( abs( vBrLmUv.x ) < 0.5 || abs( vBrLmUv.y ) < 0.5 ) ) brNrm.xy *= 0.15;
 	} else if ( brL == BR_M_METAL_RUST ) {
 		// corrosion: paint remnants where C is above a threshold that rises with age, on pipe undersides (condensation)
 		// and at joints and flanges (crevices); below it the recipe's rust shows. The paint takes the part's colour
@@ -144,7 +146,7 @@ if ( brWpOn ) {
 			+ 0.3 * ( 1.0 - smoothstep( 20.0, 80.0, brWpEd ) );
 		float brWpPt = 1.0 - brWpExpose( brAux, brWpA, brWpRt );
 		// the paint: chalked and stained brown where rust bleeds under it (the band above the threshold)
-		vec3 brWpPc = vec3( ${f(RUST_PAINT_REF)} ) * mix( vec3( 1.0 ), vec3( 0.78, 0.62, 0.48 ), 0.6 * ( 1.0 - smoothstep( brWpRt, brWpRt + 0.12, brAux ) ) );
+		vec3 brWpPc = vec3( ${f(RUST_PAINT_REF)} ) * mix( vec3( 0.88 ), vec3( 0.7, 0.55, 0.42 ), 0.65 * ( 1.0 - smoothstep( brWpRt, brWpRt + 0.2, brAux ) ) );
 		brA = mix( brA, brWpPc, brWpPt );
 		brOrmh.g = mix( brOrmh.g, 0.6, brWpPt );
 		brWpTop = brWpPt;
@@ -152,20 +154,21 @@ if ( brWpOn ) {
 		brDetL.y *= 1.0 - 0.8 * brWpPt; // the rust grain is on the rust
 #endif
 		// run-off: world drips (the grime texture's drip channel, two projections blended by the normal: no 45-degree seam
-		// on pipes and tanks) below rusty areas, found with two coarse taps of C 3 and 8 cm up the surface
+		// on pipes and tanks) below rusty areas, found with three coarse taps of C 3, 8 and 18 cm up the surface
 		// (derivatives and implicit-LOD fetches outside any per-pixel condition: the branch is per face)
 		if ( uBrReflPass < 0.5 ) {
 			vec3 brWpQx = dFdx( vBrLocal ), brWpQy = dFdy( vBrLocal );
 			float brWpG11 = dot( brWpQx, brWpQx ), brWpG12 = dot( brWpQx, brWpQy ), brWpG22 = dot( brWpQy, brWpQy );
 			vec2 brWpAb = vec2( brWpG22 * brWpQx.y - brWpG12 * brWpQy.y, brWpG11 * brWpQy.y - brWpG12 * brWpQx.y ) / max( brWpG11 * brWpG22 - brWpG12 * brWpG12, 1e-24 );
 			vec2 brWpUp = brWpAb.x * brDx + brWpAb.y * brDy; // uv per metre of rise
-			float brWpC1 = textureLod( uBrOrmh, vec3( brUv + 0.03 * brWpUp, brLayerF ), 4.0 ).a;
-			float brWpC2 = textureLod( uBrOrmh, vec3( brUv + 0.08 * brWpUp, brLayerF ), 4.5 ).a;
-			float brWpSrc = 1.0 - smoothstep( 0.3, 0.55, min( brWpC1, brWpC2 ) );
+			float brWpC1 = textureLod( uBrOrmh, vec3( brUv + 0.03 * brWpUp, brLayerF ), 3.0 ).a;
+			float brWpC2 = textureLod( uBrOrmh, vec3( brUv + 0.08 * brWpUp, brLayerF ), 3.5 ).a;
+			float brWpC3 = textureLod( uBrOrmh, vec3( brUv + 0.18 * brWpUp, brLayerF ), 4.5 ).a;
+			float brWpSrc = ( 1.0 - smoothstep( 0.35, 0.62, min( brWpC1, brWpC2 ) ) ) * 0.8 + ( 1.0 - smoothstep( 0.35, 0.6, brWpC3 ) ) * 0.4;
 			float brWpNx = abs( brNWg.x ) / max( abs( brNWg.x ) + abs( brNWg.z ), 1e-4 );
 			float brWpDr = mix( texture( uBrGrime, vec2( brPW.x / BR_GRIME_A, brPW.y / BR_GRIME_YA ) ).a,
 				texture( uBrGrime, vec2( brPW.z / BR_GRIME_A, brPW.y / BR_GRIME_YA ) ).a, brWpNx );
-			float brWpRun = brWpSrc * ( 0.35 + 0.65 * smoothstep( 0.2, 0.7, brWpDr ) ) * ( 0.5 + 0.5 * brWpPt )
+			float brWpRun = min( brWpSrc, 1.0 ) * ( 0.35 + 0.65 * smoothstep( 0.2, 0.7, brWpDr ) ) * ( 0.5 + 0.5 * brWpPt )
 				* ( 1.0 - smoothstep( 0.6, 0.8, abs( brNWg.y ) ) ); // vertical and sloped faces only
 			brA *= mix( vec3( 1.0 ), vec3( 0.75, 0.55, 0.4 ), 0.85 * brWpRun );
 			brOrmh.g = min( brOrmh.g + 0.1 * brWpRun, 1.0 );
@@ -198,7 +201,10 @@ if ( brWpOn ) {
 				// mm off the centre line across the long axis (the flaps' seam, under the tape where there is one)
 				float brWpSm = brWpA0.x > brWpA1.x ? brWpA0.x * abs( brWpA0.y ) : brWpA1.x * abs( brWpA1.y );
 				// (only on faces with edge coordinates on both axes: a crushed box's hexahedron has none)
-				if ( min( brWpA0.x, brWpA1.x ) > 1.5 ) brA *= 1.0 - 0.6 * ( 1.0 - smoothstep( 0.6, 1.6, brWpSm ) );
+				// (widened by the pixel footprint at a constant integral: a sub-pixel seam stays a faint line, not dashes)
+				float brWpFw = fwidth( brWpSm );
+				float brWpSe = ( 1.0 - smoothstep( 0.6, 1.1 + brWpFw, brWpSm ) ) * 1.1 / ( 1.1 + brWpFw );
+				if ( min( brWpA0.x, brWpA1.x ) > 1.5 ) brA *= 1.0 - 0.6 * brWpSe;
 			}
 			brWpExp = 0.0;
 		} else if ( brWpOvr > 0.0 && brWpOvr < 0.12 ) {
@@ -225,6 +231,14 @@ if ( brWpOn ) {
 		brWpExp = 0.0;
 	}
 }
+#if BR_DETAIL == 0
+// low quality: no wear, but rust keeps its paint remnants (a plain threshold of C) so the rust itself stays untinted
+if ( brL == BR_M_METAL_RUST ) {
+	brWpTop = smoothstep( 0.6, 0.64, brOrmh.a );
+	brA = mix( brA, vec3( ${f(RUST_PAINT_REF)} ), brWpTop );
+	brOrmh.g = mix( brOrmh.g, 0.6, brWpTop );
+}
+#endif
 // rubber bloom: a waxy antiozonant film (the recipe's mottle, ormh.a) that greys up-facing faces, more on old parts
 if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
 	float brWpBl = smoothstep( 0.3, 0.8, brNWg.y ) * brAux
@@ -240,7 +254,7 @@ if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
 		// speckle channel: speckle made leopard spots) on steel that can rust; stainless and chrome only dull
 		if ( brL != BR_M_METAL_BARE && brL != BR_M_METAL_RUST ) { // (METAL_RUST: its own run-off, postSample)
 			float rust = smoothstep( 0.5, 0.85, brMask.g * 0.8 + g1.a * 0.6 + g2.r * 0.2 );
-			brA = mix( brA, BR_RUST * ( 0.8 + 0.4 * g2.r ), rust * 0.75 );
+			brA = mix( brA, BR_RUST * ( 0.8 + 0.4 * g2.r ), rust * ( brL == BR_M_METAL_PAINTED ? 0.45 : 0.75 ) ); // (paint: stains, not scale)
 			brMetal *= 1.0 - rust;
 			brRoughMul = mix( 1.0, 1.6, rust );
 		}

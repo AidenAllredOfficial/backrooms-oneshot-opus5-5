@@ -4356,7 +4356,7 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   flakes (4-16 texels). For uniform W the ramp's mean is the level only while level >= a, so a lower level moves to
   2 sqrt(a l) - a: the exposed share equals the level at every distance (tests/props/wear.test.ts).
 - **METAL_PAINTED** is a neutral topcoat: +-2 % coat thickness, oil-canning (+-0.45 mm over 0.15-0.4 m, which bends
-  lamp reflections), roughness 0.4 +- 0.035; W from 17 cm clusters, 2.5 cm chip groups and angular 8 mm flakes that
+  lamp reflections), roughness 0.4 +- 0.06 (uneven gloss); W from 17 cm clusters, 2.5 cm chip groups and angular 8 mm flakes that
   break first along their borders; albedo.a (aux2) a scratch field (0-2 segments of 8-80 mm per 60 mm cell, 60 %
   within 15 degrees of u, depth class 0.3-1). Runtime: topcoat, then a primer ring (grey, or red oxide on 40 % of the
   props, roughness 0.7), then the steel core 0.06 further down W (F0 0.56, roughness 0.3; on old props oxidised
@@ -4378,9 +4378,9 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   orange gap along their borders), deep scale with tubercles and log-normally sized pits that crowd where C is lowest;
   relief 3 mm per unit, normal strength 1.5, D19 RUST_GRAIN (1-2 mm tubercles, micro-flake edges). The paint remnants
   are runtime: paint where C passes 0.62 +- 0.05 by age, + 0.25 on pipe undersides and + 0.3 near joints and tube ends,
-  chalked and stained brown near the rust. Run-off streaks hang below rusty areas: two coarse C taps 3 and 8 cm up the
-  surface (the uv step of a world rise from the screen derivatives) times the drip field, blended from two world
-  projections (no 45-degree seam on tanks and pipes). Rust is dielectric at 0.88-0.95 with EON sigma 0.5.
+  dulled and stained brown within 0.2 of C above it (rust bleeding under the film). Run-off streaks hang below rusty
+  areas: three coarse C taps 3, 8 and 18 cm up the surface (the uv step of a world rise from the screen derivatives)
+  times the drip field, blended from two world projections (no 45-degree seam on tanks and pipes). Rust is dielectric at 0.88-0.95 with EON sigma 0.5.
 - **WOOD** cuts each board (90-300 mm, packed across v) from its own log: the pith 2-25 cm under the face and to one
   side, rings R = sqrt(d^2 + z^2) + t x with a per-board taper t (4-15 mm per m, either way) from the board's butt
   joint, ring width 2-5 mm +-40 %, gradual earlywood into an abruptly ending latewood, hue +-3 %, value +-10 %, rings

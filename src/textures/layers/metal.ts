@@ -49,7 +49,7 @@ float scratchField(vec2 uv) {
 void gen(vec2 uv, inout Surf s) {
   s.albedo = TABLE_ALBEDO * (1.0 + 0.1 * fbm(uv, PM(4.0), 3, 10)); // coat thickness +-3 %
   s.height = 0.5 + 1.3 * fbm(uv, PM(3.0), 2, 3); // oil-canning, ~+-0.45 mm
-  s.rough = 0.4 + 0.15 * fbm(uv, PM(8.0), 3, 11) + 0.08 * fbm(uv, PM(40.0), 2, 15); // +-0.035 blotches, finer mottle
+  s.rough = 0.4 + 0.28 * fbm(uv, PM(8.0), 3, 11) + 0.1 * fbm(uv, PM(40.0), 2, 15); // +-0.06: uneven gloss, finer mottle
   s.metal = 0.0;
   vec2 wv = warp(uv, PM(3.0), 3, 4, 0.04);
   float lf = fbm(wv, PM(6.0), 4, 5);
@@ -83,15 +83,16 @@ void gen(vec2 uv, inout Surf s) {
   // r 3-10 mm in clusters, Worley 40/m where the mid field is corroding)
   Cell sc = worley(wv, PM(25.0), 0.9, 22);
   vec4 sh = hash4f(sc.id, 23);
-  float spot = (1.0 - smoothstep(0.2 + 0.4 * sh.x, 0.3 + 0.5 * sh.x, sc.f1)) * step(sh.y, 0.35);
+  // (the spots crowd where the large-scale field corrodes: patchy, not an even dalmatian scatter)
+  float spot = (1.0 - smoothstep(0.2 + 0.4 * sh.x, 0.3 + 0.5 * sh.x, sc.f1)) * step(sh.y, 0.08 + 0.5 * smoothstep(0.15, -0.25, lf));
   Cell bc = worley(uv, PM(40.0), 0.9, 6);
   vec4 bh = hash4f(bc.id, 7);
   float br = 0.003 + 0.007 * bh.x;
   float bd = bc.f1 / 40.0; // metres from the blister centre
   float blister = (1.0 - smoothstep(br * 0.85, br, bd)) * step(bh.y, 0.55) * smoothstep(-0.1, 0.25, mf);
-  float C = cdfN((0.45 * lf / 0.18 + 0.55 * mf / 0.2 - 1.1 * spot - 0.9 * blister + 0.13) / 0.8);
+  float C = cdfN((0.6 * lf / 0.18 + 0.45 * mf / 0.2 - 0.75 * spot - 0.9 * blister + 0.08) / 0.85);
   s.aux = C;
-  float fresh = smoothstep(0.55, 0.62, C); // halo and just-exposed rust: the paint's edge
+  float fresh = smoothstep(0.5, 0.62, C); // halo and just-exposed rust: the paint's edge
   float flakeZ = smoothstep(0.33, 0.37, C) * (1.0 - smoothstep(0.53, 0.57, C));
   float deep = 1.0 - smoothstep(0.33, 0.37, C);
   // lifted flakes: Voronoi plates of ~8-30 mm, tilted +-4 deg about a hashed direction, lifted at their downhill edge
@@ -119,7 +120,7 @@ void gen(vec2 uv, inout Surf s) {
   vec3 col = mix(cMid, cFresh, clamp(0.5 + 1.5 * tone, 0.0, 1.0) * 0.5 + 0.5 * fresh);
   col = mix(col, mix(cMid * (0.8 + 0.4 * fh.w), cOld, 0.3), flakeZ * (1.0 - gap));
   col = mix(col, cFresh * (0.85 + 0.3 * tone), flakeZ * gap);
-  vec3 deepC = mix(mix(cMid, cFresh, 0.35 * clamp(0.5 + 2.0 * tone, 0.0, 1.0)), cOld, smoothstep(-0.05, 0.25, crust));
+  vec3 deepC = mix(mix(cMid, cFresh, 0.45 * clamp(0.5 + 2.0 * tone, 0.0, 1.0)), cOld, 0.8 * smoothstep(0.08, 0.35, crust));
   col = mix(col, mix(deepC, cMid * 1.2, 0.3 * tub), deep);
   col = mix(col, vec3(0.03, 0.02, 0.015), pit * (0.4 + 0.6 * deep));
   s.albedo = col;
