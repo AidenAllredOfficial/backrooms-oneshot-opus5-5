@@ -4221,11 +4221,14 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
 - **Pile visibility** (matPost, layers with `phys.pile` [kp, kv]: L0 [1, 0.8], office [1, 1.2], fabric [0.6, 1.5]):
   the diffuse albedo the lights see (`material.diffuseContribution`: punctual, baked and ambient alike) × Dv = 1 − kp
   (1 − V) μv^kv (μv = n_g · v): looking down the gaps between the tufts show dark, at grazing the tips hide them.
-  Linear in V, so the mips are unbiased (the same patch at 1.5 m and 6 m under the same angle: +3-5 % against a5c03e1,
-  near the 5 % limit). Dv stands for the generic texture-cavity multiply, which postLight divides back out of the
+  Linear in V, so the mips are unbiased (the same floor area at 1.5 m and 6 m under the same angle, over view=albedo:
+  +1-2 % far against near; a5c03e1 +7 %). Dv stands for the generic texture-cavity multiply, which postLight divides back out of the
   ambient, and for 0b's cavity visibility on the baked direct light, which skips pile layers; wet pile uses
   V^(1 + 0.6 × absorbed water) (its valleys open). The Level 0 fibre trap T = 0.69 × chroma^0.3 now multiplies only
-  the diffuse (it was 0.55 on the whole radiance, sheen and specular included). Under standing water and a saturated
+  the diffuse (it was 0.55 on the whole radiance, sheen and specular included). The gaps keep their luminance but are
+  deeper in colour than the tips (their light has crossed more dyed fibre; a grey multiplier left them olive-grey up
+  close): the visibility K = Dv × the detail's becomes K + (1 − K) 0.15 (c / m − 1) per channel, c = (albedo / max
+  channel)^1.5 and m its luminance-weighted mean (TS twin `pileGap`), linear in K. Under standing water and a saturated
   film, postWet raises ormh.r to 1 on pile layers (Dv keeps the saved V): the generic specular occlusion and the SSR
   weight read ormh.r, and with V there a puddle's reflection was occluded by the tuft gaps (specular occlusion ~0.47
   instead of ~0.93 at the mean V, grazing; +1-2 % on the damp patch of the LOBBY pitch −12° framing).
@@ -4252,21 +4255,25 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
 - **Carpet grime** (profile 1): the damp patch ends at a wicking front ~3 cm wide, ragged by ±2 cm, sized in metres
   through the wet field's slope (a shallow field crossing the threshold draws a contour, not a speckled band), then
   deepens inward; a dried tide ring 2.5 cm outside it; worn lanes close the pile (V → mix(V, 0.9, 0.7 w)) and hold soil
-  (× (0.90, 0.87, 0.82)) instead of lightening; spills of 5-30 cm (25 % of 2.4 m cells) with a sharp blotchy edge and
-  a darker 1.5 cm rim. Thin world features are filtered by the pixel footprint: the spill edge and rim widen to it (the
+  (× (0.90, 0.87, 0.82)) instead of lightening; spills of 5-30 cm (25 % of 2.4 m cells, at most one per cell and kept inside
+  it, so a pixel hashes its own cell only) with a sharp blotchy edge and a darker 1.5 cm rim. Thin world features are filtered by the pixel footprint: the spill edge and rim widen to it (the
   rim keeps its coverage), the reversal-patch edge is no sharper than fwidth of its field, and the front's 2.5 cm
   raggedness fades out before its cells shrink below a pixel (unfiltered, they alias into dots that crawl in motion).
 - **Detail lattices:** a regular period that is not a power-of-two number of texels beats in the box-filtered mips
   (94 tuft rows at 5.4 texels drew horizontal streaks 1-2 m away): the tuft rows, the loop pitch and the weave use 2, 4
   or 8 texels.
 - Debug view 25 `textile`: r = Dv, g = the nap diffuse factor / 2, b = 0.5 + 0.5 s.
-- **Cost** (RTX 5070 Ti laptop, shared with other agents' captures; tex-integ against lane A, `gpuProfile(4)` after
-  `waitForIdle`, median of 4 at high 1600 × 900): opaque pass +0.14 ms (gallery 00), +0.11 (gallery 11), +0.11 (Level 0
-  straight down), with ±0.1-0.2 ms between runs; SMAA +0.03-0.04 ms (the pile detail gives it more edges). The same
-  tree with the textile hooks reverted measured ±0.01 ms (the 1.2 m frame and the new textures cost nothing); the
-  textile shading is applied before the lighting so nothing of it is live across it. textures.genMs 210 against 213,
-  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB. These were measured before 0b; setting a σ turns
-  on 0b's EON code in the whole surface shader, whose cost 0b records (TEX2.md).
+- **Cost** (RTX 5070 Ti laptop; whole frame, `gpuBench(20)` after `waitForIdle`, tex-integ 3eb5d47 against lane A,
+  median of 2 interleaved rounds; the rounds agree within ~0.02 ms at high, ~0.08 at ultra): high (1600 × 900) +0.24 ms
+  on gallery 00, +0.26 Level 0 straight down, +0.09 EXECUTIVE_SUITE −55°, +0.03 on a frame without textiles
+  (CONCRETE −55°); ultra (2240 × 1260) +0.55, +0.65, +0.18, ±0.02. Where it goes, measured by reverting one part at a
+  time against the earlier tex-integ ff42a23 at high: SMAA ~0.1 ms on a carpet-filled frame (the pile's pixel-scale
+  contrast gives it edges everywhere: without SMAA the straight-down difference drops from +0.34 to +0.25); the 1.2 m
+  frame's finer mips ~0.03-0.05; the pile shading (Dv, nap, detail visibility, trap) ~0.1, and removing any one of its
+  parts saved at most 0.03; EON's presence 0.06 on every frame, which lanes B and C now share. The spill lookup that
+  reads one feature cell instead of 3 × 3, and the office's lazy outline wobble, took 0.05-0.08 off. Reading `BR_L_SIGMA` and `BR_L_PILE` through compares instead of dynamically indexed const arrays
+  (lane 0's materialPost.ts and pom.ts) measured a further 0.01-0.04 ms at high. textures.genMs 210 against 213,
+  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB. All of this is over the lane's +0.03 / +0.07 ms.
 - Not done: the torch retro term (it needs the punctual share of the direct diffuse, which the hooks do not see); lint
   / hair SDFs and buckling ripples.
 

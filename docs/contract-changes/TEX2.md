@@ -132,9 +132,15 @@ v2 conventions").
 - **Stale WP9 text (lane 0's paragraphs):** the WP9 sheen sentence ("colour = amount · sqrt(albedo) …, roughness
   from the pile lean") and the carpet grime bullet describe the old model; DESIGN.md WP8 "Lane A: textiles" has the
   current one.
-- **Budget:** the opaque pass measured +0.11-0.14 ms at high before 0b (noise ±0.1-0.2 ms), over the lane's +0.03 ms;
-  ultra not measured; setting the textile sigmas turns on 0b's EON code for the whole surface shader (its cost is 0b's
-  record above); generation times unchanged within noise; 0 MB (DESIGN.md WP8 lane A, Cost).
+- **Budget (over):** whole frame against tex-integ 3eb5d47 (`gpuBench(20)`): high +0.24 ms on gallery 00, +0.26
+  Level 0 straight down, +0.09 EXECUTIVE_SUITE, +0.03 without textiles; ultra +0.55 / +0.65 / +0.18 / ±0.02, against
+  +0.03 / +0.07 allowed. About 0.1 ms of a carpet-filled frame at high is SMAA reacting to the pile's contrast.
+  Generation times unchanged within noise; 0 MB (DESIGN.md WP8 lane A, Cost).
+- **For lane 0:** `BR_L_SIGMA[ brL ]` (materialPost.ts) and `BR_L_PILE[ brL ]` (pom.ts FRAG_DIRVIS) are dynamically
+  indexed const arrays; generated compares (as textile.ts does for its pile gate) measured 0.01-0.04 ms cheaper at high
+  once rows are non-zero.
+- **Pile gaps:** matPost colours the gaps deeper at the same luminance (`pileGap`): the visibility K becomes
+  K + (1 − K) 0.15 (c / m − 1) per channel; the calibrations are unchanged.
 - **Consumers affected:** lane 0b (FRAG_DIRVIS skips `pile.x > 0` as planned: Dv replaces it); the integrator
   (gallery calibration: gallery 11 carpet / wall ratio −4 % at high, +3 % at medium against a5c03e1).
 
