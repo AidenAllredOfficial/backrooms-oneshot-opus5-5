@@ -8,8 +8,10 @@
 // (brDetUv, brDetSl, brDetVar, brAm).
 // Detail maps (BR_DETAIL_MAPS, chunks/detail.ts) and POM (BR_POM, chunks/pom.ts) are package B's high / ultra paths.
 // Texture realism v2: the texture channel decode at main scope (brAux, brAux2, brLean, brRotM, brRotC, brMuH, brRel;
-// textures/layers/types.ts AuxKind) and the family hook points (chunks/family/index.ts: postSample, postDetail, the
-// grime profile branches, postWet, rough, normal). Lanes edit their family files, not this one.
+// textures/layers/types.ts AuxKind), the family hook points (chunks/family/index.ts: postSample, postDetail, the
+// grime profile branches, postWet, rough, normal), and 0b's per-layer controls: the detail repeat (BR_L_DETREP), the
+// 'detailMask' strength and the detail tint (BR_L_DETTINT), and the relief-aware dirt / wear block after the grime
+// chain (BR_L_DIRT / BR_L_WEAR, compiled in by BR_RELIEF_GRIME). Lanes edit their family files, not this one.
 
 import { DecalKind } from '../../core/ids.ts';
 import { familyHook } from './family/index.ts';
@@ -101,6 +103,13 @@ vec2 brDetUv = brSurf2D( vBrLocal, brNWg ) / BR_DETAIL_REPEAT;
 #endif
 vec2 brDetDx = dFdx( brDetUv );
 vec2 brDetDy = dFdy( brDetUv );
+// texture realism v2: the layer's detail repeat is BR_DETAIL_REPEAT x BR_L_DETREP (a divisor of the world periods)
+float brDetRep = BR_L_DETREP[ brL ];
+if ( brDetRep != 1.0 ) {
+	brDetUv /= brDetRep;
+	brDetDx /= brDetRep;
+	brDetDy /= brDetRep;
+}
 vec2 brDetSl = vec2( 0.0 ); // resolved detail slope (m / m) for FRAG_NORMAL
 float brDetVar = 0.0; // unresolved detail slope variance (LEAN) for FRAG_ROUGHNESS
 float brAm = 1.0; // detail albedo multiplier over its layer mean (1 where no detail layer was fetched)
@@ -324,7 +333,9 @@ if ( uDebugView == BR_DV_RELIEF ) {
 ${familyHook('postSample')}#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 // ---- detail maps (LEAN; textures/detail.ts): a mean-preserving albedo multiplier (pits and gaps also a little
 // rougher), the resolved slope for FRAG_NORMAL and the unresolved slope variance for FRAG_ROUGHNESS
-// (per-face layer: quad-uniform; the planar mirror pass skips it; a missing array reads mean 0 and is ignored)
+// (per-face layer: quad-uniform; the planar mirror pass skips it; a missing array reads mean 0 and is ignored).
+// 'detailMask' layers scale the strength by their aux channel (after the postSample hooks, which may edit brAux)
+if ( brAuxK == BR_AUX_DETAILMASK ) brDetL.y *= brAux;
 if ( brDetL.x >= 0.0 && uBrReflPass < 0.5 ) {
 	int brDi = int( brDetL.x + 0.5 );
 	vec4 brDmu;
@@ -339,6 +350,9 @@ if ( brDetL.x >= 0.0 && uBrReflPass < 0.5 ) {
 	brDetSl = brDsl * brDetL.y;
 	brAm = brDt.b / brDmu.b;
 ${familyHook('postDetail')}	brA *= mix( 1.0, brAm, brDetL.y );
+	// detail tint (BR_L_DETTINT, 0 = the grey multiplier alone): per channel, the multiplier's deviation once more, so
+	// the detail's pits and fibres shift the hue (dyed pile deepens, aggregate greys) as well as the value
+	brA *= 1.0 + ( brAm - 1.0 ) * brDetL.y * BR_L_DETTINT[ brL ];
 	brOrmh.g = clamp( brOrmh.g + BR_DETAIL_ROUGH_K[ brDi ] * ( 1.0 - brAm ) * brDetL.y, 0.02, 1.0 );
 }
 #endif
@@ -477,7 +491,7 @@ brDetVar *= 1.0 - max( brPuddle, 0.7 * brFilm );
 #ifdef BR_SHELL
 // micro-ripples on standing water (drips, draughts): the ripple layer at BR_RIPPLE_SCALE metres per repeat, drifting
 // slowly, only near the viewer (unresolved ripples far away would only blur the mirror through the specular AA)
-float brRk = BR_DETAIL_REPEAT / BR_RIPPLE_SCALE;
+float brRk = BR_DETAIL_REPEAT / BR_RIPPLE_SCALE * brDetRep; // brDetUv is in units of the layer's detail repeat
 float brRn = 1.0 - smoothstep( BR_RIPPLE_NEAR0, BR_RIPPLE_NEAR1, max( length( brDetDx ), length( brDetDy ) ) * brRk * BR_DETAIL_RES );
 if ( brPuddle > 0.0 && brRn > 0.0 && uBrReflPass < 0.5 ) { // per-pixel branch: explicit gradients
 	vec2 brRp = textureGrad( uBrDetail, vec3( brDetUv * brRk + uTime * BR_RIPPLE_DRIFT, BR_DETAIL_RIPPLE ), brDetDx * brRk, brDetDy * brRk ).rg * 2.0 - 1.0;

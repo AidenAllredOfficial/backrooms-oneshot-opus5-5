@@ -3,6 +3,9 @@
 // uBrDetail / uBrLayerD uniforms are declared in chunks/common.ts; the shading code sits in chunks/surface.ts
 // (FRAG_MAP_GLSL detail block, the ripple in the wetness block, the LEAN term in FRAG_ROUGHNESS_GLSL and the second
 // cotangent frame in FRAG_NORMAL_GLSL), all under BR_DETAIL_MAPS (high / ultra) and never in the decal variant.
+// Texture realism v2 detail controls: the repeat scale BR_L_DETREP, the 'detailMask' strength and the tint
+// BR_L_DETTINT sit in FRAG_MAP_GLSL; the detail cavity's share of the specular occlusion (BR_L_DETSO) is
+// FRAG_DETAIL_SO_GLSL below.
 
 /** Appended to the fragment common block. */
 export const DETAIL_PARS_GLSL = /* glsl */ `
@@ -19,5 +22,15 @@ vec4 brDetailFetch( vec2 uv, float layer, vec2 dx, vec2 dy, out vec4 mu ) {
 	if ( near > 0.0 ) t = mix( mu, textureGrad( uBrDetail, vec3( uv, layer ), dx, dy ), near );
 	return t;
 }
+#endif
+`;
+
+/** After FRAG_AO_REFL_GLSL (aomap_fragment), before the family postLight hooks: the detail cavity (brAm < 1 in the
+ * detail layer's pits, pile gaps and pores) occludes the inline environment specular too, by the layer's share
+ * BR_L_DETSO (0 = off), at most halving it. The G-buffer specular of SSR pixels (brFbSpec, routed before) is untouched. */
+export const FRAG_DETAIL_SO_GLSL = /* glsl */ `
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+// ---- detail specular occlusion (texture realism v2)
+if ( BR_L_DETSO[ brL ] > 0.0 ) reflectedLight.indirectSpecular *= max( 0.5, mix( 1.0, brAm, 0.5 * brDetL.y * BR_L_DETSO[ brL ] ) );
 #endif
 `;

@@ -17,7 +17,7 @@ import { VERT_INVARIANT_GLSL } from './DepthMaterial.ts';
 import { BOUNCE_GLSL } from './chunks/bounce.ts';
 import { brdfParsGlsl } from './chunks/brdf.ts';
 import { fragmentCommon, HAZE_FUNCS_GLSL } from './chunks/common.ts';
-import { DETAIL_PARS_GLSL } from './chunks/detail.ts';
+import { DETAIL_PARS_GLSL, FRAG_DETAIL_SO_GLSL } from './chunks/detail.ts';
 import { EMITTER_GLSL } from './chunks/emitters.ts';
 import { DEBUG_PARS_GLSL } from './chunks/debug.ts';
 import { familyHook } from './chunks/family/index.ts';
@@ -68,7 +68,7 @@ function injectionCode(): Record<string, string> {
     'fragment:emissivemap_fragment': FRAG_EMISSIVE_GLSL,
     'fragment:lights_physical_fragment': FRAG_MATERIAL_POST_GLSL,
     'fragment:lights_fragment_maps': FRAG_LIGHTS_GLSL,
-    'fragment:aomap_fragment': FRAG_AO_REFL_GLSL + familyHook('postLight'),
+    'fragment:aomap_fragment': FRAG_AO_REFL_GLSL + FRAG_DETAIL_SO_GLSL + familyHook('postLight'),
     'fragment:fog_fragment': FRAG_FOG_GLSL,
   };
 }
