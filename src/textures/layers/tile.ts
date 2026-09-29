@@ -16,7 +16,7 @@ void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
   TileInfo t = tiles(m, vec2(0.3));
   vec4 r = tileRand4(t.id, 5);
-  vec4 r2 = tileRand4(t.id, 6);
+  vec4 r2 = tileRand4(t.id, 16); // seed picked for one other-lot and one chipped tile in the 16 of the frame
   float lot = step(r2.x, 0.04);
   vec3 base = TABLE_ALBEDO * (1.0 + mix(0.06, 0.12, lot) * (r.x - 0.5)) * mix(vec3(1.0), vec3(1.025, 1.0, 0.96), lot * r2.y);
   vec2 tuv = uv + floor(r.zw * 64.0) / 16.0; // per-tile pattern offset (keeps periodicity: multiples of 1/16)
