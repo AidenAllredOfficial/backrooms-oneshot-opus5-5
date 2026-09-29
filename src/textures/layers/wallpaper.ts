@@ -71,8 +71,11 @@ void gen(vec2 uv, inout Surf s) {
 /** Manila: beige paper-backed vinyl, satin (~0.72), a fine linen emboss and vertical double pinstripes at 0.15 m
  * pitch. The pinstripes are two flat 1 mm ink lines at +-1.75 mm (11-18 % darker ink, a dip under 10 % once the texel
  * averages it, a slight hand-screen wobble of +-0.2 mm, a touch glossier), with no relief and no light line between
- * them: printed, not routed. The base holds the slubs its texel can resolve (1.7 x 60 mm dashes along both thread
- * directions) and the paper's formation; the linen threads are D17 (at a 0.15 m detail repeat, 0.29 mm texels). */
+ * them: printed, not routed. The base holds what its texel can resolve: a linen ground printed and embossed in
+ * register (warp and weft thread bundles as 4 mm streaks, +-3.5 %, and 2.5 x 50 mm slub dashes along both thread
+ * directions: at room distance the ground's texture is this print, since the emboss alone shades < 1 % under the
+ * baked light) and the paper's formation; the single linen threads are D17 (at a 0.15 m detail repeat, 0.29 mm
+ * texels). */
 const WALLPAPER_MANILA = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -81,19 +84,21 @@ void gen(vec2 uv, inout Surf s) {
   float wob = 0.0002 * gnoise(uv, PMxy(4.0, 1.0), 9);
   float d = distLines(m.x + wob, 0.15);
   float ink = sat(lineM(d - 0.00175, 0.0005) + lineM(d + 0.00175, 0.0005));
-  // slubs (dashes along both thread directions) and paper
-  float slub = max(smoothstep(0.62, 0.9, vnoise(uv, PMxy(700.0, 20.0), 3)), smoothstep(0.66, 0.92, vnoise(uv, PMxy(20.0, 700.0), 4)));
+  // linen ground, printed and embossed in register: warp and weft thread bundles (4 mm streaks, 17 cm long) and
+  // slubs (2.5 mm dashes along both thread directions), then the paper
+  float linen = 0.6 * gnoise(uv, PMxy(250.0, 6.0), 21) + 0.4 * gnoise(uv, PMxy(6.0, 250.0), 22);
+  float slub = max(smoothstep(0.62, 0.9, vnoise(uv, PMxy(400.0, 20.0), 3)), smoothstep(0.66, 0.92, vnoise(uv, PMxy(20.0, 400.0), 4)));
   float formation = fbm(uv, PM(25.0), 3, 5);
   float age = fbm(uv, PM(2.5), 3, 6);
   float dSeam = distLines(m.x, 0.6);
   vec3 c = TABLE_ALBEDO;
-  c *= 1.0 + 0.02 * formation + 0.015 * (slub - 0.3);
+  c *= 1.0 + 0.02 * formation + 0.035 * linen + 0.025 * (slub - 0.3);
   c *= mix(vec3(1.0), vec3(0.975, 0.965, 0.935), sat(age * 1.5));
   c *= mix(vec3(1.0), vec3(0.89, 0.87, 0.82), ink);
   float gap = lineM(dSeam, 0.0002);
   c *= 1.0 - 0.3 * gap - 0.03 * gauss(dSeam / 0.003);
   s.albedo = c;
-  s.height = 0.5 + 0.05 * slub + 0.25 * gauss(dSeam / 0.0015) - 0.2 * gap + 0.3 * fbm(uv, PM(7.0), 2, 17);
+  s.height = 0.5 + 0.08 * slub + 0.06 * linen + 0.25 * gauss(dSeam / 0.0015) - 0.2 * gap + 0.3 * fbm(uv, PM(7.0), 2, 17);
   s.rough = 0.72 - 0.03 * slub - 0.03 * ink;
 }
 `;
