@@ -69,6 +69,7 @@ export interface TileMesh {
   props: MeshBuffers | null;
   water: MeshBuffers | null;
   decals: MeshBuffers | null; // soft-alpha decals (decal material variant); hard-alpha SIGNAGE/CHALK stays alpha-tested here too
+  doors?: { seed: number; x: number; y: number; z: number; yaw: number; mesh: MeshBuffers }[];
   atlas: { width: number; height: number; tpc: LmTpc; chartHash: number; chartCount: number };
   dynLights: (DynLightRef | null)[]; // length 9, DYN_SLOT_OFFSETS order
   tris: number;

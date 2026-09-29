@@ -160,6 +160,10 @@ export function validateBuild(mesh: TileMesh, lm: LightmapData, variant: 'previe
   if (mesh.props) validateMeshBuffers(e, 'props', mesh.props, false);
   if (mesh.water) validateMeshBuffers(e, 'water', mesh.water, true);
   if (mesh.decals) validateMeshBuffers(e, 'decals', mesh.decals, true);
+  for (const d of mesh.doors ?? []) {
+    validateMeshBuffers(e, 'door', d.mesh, false);
+    if (![d.x, d.y, d.z, d.yaw, d.seed].every(Number.isFinite)) e.push('door: non-finite transform');
+  }
   if (!Array.isArray(mesh.dynLights) || mesh.dynLights.length !== 9) e.push(`dynLights: expected 9 slots, got ${mesh.dynLights?.length}`);
   else {
     for (let i = 0; i < 9; i++) {

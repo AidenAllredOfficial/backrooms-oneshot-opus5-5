@@ -20,6 +20,7 @@ import { generateTextures } from '../textures/TextureBaker.ts';
 import { generateDetailTextures } from '../textures/DetailBaker.ts';
 import { createMaterialSystem } from '../materials/MaterialSystem.ts';
 import { createPlanarReflection } from '../materials/PlanarReflection.ts';
+import { createPortalViews } from '../materials/PortalViews.ts';
 import { createReflectionProbe } from '../materials/ReflectionProbe.ts';
 import { createWaterRipples } from '../materials/water/WaterRipples.ts';
 import { createLightingRuntime, lightingFrameHooks, lightingPassMaterials, setVolumetricsEnabled } from '../lighting/LightingRuntime.ts';
@@ -366,6 +367,11 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
     capture: p.bake === 'full' ? { gateClosed: () => core.gate.active, scope: p.stream } : undefined,
   });
   core.scene.add(streamer.scene);
+  const portals = createPortalViews(core.scene, streamer, materials.globals, lighting.flashlight.light);
+  frame?.addHook('afterDepth', { name: 'portals', order: 4, run: (ctx) => {
+    const name = core.sys?.q.name ?? q.name;
+    portals.render(ctx.renderer, core.camera, name === 'low' ? 0.5 : name === 'medium' ? 0.65 : 0.85);
+  } });
   const { sp: spawn, explicit } = await spawnP;
   mark('spawnReady');
   if (spawn.s !== streamer.storey) streamer.switchStorey(spawn.s);
@@ -375,6 +381,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
     switchStorey: (to) => streamer.switchStorey(to),
     findSafeSpawn: (s, x, z) => streamer.findNearest('safe', { s, x, z }, 4),
     attachDynamicMesh: (k, m) => streamer.attachDynamicMesh(k, m),
+    setDoorYaw: (s, cx, cz, seed, yaw) => streamer.setDoorYaw?.(s, cx, cz, seed, yaw),
   };
   const player = createPlayerSystem(spawn, settings, core.bus, host);
   if (explicit && p.y === null) player.teleport(spawn.s, spawn.x, null, spawn.z, spawn.yaw, spawn.pitch); // snap to the floor
@@ -390,7 +397,7 @@ export async function bootSystems(core: AppCore, q: QualityConfig, cb: BootCallb
   streamer.update(spawn.x, spawn.z, -Math.sin(spawn.yaw), -Math.cos(spawn.yaw), core.camera, core.frame);
   startup.clear();
   return {
-    q, features: featuresOf(p), textures, materials, lighting, post, reflection, reflectionPlaneY: null, ssr, probe, ripples, anomaly, dynRes, pool,
+    q, features: featuresOf(p), textures, materials, lighting, post, reflection, portals, reflectionPlaneY: null, ssr, probe, ripples, anomaly, dynRes, pool,
     poolTarget: poolSize(q), streamer, player, audio, input, init,
     spawn: { ...spawn, reason: explicit ? 'explicit' : spawn.reason },
   };

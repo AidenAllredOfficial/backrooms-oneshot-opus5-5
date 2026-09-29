@@ -298,6 +298,7 @@ export function buildVisGrid(nb: LayoutNeighborhood, tile: TileKey): VisGrid {
       }
     }
     for (const p of expandPeriodicProps(l)) {
+      if (p.door) continue; // a moving leaf must not leave a baked shadow in its initial pose
       const def = PROP_DEFS[p.kind];
       if (!def) continue;
       if ((p.flags & PropFlag.CEILING) !== 0) continue; // mirrored ceiling furniture: no occluders, no contact

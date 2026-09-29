@@ -103,6 +103,7 @@ function ownTileMesh(m: TileMesh, tl: TransferList): TileMesh {
     props: m.props ? ownMesh(m.props, tl, 'props') : null,
     water: m.water ? ownMesh(m.water, tl, 'water') : null,
     decals: m.decals ? ownMesh(m.decals, tl, 'decals') : null,
+    doors: m.doors?.map((d) => ({ ...d, mesh: ownMesh(d.mesh, tl, 'door') })),
     atlas: { ...m.atlas },
     dynLights: m.dynLights.map((d) => (d === null ? null : { ...d, color: [d.color[0], d.color[1], d.color[2]] })),
     tris: m.tris,

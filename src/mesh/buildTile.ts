@@ -13,7 +13,7 @@ import { tileKeyStr, tileOfPoint, type TileKey } from '../core/grid.ts';
 import type { ChunkLayout } from '../core/layout.ts';
 import { DYN_SLOT_OFFSETS, emptyMeshBuffers, type DynLightRef, type MeshBuffers, type SurfaceSet, type TileMesh } from '../core/mesh.ts';
 import type { LayoutNeighborhood } from '../core/world.ts';
-import { buildTileProps } from '../props/tileProps.ts';
+import { buildTileDoors, buildTileProps } from '../props/tileProps.ts';
 import { BUF_DECALS, BUF_WATER, type ChartSpec, type Face } from './plan.ts';
 import { planTile } from './surfaces.ts';
 import { repairTJunctions } from './tjunction.ts';
@@ -172,16 +172,18 @@ export function buildTile(nb: LayoutNeighborhood, tile: TileKey, tpc: LmTpc): { 
   const decalBuf: MeshBuffers | null = nv[1] > 0 ? ws[1].finish() : null;
   const waterBuf: MeshBuffers | null = nv[2] > 0 ? ws[2].finish() : null;
   const props = buildTileProps(nb, tile);
+  const doors = buildTileDoors(nb, tile);
 
   const dynLights: (DynLightRef | null)[] = [];
   for (const [dx, dz] of DYN_SLOT_OFFSETS) dynLights.push(dynLightOf(nb, tile, dx, dz));
 
-  const tris = (shell.indexCount + (props?.indexCount ?? 0) + (decalBuf?.indexCount ?? 0) + (waterBuf?.indexCount ?? 0)) / 3;
+  const tris = (shell.indexCount + (props?.indexCount ?? 0) + (decalBuf?.indexCount ?? 0) + (waterBuf?.indexCount ?? 0) + doors.reduce((n, d) => n + d.mesh.indexCount, 0)) / 3;
   const mesh: TileMesh = {
     tileKey: tileKeyStr(tile),
     zone: nb.center.zone,
     shell,
     props,
+    doors,
     water: waterBuf,
     decals: decalBuf,
     atlas: { width: W, height: H, tpc, chartHash: surfaces.hash, chartCount: surfaces.charts.length },

@@ -213,6 +213,7 @@ export function buildChunkCollision(l: ChunkLayout): ChunkCollision {
 
   // ------------------------------------------------------------ props
   for (const p of expandPeriodicProps(l)) {
+    if (p.door) continue; // animated leaves supply their current collision through PlayerSystem
     const def = PROP_DEFS[p.kind];
     if (!def) continue;
     if (p.flags & PropFlag.CEILING) continue; // CEILING_FURNITURE: no collision

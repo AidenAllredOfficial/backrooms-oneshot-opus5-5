@@ -365,6 +365,7 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       s.streamer.update(st.x, st.z, -Math.sin(st.camYaw), -Math.cos(st.camYaw), core.camera, core.frame);
       // 4. uploads
       s.streamer.processUploads(r, burst ? BURST_UPLOAD_MS : s.q.uploadBudgetMs, burst);
+      s.portals?.update(st);
       // 5. lighting (package F reads its URL toggle bounce= from the launch features)
       setFlashlightBounce(s.lighting, s.features.bounce);
       s.lighting.update(t, dt, s.streamer.tiles(), st, core.camera, query);

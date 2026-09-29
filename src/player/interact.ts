@@ -17,9 +17,10 @@ export function updateTarget(s: PlayerState, w: CollisionWorld): PropHit | null 
   return hit;
 }
 
-export function updateInteract(s: PlayerState, w: CollisionWorld, pressed: boolean, emit: Emit): void {
+export function updateInteract(s: PlayerState, w: CollisionWorld, pressed: boolean, emit: Emit, useDoor?: (hit: PropHit) => 'open' | 'close' | undefined): PropHit | null {
   const hit = updateTarget(s, w);
-  if (!pressed) return;
-  if (hit) emit('interact', { propKind: hit.kind, x: hit.x, y: hit.y, z: hit.z, yaw: s.yaw, seed: hit.seed });
+  if (!pressed) return hit;
+  if (hit) emit('interact', { propKind: hit.kind, x: hit.x, y: hit.y, z: hit.z, yaw: s.yaw, seed: hit.seed, door: useDoor?.(hit) });
   else emit('interact', { propKind: -1, x: s.x, y: s.y, z: s.z, yaw: s.yaw, seed: 0 });
+  return hit;
 }

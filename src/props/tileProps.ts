@@ -17,6 +17,7 @@ import { cellIdx, tileOfPoint, worldToCell, type TileKey } from '../core/grid.ts
 import { CellFlag, EdgeKind, isRecessedFixture, Mat } from '../core/ids.ts';
 import type { ChunkLayout, Solid } from '../core/layout.ts';
 import type { MeshBuffers } from '../core/mesh.ts';
+import type { TileMesh } from '../core/mesh.ts';
 import type { LayoutNeighborhood } from '../core/world.ts';
 import { GeometryWriter } from '../core/writer.ts';
 import { expandPeriodicFixtures, expandPeriodicProps } from '../mesh/periodic.ts';
@@ -66,6 +67,7 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
 
   // ---- props
   for (const p of expandPeriodicProps(c)) {
+    if (p.door) continue;
     if (!inTile(p.x, p.z, q)) continue;
     const k = cellOf(p.x, p.z);
     st.propTris += emitPropInto(writer(), p, ox, oz, auxBitsOf(c, k, propGathersDust(p.kind)), ceilByteOf(c, k));
@@ -120,4 +122,17 @@ export function buildTileProps(nb: LayoutNeighborhood, tile: TileKey): MeshBuffe
   st.tris = st.propTris + st.fixtureTris + st.pipeTris + st.lockerTris;
   if (!w || (w as GeometryWriter).indexCount === 0) return null;
   return (w as GeometryWriter).finish();
+}
+
+/** Keep operable leaves separate from the merged furniture, with geometry relative to their hinge. */
+export function buildTileDoors(nb: LayoutNeighborhood, tile: TileKey): NonNullable<TileMesh['doors']> {
+  const out: NonNullable<TileMesh['doors']> = [];
+  const l = nb.center, ox = (tile.q & 1) * TILE_SIZE, oz = (tile.q >> 1) * TILE_SIZE;
+  for (const p of l.props) {
+    if (!p.door || !inTile(p.door.hingeX, p.door.hingeZ, tile.q)) continue;
+    const w = new GeometryWriter(512), c = cellOf(p.x, p.z);
+    emitPropInto(w, { ...p, x: 0.44, y: 0, z: 0, yaw: 0 }, 0, 0, 0, Math.round(l.ceilCm[c] / 5));
+    out.push({ seed: p.seed, x: p.door.hingeX - ox, y: p.y, z: p.door.hingeZ - oz, yaw: p.yaw, mesh: w.finish() });
+  }
+  return out;
 }

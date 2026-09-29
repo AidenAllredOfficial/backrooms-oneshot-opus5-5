@@ -13,7 +13,7 @@ export type OneShotKind =
   | 'pipeKnock' | 'metalGroan' | 'pumpCycle' | 'chainRattle' // industrial
   | 'dripPlink' | 'drainGurgle' | 'filterPump' // pools
   | 'elevatorMotor' | 'elevatorDing' | 'cableRumble' | 'flashlightClick' | 'doorRattle' | 'phonePickup' | 'radioClick' | 'sparkCrackle'
-  | 'phoneLine' | 'radioTune' // interaction loops (R2)
+  | 'phoneLine' | 'radioTune' | 'doorHinge' // interactions
   | 'uiHover' | 'uiClick' | 'uiOpen' | 'uiClose'; // interface (R2): camcorder buttons and tape transport
 
 export const ONESHOT_KINDS: readonly OneShotKind[] = [
@@ -21,7 +21,7 @@ export const ONESHOT_KINDS: readonly OneShotKind[] = [
   'pipeKnock', 'metalGroan', 'pumpCycle', 'chainRattle',
   'dripPlink', 'drainGurgle', 'filterPump',
   'elevatorMotor', 'elevatorDing', 'cableRumble', 'flashlightClick', 'doorRattle', 'phonePickup', 'radioClick', 'sparkCrackle',
-  'phoneLine', 'radioTune', 'uiHover', 'uiClick', 'uiOpen', 'uiClose',
+  'phoneLine', 'radioTune', 'doorHinge', 'uiHover', 'uiClick', 'uiOpen', 'uiClose',
 ];
 /** Interface kinds (played flat on the ui bus). */
 export const UI_ONESHOTS: readonly OneShotKind[] = ['uiHover', 'uiClick', 'uiOpen', 'uiClose'];
@@ -36,7 +36,7 @@ const PEAK: Readonly<Record<OneShotKind, number>> = {
   dripPlink: 0.7, drainGurgle: 0.75, filterPump: 0.75,
   elevatorMotor: 0.6, elevatorDing: 0.6, cableRumble: 0.7, flashlightClick: 0.5, doorRattle: 0.9, phonePickup: 0.6,
   radioClick: 0.6, sparkCrackle: 0.9,
-  phoneLine: 0.6, radioTune: 0.7, uiHover: 0.9, uiClick: 0.9, uiOpen: 0.9, uiClose: 0.9,
+  phoneLine: 0.6, radioTune: 0.7, doorHinge: 0.55, uiHover: 0.9, uiClick: 0.9, uiOpen: 0.9, uiClose: 0.9,
 };
 const LEN: Readonly<Record<OneShotKind, number>> = {
   doorThud: 1.4, chairScrape: 1.6, tileCreak: 1.3, ballastPop: 0.9, damperClunk: 1.2,
@@ -44,7 +44,7 @@ const LEN: Readonly<Record<OneShotKind, number>> = {
   dripPlink: 2.2, drainGurgle: 2.8, filterPump: 6.0,
   elevatorMotor: 3.2, elevatorDing: 2.2, cableRumble: 6.5, flashlightClick: 0.15, doorRattle: 1.1, phonePickup: 1.8,
   radioClick: 0.6, sparkCrackle: 1.0,
-  phoneLine: 4.8, radioTune: 0.9, uiHover: 0.04, uiClick: 0.24, uiOpen: 0.42, uiClose: 0.42,
+  phoneLine: 4.8, radioTune: 0.9, doorHinge: 1.1, uiHover: 0.04, uiClick: 0.24, uiOpen: 0.42, uiClose: 0.42,
 };
 
 type Synth = (o: Float32Array, rng: Rng, sr: number) => void;
@@ -110,6 +110,15 @@ function camButton(o: Float32Array, rng: Rng, sr: number, dir: number): void {
 }
 
 const S: Readonly<Record<OneShotKind, Synth>> = {
+  doorHinge: (o, rng, sr) => {
+    const len = 0.9;
+    const cr = stickSlip(rng, sr, len, (t) => 90 + 65 * Math.sin(Math.PI * t / len), 0.2);
+    const hinge = bp(420 + 100 * rng.float(), 6, sr), body = bp(180 + 70 * rng.float(), 3, sr);
+    for (let i = 0; i < cr.length && i < o.length; i++) {
+      const envelope = Math.sin(Math.PI * i / cr.length) ** 0.8;
+      o[i] = (hinge.process(cr[i]) + body.process(cr[i]) * 0.5) * envelope;
+    }
+  },
   doorThud: (o, rng, sr) => {
     // a heavy door closing somewhere: body thump, latch click, then the room carrying it
     addMode(o, sr, 0, 62 + 18 * rng.float(), 0.14, 1, 0.25, 0.004);

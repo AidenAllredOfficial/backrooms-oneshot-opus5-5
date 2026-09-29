@@ -2,11 +2,10 @@
 // and by the zone-transition connectors). A DOORWAY edge is a framed 0.9 m hole; a DOOR_LEAF prop hung in it reads as
 // a real door. States (per edge, hashed):
 //   open  70 %: swung 85-100 deg into the room on the side with free floor, preferring the hinge side whose
-//               neighbouring wall the leaf can rest against; collision stays on (it snaps to 90 deg along the jamb);
+//               neighbouring wall the leaf can rest against;
 //   ajar  20 %: 15-40 deg, and CLOSED 10 %: in the door plane — both only where one side is a dead end (a pocket of
 //               <= DEAD_END_MAX cells without ports reached only through this door), swung into / closing off that
-//               pocket, so a stuck door never cuts the walkable graph that matters (the pocket stays connected
-//               logically; the door rattles when used, WP13).
+//               pocket. Leaves carry hinge poses for the player to open and close with E.
 // Leaves are never hung over ramps, blockers, water or cells that already hold a prop in the swing quadrant.
 
 import { CELL, WALL_T } from '../../core/constants.ts';
@@ -186,8 +185,16 @@ export function placeLeaf(g: ChunkGrid, axis: 'x' | 'z', i: number, j: number, s
   const yaw = Math.atan2(-dz, dx);
   const ci = axis === 'x' ? (side < 0 ? i - 1 : i) : i, cj = axis === 'x' ? j : (side < 0 ? j - 1 : j);
   const y = l.floorCm[cellIdx(ci, cj)] / 100;
+  const closedYaw = Math.atan2(-(axis === 'x' ? -hinge : 0), axis === 'x' ? 0 : -hinge);
+  const openYaw = Math.atan2(-(axis === 'x' ? 0 : side), axis === 'x' ? side : 0);
   g.addProp({
     kind: PropKind.DOOR_LEAF, variant, x, y, z, yaw, scale: 1,
     flags: flags ?? 1 /* SolidFlag.COLLIDE */, seed: seed >>> 0,
+    // Fully propped-back entrance leaves remain fixed, so using them cannot close a stair exit.
+    door: deg < 110 ? {
+      hingeX: axis === 'x' ? hingeN : hingeT,
+      hingeZ: axis === 'x' ? hingeT : hingeN,
+      closedYaw, openYaw,
+    } : undefined,
   });
 }

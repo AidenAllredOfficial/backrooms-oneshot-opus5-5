@@ -185,6 +185,10 @@ export class OneShots {
     const fx = e.x, fz = e.z;
     const fy = e.y + 1.0;
     if (e.propKind === PropKind.DOOR_LEAF) {
+      if (e.door) {
+        this.playAt(OneShots.oneShotReq(e.door === 'latch' ? 'doorThud' : 'doorHinge', (e.seed >>> 0) & 1), fx, fy, fz, 0.13, { bus: 'sfx' });
+        return;
+      }
       // LOCKED_EXIT landmark doors rattle hard; the other DOOR_LEAF props (ENDLESS_HALL fakes) do not open either and
       // get a softer rattle as feedback
       const locked = this.inLockedExit(fx, fz);
@@ -230,7 +234,7 @@ export class OneShots {
   /** Preload keys for the event kinds (cheap one-shots). */
   static requests(): SynthRequest[] {
     const r: SynthRequest[] = [];
-    for (const k of ['flashlightClick', 'sparkCrackle', 'doorRattle', 'phonePickup', 'phoneLine', 'radioClick', 'radioTune', 'elevatorMotor', 'elevatorDing', 'cableRumble'] as const) {
+    for (const k of ['flashlightClick', 'sparkCrackle', 'doorRattle', 'doorHinge', 'doorThud', 'phonePickup', 'phoneLine', 'radioClick', 'radioTune', 'elevatorMotor', 'elevatorDing', 'cableRumble'] as const) {
       for (let v = 0; v < 2; v++) r.push({ op: 'oneshot', kind: k, variant: v });
     }
     return r;

@@ -31,8 +31,9 @@ function disposeArray(this: THREE.BufferAttribute): void {
 
 /** Free the CPU copies of every attribute (and the index) as soon as three has uploaded them. Safe for static
  * geometry drawn with precomputed bounds (no raycasts, no wireframe, attributes never modified). */
-export function releaseCpuArraysOnUpload(g: THREE.BufferGeometry): void {
+export function releaseCpuArraysOnUpload(g: THREE.BufferGeometry, retain: readonly string[] = []): void {
   for (const name in g.attributes) {
+    if (retain.includes(name)) continue;
     const a = g.attributes[name];
     if ((a as THREE.BufferAttribute).isBufferAttribute) (a as THREE.BufferAttribute).onUpload(disposeArray);
   }

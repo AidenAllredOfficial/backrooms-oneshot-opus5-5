@@ -86,6 +86,14 @@ export function validateLayout(l: ChunkLayout, gen?: WorldGen): string[] {
   // ---- structures / landmarks
   for (const s of l.structures) {
     if (s.i0 < 0 || s.j0 < 0 || s.i1 > N || s.j1 > N || s.i1 <= s.i0 || s.j1 <= s.j0) err(`structure ${s.id}: bad rect`);
+    const link = s.portal?.doorway;
+    if (link) {
+      for (const f of [link.frame, link.target]) {
+        if (![f.x, f.y, f.z, f.nx, f.nz].every(Number.isFinite) || Math.abs(f.nx) + Math.abs(f.nz) !== 1 || f.nx * f.nz !== 0) err(`doorway ${link.id}: invalid frame`);
+      }
+      if (link.target.s < 0 || link.target.s > 2 || !Number.isInteger(link.target.s)) err(`doorway ${link.id}: invalid destination storey`);
+      if (link.frame.x < 0 || link.frame.x > CHUNK_SIZE || link.frame.z < 0 || link.frame.z > CHUNK_SIZE) err(`doorway ${link.id}: aperture outside chunk`);
+    }
   }
   for (const m of l.landmarks) {
     if (m.i0 < 0 || m.j0 < 0 || m.i1 > N || m.j1 > N || m.i1 <= m.i0 || m.j1 <= m.j0) err(`landmark ${m.kind}: bad rect`);
@@ -94,7 +102,10 @@ export function validateLayout(l: ChunkLayout, gen?: WorldGen): string[] {
     const v = s.kind === 'box' ? [...s.min, ...s.max] : s.kind === 'ramp' ? [s.x0, s.z0, s.x1, s.z1, s.y0, s.y1] : [...s.a, ...s.b, s.r];
     if (v.some((x) => !Number.isFinite(x))) err(`solid ${s.id}: non-finite value`);
   }
-  for (const p of l.props) if (![p.x, p.y, p.z, p.yaw, p.scale].every(Number.isFinite)) err(`prop kind ${p.kind}: non-finite value`);
+  for (const p of l.props) {
+    if (![p.x, p.y, p.z, p.yaw, p.scale].every(Number.isFinite)) err(`prop kind ${p.kind}: non-finite value`);
+    if (p.door && !Object.values(p.door).every(Number.isFinite)) err(`door ${p.seed}: non-finite hinge`);
+  }
 
   // ---- ports and in-chunk connectivity
   const expect = computePorts(l);
@@ -239,6 +250,7 @@ export function layoutHash(l: ChunkLayout): number {
   for (const p of l.props) {
     h = hn(hn(hn(hn(h, p.kind), p.variant), p.flags), p.seed);
     h = hn(hn(hn(hn(hn(h, p.x), p.y), p.z), p.yaw), p.scale);
+    if (p.door) h = hn(hn(hn(hn(h, p.door.hingeX), p.door.hingeZ), p.door.closedYaw), p.door.openYaw);
   }
   h = hn(h, l.decals.length);
   for (const d of l.decals) {
@@ -260,6 +272,12 @@ export function layoutHash(l: ChunkLayout): number {
       h = hs(h, p.kind);
       h = h3(h3(h, p.min), p.max);
       h = hb(hb(hn(h, p.towerId), p.endless), p.wrong);
+      if (p.doorway) {
+        const d = p.doorway;
+        h = hs(hn(h, d.id), d.effect);
+        for (const f of [d.frame, d.target]) h = hn(hn(hn(hn(hn(h, f.x), f.y), f.z), f.nx), f.nz);
+        h = hn(h, d.target.s);
+      }
     }
   }
   h = hn(h, l.ports.length);

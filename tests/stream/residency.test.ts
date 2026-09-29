@@ -603,6 +603,40 @@ describe('residency state machine', () => {
     expect(r.st.isReady(1, false)).toBe(true);
   });
 
+  it('retains a distant portal door pose when a quality change replaces its geometry', async () => {
+    const r = rig({ ...QUALITY.low, streamRadius: 0 });
+    const upload = r.up.uploadGeometry.bind(r.up);
+    r.up.uploadGeometry = (gpu, mesh, parent, more) => {
+      const done = upload(gpu, mesh, parent, more);
+      if (done && gpu.key === '0:0:0:0') {
+        const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 2.1));
+        leaf.name = 'door:123';
+        leaf.userData.door = { x: 0, y: 0, z: 0, yaw: 0,
+          position: (leaf.geometry.getAttribute('position').array as Float32Array).slice(),
+          normal: (leaf.geometry.getAttribute('normal').array as Float32Array).slice() };
+        gpu.group.add(leaf);
+      }
+      return done;
+    };
+    r.tick(C / 2, C / 2);
+    await r.answerLayouts(); await r.answerBuilds();
+    for (let i = 0; i < 20; i++) r.tick(C / 2, C / 2);
+    r.st.setDoorYaw!(0, 0, 0, 123, Math.PI / 2);
+    const old = r.st.scene.getObjectByName('door:123') as THREE.Mesh;
+    expect(old.geometry.getAttribute('normal').getX(0)).toBeCloseTo(1, 6);
+    // The player is now in the remote room, outside the active 3x3 door scan.
+    r.st.prefetch(0, C / 2, C / 2, 1);
+    r.tick(3.5 * C, 3.5 * C);
+    await r.answerLayouts(); await r.answerBuilds();
+    await r.st.setQuality({ ...QUALITY.high, streamRadius: 0 });
+    await r.answerBuilds();
+    for (let i = 0; i < 120; i++) r.tick(3.5 * C, 3.5 * C);
+    const fresh = r.st.scene.getObjectByName('door:123') as THREE.Mesh;
+    expect(fresh).not.toBe(old);
+    expect(fresh.geometry.getAttribute('normal').getX(0)).toBeCloseTo(1, 6);
+    r.st.dispose();
+  });
+
   it.each(['same atlas quality', 'new atlas quality', 'eviction', 'reset'] as const)(
     '%s cancels unfinished live-tile lightmap uploads immediately', async (action) => {
       const r = rig({ ...QUALITY.low, streamRadius: 0 });

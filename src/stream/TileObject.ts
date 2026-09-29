@@ -216,7 +216,7 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
   function addMesh(gpu: TileGpuImpl, m: MeshBuffers | null, mat: THREE.Material, castShadow: boolean, renderOrder: number, name: string): THREE.Mesh | null {
     if (!m || m.vertexCount === 0 || m.indexCount === 0) return null;
     const geo = toBufferGeometry(m);
-    releaseCpuArraysOnUpload(geo);
+    releaseCpuArraysOnUpload(geo, name.startsWith('door:') ? ['position', 'normal'] : []);
     const mesh = new THREE.Mesh(geo, mat);
     const nb = meshBytes(m);
     mesh.userData.bytes = nb;
@@ -239,6 +239,15 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
   /** Geometry-step unit `part` (0 shell, 1 props, 2 decals, 3 water): the mesh, or null when the part is empty. */
   function addPart(gpu: TileGpuImpl, mesh: TileMesh, part: number): THREE.Mesh | null {
     const mats = gpu.materials;
+    if (part >= GEO_PARTS) {
+      const d = mesh.doors![part - GEO_PARTS];
+      const leaf = addMesh(gpu, d.mesh, mats.props, true, 0, `door:${d.seed}`);
+      if (leaf) {
+        leaf.userData.door = { x: d.x, y: d.y, z: d.z, yaw: NaN, position: d.mesh.position.slice(), normal: d.mesh.normal.slice() };
+        setDoorMeshYaw(leaf, d.yaw);
+      }
+      return leaf;
+    }
     switch (part) {
       case 0: return addMesh(gpu, mesh.shell, mats.shell, true, 0, 'shell');
       case 1: return (gpu.props = addMesh(gpu, mesh.props, mats.props, true, 0, 'props'));
@@ -324,12 +333,13 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
         gpu.geoMesh = mesh;
         gpu.geoCur = 0;
       }
-      while (gpu.geoCur < GEO_PARTS) {
+      const parts = GEO_PARTS + (mesh.doors?.length ?? 0);
+      while (gpu.geoCur < parts) {
         const m = addPart(gpu, mesh, gpu.geoCur++);
         if (m) {
           one[0] = m;
           forceUpload(one);
-          if (gpu.geoCur < GEO_PARTS && !more()) return false; // one mesh upload = one unit
+          if (gpu.geoCur < parts && !more()) return false; // one mesh upload = one unit
         }
       }
       gpu.geoMesh = null;
@@ -448,4 +458,23 @@ export function createTileUploader(renderer: THREE.WebGLRenderer, materials: Mat
     },
   };
   return up;
+}
+
+/** Surface shaders sample tile-local lighting. Rotate the leaf's vertices in that frame, retaining precision. */
+export function setDoorMeshYaw(mesh: THREE.Mesh, yaw: number): void {
+  const d = mesh.userData.door;
+  if (!d || d.yaw === yaw) return;
+  const pos = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+  const nor = mesh.geometry.getAttribute('normal') as THREE.BufferAttribute;
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  for (let i = 0; i < pos.count; i++) {
+    const x = d.position[i * 3], z = d.position[i * 3 + 2];
+    pos.setXYZ(i, d.x + c * x + s * z, d.y + d.position[i * 3 + 1], d.z - s * x + c * z);
+    const nx = d.normal[i * 4], nz = d.normal[i * 4 + 2];
+    const a = nor.array as Int8Array;
+    a[i * 4] = Math.round(c * nx + s * nz); a[i * 4 + 2] = Math.round(-s * nx + c * nz);
+  }
+  pos.needsUpdate = true; nor.needsUpdate = true;
+  mesh.geometry.computeBoundingBox(); mesh.geometry.computeBoundingSphere();
+  d.yaw = yaw;
 }

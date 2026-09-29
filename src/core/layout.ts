@@ -62,6 +62,8 @@ export interface PropPlacement {
   kind: PropKindId; variant: number; x: number; y: number; z: number; yaw: number; scale: number;
   flags: number; // SolidFlag.COLLIDE / OCCLUDE override bits (default from PROP_DEFS) | PropFlag bits (ids.ts)
   seed: number;
+  /** Hinged, operable leaf. Coordinates are chunk-local; yaw is a three.js Y rotation. */
+  door?: { hingeX: number; hingeZ: number; closedYaw: number; openYaw: number };
 }
 
 /** Decal quad. Atlas convention (WP8 draws, WP5 maps): a slot's "up" is +v and every arrow glyph points +v;
@@ -82,11 +84,21 @@ export interface DecalPlacement {
 export interface WaterRect { x0: number; z0: number; x1: number; z1: number; y: number; floorY: number; kind: 0 | 1 | 2 } // pool | flooded | film
 
 export interface PortalSpec {
-  kind: 'tower' | 'elevator' | 'pit' | 'glitch';
+  kind: 'tower' | 'elevator' | 'pit' | 'glitch' | 'doorway';
   min: Vec3; max: Vec3; // trigger volume (chunk-local)
   towerId: number; // tower/elevator id (bakeGroup for towers), 0 otherwise
   endless: boolean; // ENDLESS_STAIRS anomaly: switches y but not storey
   wrong?: boolean; // elevator with a WRONG_ELEVATOR site: the ride goes to (s+2)%3 instead of (s+1)%3
+  doorway?: DoorwayLink;
+}
+
+/** Ordinary architectural opening, with an outward normal pointing into the accessible room. */
+export interface PortalFrame { x: number; y: number; z: number; nx: number; nz: number }
+export interface DoorwayLink {
+  id: number;
+  effect: 'level' | 'interior';
+  frame: PortalFrame; // chunk-local
+  target: PortalFrame & { s: import('./ids.ts').StoreyId }; // world coordinates
 }
 
 export interface StructureInstance {

@@ -47,7 +47,7 @@ import {
   keepResident, lookahead, rectChebyshev, rectDistance, resetMotion, updateMotion,
 } from './priorities.ts';
 import type { JobType } from './priorities.ts';
-import { createTileUploader, type TileGpu, type TileUploader, type UploaderMemory } from './TileObject.ts';
+import { createTileUploader, setDoorMeshYaw, type TileGpu, type TileUploader, type UploaderMemory } from './TileObject.ts';
 import type { JobHandle, WorkerPool } from './WorkerPool.ts';
 import { chunkNumKey, createChunkData, createWorldQuery, StoreyData, type ChunkData } from './WorldQueryImpl.ts';
 
@@ -237,6 +237,8 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   const recs: Map<number, ChunkRec>[] = [new Map(), new Map(), new Map()];
   const chunkList: ChunkRec[] = [];
   const tilesByKey = new Map<string, TileRec>();
+  const doorPoses = new Map<string, number>();
+  const doorKey = (s: StoreyId, cx: number, cz: number, seed: number) => `${s}:${cx}:${cz}:${seed}`;
   const uploadList: TileRec[] = [];
   const fadeList: TileRec[] = [];
   const liveList: TileRec[][] = [[], [], []];
@@ -854,6 +856,11 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
           uploader.setFade(gpu, 1);
         }
         t.gpu = gpu;
+        // Prefetched portal destinations can rebuild while their doors are outside the player's active area.
+        for (const child of gpu.group.children) if (child.name.startsWith('door:')) {
+          const yaw = doorPoses.get(doorKey(t.key.s, t.key.cx, t.key.cz, Number(child.name.slice(5))));
+          if (yaw !== undefined) setDoorMeshYaw(child as THREE.Mesh, yaw);
+        }
         t.staging = null;
         t.mesh = null;
         rt.group = gpu.group;
@@ -981,6 +988,28 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     get storey() { return storey; },
     query,
     scene: root,
+    withStoreyView(s, draw) {
+      const changed: [THREE.Object3D, boolean][] = [];
+      for (let k = 0; k < storeyGroups.length; k++) {
+        changed.push([storeyGroups[k], storeyGroups[k].visible]);
+        storeyGroups[k].visible = k === s;
+      }
+      for (const c of chunkList) if (c.s === s) for (const t of c.tiles) if (t.gpu) {
+        changed.push([t.gpu.group, t.gpu.group.visible]);
+        t.gpu.group.visible = true;
+        if (t.gpu.props) { changed.push([t.gpu.props, t.gpu.props.visible]); t.gpu.props.visible = true; }
+      }
+      try { draw(); } finally { for (const [o, visible] of changed) o.visible = visible; }
+    },
+    setDoorYaw(s, cx, cz, seed, yaw) {
+      doorPoses.set(doorKey(s, cx, cz, seed), yaw);
+      if (doorPoses.size > 4096) doorPoses.delete(doorPoses.keys().next().value!);
+      for (let q = 0; q < 4; q++) {
+        const t = tilesByKey.get(`${s}:${cx}:${cz}:${q}`);
+        const mesh = t?.gpu?.group.getObjectByName(`door:${seed}`);
+        if (mesh) setDoorMeshYaw(mesh as THREE.Mesh, yaw);
+      }
+    },
 
     update(x, z, vx, vz, camera, frame) {
       const u0 = perf();
@@ -1228,6 +1257,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
           if (d.rt) d.rt.state = 'disposed';
         }
         disposeQ.length = 0;
+        doorPoses.clear();
         init = nextInit;
         dirty = true;
         resetMotion(motion);

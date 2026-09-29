@@ -4,20 +4,16 @@
 //   applies: feetY < -1.6 => storey (s+1)%3, y += 3; feetY > +1.6 => (s+2)%3, y -= 3. After a switch the feet are
 //   at -+1.4, 0.2 m inside the threshold of the opposite direction: hysteresis, no thrashing.
 // * ENDLESS_STAIRS towers shift y but never the storey.
-// * If the target storey is not prefetched at the threshold, the feet are clamped at -+1.59 (the step is
-//   invisible) until host.isPrefetched says it is; turning back releases the clamp.
-// * Prefetch policy (every PROXIMITY_S as keep-alive): within 12 m of a tower prefetch (s+1)%3 around the tower
-//   centre (down is the common direction); inside the footprint with feetY > +0.3 or climbing, also (s+2)%3.
+// * A late destination stops motion on the flight at -+1.59, with feet still on its slope. Turning back stays free.
+// * Both adjacent storeys prefetch on approach, before the player commits to either flight.
 // * Events: transition {tower, enter|switch|exit}, storeyChanged {via: 'tower'}.
 
-import { PLAYER, TOWER_SWITCH_Y } from '../../core/constants.ts';
+import { TOWER_SWITCH_Y } from '../../core/constants.ts';
 import type { StoreyId } from '../../core/ids.ts';
 import type { PortalHit } from '../../core/runtime.ts';
 import { down, inPortal, portalCX, portalCZ, up, type TraversalCtx } from './common.ts';
 
 export const CLAMP_Y = TOWER_SWITCH_Y - 0.01; // 1.59
-const PLAYER_STEP = PLAYER.stepMax;
-export const UP_PREFETCH_Y = 0.3;
 
 interface TowerBox { x0: number; x1: number; z0: number; z1: number; y0: number; y1: number; id: number; endless: boolean }
 
@@ -25,7 +21,7 @@ export interface TowerTraversal {
   /** proximity tick: prefetch keep-alive */
   proximity(ctx: TraversalCtx): void;
   /** after every controller sub-step */
-  afterStep(ctx: TraversalCtx): void;
+  afterStep(ctx: TraversalCtx, px: number, py: number, pz: number): void;
   reset(ctx: TraversalCtx): void;
   readonly inside: boolean;
   readonly clamped: number; // -1 clamped low, +1 clamped high, 0 free
@@ -37,8 +33,6 @@ export function createTowerTraversal(): TowerTraversal {
   let inside = false;
   let clampDir = 0;
   let switches = 0;
-  let lastY = NaN;
-  let climbing = false;
 
   const set = (h: PortalHit): void => {
     cur.x0 = h.ox + h.spec.min[0]; cur.x1 = h.ox + h.spec.max[0];
@@ -64,7 +58,6 @@ export function createTowerTraversal(): TowerTraversal {
     s.y += dy;
     ctx.onShift(dy);
     switches++;
-    lastY = NaN;
     if (!cur.endless) ctx.emit('storeyChanged', { from, to: target, dy, via: 'tower' });
     ctx.emit('transition', { kind: 'tower', phase: 'switch', id: cur.id });
     ctx.refreshPortals();
@@ -78,18 +71,16 @@ export function createTowerTraversal(): TowerTraversal {
     proximity(ctx) {
       const s = ctx.state;
       if (s.fly) return;
-      if (lastY === lastY) climbing = s.y - lastY > 0.04;
-      lastY = s.y;
       for (let i = 0; i < ctx.portalCount; i++) {
         const h = ctx.portals[i];
         if (!h || h.spec.kind !== 'tower' || h.spec.endless) continue;
         const cx = portalCX(h), cz = portalCZ(h);
         ctx.host.prefetch(down(s.s), cx, cz, 1);
-        if (inPortal(h, s.x, s.y, s.z) && (s.y > UP_PREFETCH_Y || climbing)) ctx.host.prefetch(up(s.s), cx, cz, 1);
+        ctx.host.prefetch(up(s.s), cx, cz, 1);
       }
     },
 
-    afterStep(ctx) {
+    afterStep(ctx, px, py, pz) {
       const s = ctx.state;
       if (s.fly) { release(ctx); if (inside) { inside = false; ctx.emit('transition', { kind: 'tower', phase: 'exit', id: cur.id }); } return; }
       // which tower are we in?
@@ -118,44 +109,34 @@ export function createTowerTraversal(): TowerTraversal {
       const tDown = cur.endless ? s.s : down(s.s);
       const tUp = cur.endless ? s.s : up(s.s);
 
-      if (clampDir === -1) {
-        const natural = ctx.world.floorAt(s.x, s.z, s.y);
-        if (natural === natural && natural >= lo) { release(ctx); return; }
-        if (cur.endless || ctx.host.isPrefetched(tDown, s.x, s.z)) {
-          if (natural === natural && natural > s.y - 1.5) s.y = natural; // back onto the real flight (the eye spring smooths it)
-          doSwitch(ctx, 3, tDown);
-        }
-        return;
-      }
-      if (clampDir === 1) {
-        const natural = ctx.world.floorAt(s.x, s.z, s.y);
-        if (natural === natural && natural <= hi) { release(ctx); return; }
-        if (cur.endless || ctx.host.isPrefetched(tUp, s.x, s.z)) {
-          if (natural === natural && natural < s.y + PLAYER_STEP) s.y = natural;
-          doSwitch(ctx, -3, tUp);
-        }
-        return;
+      const stopOnFlight = (dir: number): void => {
+        const y = dir * CLAMP_Y;
+        const fraction = Math.max(0, Math.min(1, (y - py) / (s.y - py || 1)));
+        s.x = px + (s.x - px) * fraction; s.z = pz + (s.z - pz) * fraction;
+        s.y = y; s.vx = s.vy = s.vz = 0; s.speed = 0; s.onGround = true;
+        clampDir = dir;
+      };
+      if (clampDir !== 0) {
+        const dir = clampDir, target = dir < 0 ? tDown : tUp;
+        if (dir * s.y < CLAMP_Y - 1e-6 || cur.endless || ctx.host.isPrefetched(target, s.x, s.z)) release(ctx);
+        else { if (dir * s.y > CLAMP_Y) stopOnFlight(dir); return; }
       }
       if (s.y < lo) {
         if (cur.endless || ctx.host.isPrefetched(tDown, s.x, s.z)) doSwitch(ctx, 3, tDown);
         else {
-          clampDir = -1;
-          ctx.extra.yMin = -CLAMP_Y;
-          s.y = -CLAMP_Y; s.vy = 0; s.onGround = true;
+          stopOnFlight(-1);
         }
       } else if (s.y > hi) {
         if (cur.endless || ctx.host.isPrefetched(tUp, s.x, s.z)) doSwitch(ctx, -3, tUp);
         else {
-          clampDir = 1;
-          ctx.extra.yMax = CLAMP_Y;
-          s.y = CLAMP_Y; s.vy = Math.min(0, s.vy);
+          stopOnFlight(1);
         }
       }
     },
 
     reset(ctx) {
       release(ctx);
-      inside = false; lastY = NaN; climbing = false;
+      inside = false;
     },
   };
   return t;

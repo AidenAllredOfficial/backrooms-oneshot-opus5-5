@@ -234,6 +234,9 @@ export interface WorldStreamer {
    * which set `query` reads in the same call. */
   readonly query: WorldQuery;
   readonly scene: THREE.Group; // add to the main scene once
+  /** Temporary visibility for a portal capture; does not change collision, streaming or the player's storey. */
+  withStoreyView?(s: StoreyId, draw: () => void): void;
+  setDoorYaw?(s: StoreyId, cx: number, cz: number, seed: number, yaw: number): void;
   /** desired set around (x,z) + smoothed velocity * EDGE_FOG.LOOKAHEAD_S (velocity estimated from successive
    * calls; teleports reset it); priorities (ring, frustum); dispatch; eviction. No uploads here. */
   update(x: number, z: number, viewX: number, viewZ: number, camera: THREE.Camera, frame: number): void;
@@ -316,6 +319,7 @@ export interface PostStack {
 // ---------------------------------------------------------------- player (WP12)
 export interface PlayerSystem {
   readonly state: PlayerState;
+  readonly doorCue?: string;
   /** fixed 120 Hz internally; interpolated camera rig output written into state.eyeX..camRoll */
   update(dt: number, input: PlayerInput, world: CollisionWorld, bus: GameBus, frozenTime: boolean): void;
   teleport(s: StoreyId, x: number, y: number | null, z: number, yaw: number, pitch: number): void;

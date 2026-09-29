@@ -33,6 +33,7 @@ import { elevatorExitCell, stampElevator } from './structures/elevator.ts';
 import { placeGlitchWalls } from './structures/glitch.ts';
 import { placePits } from './structures/pit.ts';
 import { stampTower, towerExitCell } from './structures/tower.ts';
+import { stampDoorways } from './structures/doorways.ts';
 import { placeAnomalies } from './content/anomalies.ts';
 import { placeChalk } from './content/chalk.ts';
 import { placeDecals } from './content/decals.ts';
@@ -177,6 +178,10 @@ export function generateChunk(w: GenWorld, key: ChunkKey): ChunkLayout {
       for (const t of r.entrances) targets.push([t[0], t[1]]);
     }
   }
+
+  const doorwayExits = stampDoorways(ctx, w.sites);
+  targets.push(...doorwayExits);
+  structureExits.push(...doorwayExits);
 
   // ---- 7. zone
   gen.generate(ctx);

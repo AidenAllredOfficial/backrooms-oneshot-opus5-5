@@ -51,12 +51,16 @@ npm run preview      # serve dist/ locally (http://localhost:4173/)
 | Shift | Run (hold, or toggle: Settings > Comfort > Sprint) |
 | C | Crouch (hold, or toggle: Settings > Comfort > Crouch). In fullscreen, Ctrl also crouches. |
 | F | Flashlight |
-| E | Use: doors, phones, radios |
+| E | Open or close a door; use phones and radios |
 | Esc | Pause menu |
 | F3 | Stats overlay |
 
 Gamepad (standard mapping): left stick walks, right stick looks, A uses, X toggles the flashlight, B crouches,
 RT or L3 runs, Start pauses.
+
+Occasional service doors lead directly to another level, and some storage rooms have far more space inside than
+their entrances suggest. Their views stay continuous as you walk through, and you can return through the same doorway.
+Doors swing against the player and pause until there is room to move. Sealed exits still rattle when tried.
 
 Debug keys work only when the page is opened with `debug=1`, `fly=1` or `view=...`: F4 cycles the debug views, and
 Space ascends in fly mode.

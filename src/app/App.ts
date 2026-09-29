@@ -75,7 +75,7 @@ const CAPTION_STABLE_S = 1.0; // a zone must hold this long before it is caption
 const DISCOVERY_DT = 0.25;
 /** launch params carried over by 'Resume here' after a lost GPU context */
 const RESUME_KEEP = ['autostart', 'noaudio', 'quality', 'hud', 'debug', 'camcorder', 'bake', 'fly', 'flicker', 'noprime'];
-const INTERACT_VERBS: Record<number, string> = { 25: 'Try door', 21: 'Answer', 22: 'Radio off' };
+const INTERACT_VERBS: Record<number, string> = { 21: 'Answer', 22: 'Radio off' };
 const INTERACT_FEEDBACK: Record<number, string> = { 25: 'Locked', 21: 'No one there', 22: 'Off' };
 const popcount = (v: number): number => { let n = 0; for (let x = v >>> 0; x; x &= x - 1) n++; return n; };
 
@@ -481,6 +481,7 @@ export function createApp(root: HTMLElement): App {
       Object.assign(disc, { t: 0, candZone: -1, candT: 0, capZone: -1, capS: -1, lastX: NaN, lastZ: NaN, lastS: -1, landmark: -1, zone: -1 });
       disc.landmarksSeen.clear();
       s.anomaly.reset();
+      s.portals.reset();
       s.lighting.reset();
       s.audio.reset();
       s.post.glitch(0, 0);
@@ -554,6 +555,7 @@ export function createApp(root: HTMLElement): App {
       core.hooks.length = 0;
       resetLaunchToggles(core);
       s.anomaly.reset();
+      s.portals.reset();
       s.lighting.reset();
       s.audio.reset();
       s.post.glitch(0, 0);
@@ -909,7 +911,7 @@ export function createApp(root: HTMLElement): App {
     }
     if (params.hud) {
       const tgt = mode === 'play' && !core.driver ? s.player.state.target : -1;
-      ui.hud.setCue(tgt >= 0 ? INTERACT_VERBS[tgt] ?? 'Use' : null);
+      ui.hud.setCue(tgt === 25 ? s.player.doorCue ?? 'Try door' : tgt >= 0 ? INTERACT_VERBS[tgt] ?? 'Use' : null);
       ui.hud.setRec((core.camcorderForced || settings.get().film.camcorder) && playing);
       ui.hud.tick(playSeconds);
     }

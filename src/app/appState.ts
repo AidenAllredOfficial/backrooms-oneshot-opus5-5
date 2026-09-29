@@ -13,6 +13,7 @@ import type {
 import type { WorkerInit } from '../core/worker.ts';
 import type { SpawnPoint } from '../core/world.ts';
 import type { PlanarReflection } from '../materials/PlanarReflection.ts';
+import type { createPortalViews } from '../materials/PortalViews.ts';
 import type { ReflectionProbe } from '../materials/ReflectionProbe.ts';
 import type { ScreenSpaceReflections } from '../post/ssr/SsrTrace.ts';
 import type { WaterRipples } from '../materials/water/WaterRipples.ts';
@@ -43,6 +44,7 @@ export interface Systems {
   lighting: LightingRuntime;
   post: PostStack;
   reflection: PlanarReflection;
+  portals: ReturnType<typeof createPortalViews>;
   /** Selected water plane for the afterDepth mirror render, after this frame's flashlight shadow map. */
   reflectionPlaneY: number | null;
   /** package D: screen-space reflections (the frame graph's 'hiz' and 'ssr' hooks; setQuality on preset changes) */

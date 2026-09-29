@@ -13,13 +13,13 @@ export interface GameEvents {
   lightToggle: { lightId: number; on: boolean; x: number; y: number; z: number };
   flashlight: { on: boolean };
   zoneChanged: { from: ZoneId; to: ZoneId; s: StoreyId; mood: MoodId };
-  storeyChanged: { from: StoreyId; to: StoreyId; dy: number; via: 'tower' | 'elevator' | 'pit' | 'glitch' };
+  storeyChanged: { from: StoreyId; to: StoreyId; dy: number; via: 'tower' | 'elevator' | 'pit' | 'glitch' | 'doorway' };
   transition: { kind: 'tower' | 'elevator' | 'pit' | 'glitch'; phase: 'enter' | 'doorsClosing' | 'ride' | 'switch' | 'doorsOpening' | 'exit'; id: number };
   anomaly: { kind: string; phase: 'start' | 'trigger' | 'end'; x: number; z: number };
   glitch: { seconds: number; strength: number };
   spark: { x: number; y: number; z: number; strength: number }; // SPARKING anomaly burst (visual WP11, crackle WP13)
   /** interact key pressed; propKind = targeted INTERACTABLE_PROPS kind or -1 (nothing within 1.6 m) */
-  interact: { propKind: number; x: number; y: number; z: number; yaw: number; seed: number };
+  interact: { propKind: number; x: number; y: number; z: number; yaw: number; seed: number; door?: 'open' | 'close' | 'latch' };
   tileLoaded: { key: string };
   tileUnloaded: { key: string };
   chunkLoaded: { key: string };

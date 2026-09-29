@@ -29,11 +29,13 @@ import {
 } from './controller.ts';
 import { updateInputSettings } from './input.ts';
 import { updateInteract } from './interact.ts';
+import { createHingedDoors } from './hingedDoors.ts';
 import { PROXIMITY_R, PROXIMITY_S, type TraversalCtx } from './traversal/common.ts';
 import { createElevatorTraversal } from './traversal/elevator.ts';
 import { createGlitchTraversal, createWarp, proximityPrefetch } from './traversal/glitch.ts';
 import { createPitTraversal } from './traversal/pit.ts';
 import { createTowerTraversal } from './traversal/tower.ts';
+import { doorwayAfterStep, doorwayBarriers, doorwayEye, doorwayPrefetch } from './traversal/doorway.ts';
 
 export interface TraversalHost {
   prefetch(s: StoreyId, x: number, z: number, radiusChunks: number): void;
@@ -41,6 +43,7 @@ export interface TraversalHost {
   switchStorey(to: StoreyId): void;
   findSafeSpawn(s: StoreyId, x: number, z: number): Promise<SpawnPoint | null>; // -> streamer.findNearest('safe', {s,x,z}, 4)
   attachDynamicMesh(tileKey: string, m: MeshBuffers): DynamicMeshHandle | null; // -> WorldStreamer.attachDynamicMesh
+  setDoorYaw?(s: StoreyId, cx: number, cz: number, seed: number, yaw: number): void;
 }
 
 export const STEP = 1 / 120;
@@ -53,6 +56,7 @@ export interface PlayerSystemExt extends PlayerSystem {
   setUserPace(on: boolean): void;
   /** the walk speed in effect (m/s) */
   readonly walkSpeed: number;
+  readonly doorCue: string;
 }
 
 /** Test / debug view of the internals (not part of the core PlayerSystem contract). */
@@ -79,6 +83,7 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
   // ---------------------------------------------------------------- collision world with the door leaves' virtual boxes
   let inner: CollisionWorld | null = null;
   const elevator = createElevatorTraversal();
+  const doors = createHingedDoors(host);
   const world: CollisionWorld = {
     get storey() { return inner ? inner.storey : state.s; },
     isLoaded: (x, z) => inner!.isLoaded(x, z),
@@ -86,7 +91,7 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
     ceilingAt: (x, z, y) => inner!.ceilingAt(x, z, y),
     waterAt: (x, z) => inner!.waterAt(x, z),
     surfaceAt: (x, z, y) => inner!.surfaceAt(x, z, y),
-    boxesNear: (x, z, r, out) => elevator.appendBoxes(x, z, r, out, inner!.boxesNear(x, z, r, out)),
+    boxesNear: (x, z, r, out) => doorwayBarriers(ctx, x, z, r, out, doors.appendBoxes(x, z, r, out, elevator.appendBoxes(x, z, r, out, inner!.boxesNear(x, z, r, out)))),
     portalAt: (x, y, z) => inner!.portalAt(x, y, z),
     portalsNear: (x, z, r, out) => inner!.portalsNear(x, z, r, out),
     propAt: (x, z, yaw, d) => inner!.propAt(x, z, yaw, d),
@@ -97,6 +102,9 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
   let portalsDirty = true;
   let proxT = 0;
   const rig = createCameraRig(state);
+  const cameraNear = new WeakMap<PerspectiveCamera, number>();
+  let doorwayDistance = Infinity;
+  let doorCue = 'Try door';
   // interpolation (previous sub-step)
   let pX = state.x, pY = state.y, pZ = state.z, pPh = 0;
   const view = createPlayerState(state.s, state.x, state.y, state.z, state.yaw, state.pitch);
@@ -156,6 +164,7 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
     state,
     setUserPace(on: boolean): void { userPace = on; },
     get walkSpeed() { return controllerCfg().walk; },
+    get doorCue() { return doorCue; },
     debug: {
       get steps() { return steps; },
       get towerSwitches() { return tower.switches; },
@@ -180,6 +189,7 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
       if (!(fdt >= 0)) fdt = 0;
       fdt = Math.min(fdt, MAX_STEPS * STEP);
       if (!frozenTime) simT += fdt;
+      doors.update(w, state, fdt, emit);
 
       // teleport without y / first load: snap to the floor once the chunk is there; spawn-in-wall rescue
       if (pendingSnap) {
@@ -218,7 +228,8 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
         stepPlayer(state, sub, STEP, world, cfg, emit, cur.mouseSensitivity, cur.invertY);
         if (extra.landImpact > 0) { rig.landing(extra.landImpact); extra.landImpact = 0; }
         if (!state.fly && !pendingSnap) {
-          tower.afterStep(ctx);
+          if (doorwayAfterStep(ctx, pX, pZ)) { refreshPortals(w); doors.update(w, state, 0); }
+          tower.afterStep(ctx, pX, pY, pZ);
           if (portalsDirty) refreshPortals(w);
           glitch.afterStep(ctx, STEP, warp);
           pit.afterStep(ctx, warp);
@@ -236,13 +247,15 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
         refreshPortals(w);
         tower.proximity(ctx);
         proximityPrefetch(ctx);
+        doorwayPrefetch(ctx);
         elevator.proximity(ctx);
       }
       elevator.update(ctx, fdt);
       warp.update(ctx, fdt);
 
       // interactables
-      updateInteract(state, w, input.interactPressed, emit);
+      const hit = updateInteract(state, w, input.interactPressed, emit, (hit) => doors.use(hit));
+      doorCue = hit ? doors.cue(hit) : 'Try door';
 
       // camera rig (interpolated)
       const a = Math.min(1, acc / STEP);
@@ -254,6 +267,7 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
       rig.update(view, state, fdt, simT, {
         headBob: cur.headBob, camcorder: cur.film.camcorder, cameraShake: cur.cameraShake, shake: ctx.shake, frozen: frozenTime,
       });
+      doorwayDistance = doorwayEye(ctx);
     },
 
     teleport(s: StoreyId, x: number, y: number | null, z: number, yaw: number, pitch: number): void {
@@ -266,6 +280,7 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
       state.yaw = yaw; state.pitch = Math.max(-1.5, Math.min(1.5, pitch));
       state.vx = 0; state.vy = 0; state.vz = 0; state.speed = 0; state.onGround = true; state.stillFor = 0;
       resetController(state);
+      doors.reset();
       if (y === null || !Number.isFinite(y)) { pendingSnap = true; } else { state.y = y; pendingSnap = false; }
       spawnCheck = true;
       acc = 0;
@@ -273,13 +288,20 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
       snapInterp();
       rig.snap(state);
       syncRigNow();
+      doorwayDistance = Infinity;
     },
 
     applyToCamera(camera: PerspectiveCamera, fovDeg: number): void {
       camera.position.set(state.eyeX, state.eyeY, state.eyeZ);
       camera.rotation.set(state.camPitch, state.camYaw, state.camRoll, 'YXZ');
       const fov = fovDeg + rig.fovKick;
-      if (Math.abs(camera.fov - fov) > 1e-3) { camera.fov = fov; camera.updateProjectionMatrix(); }
+      const baseNear = cameraNear.get(camera) ?? camera.near;
+      cameraNear.set(camera, baseNear);
+      // At grazing angles a normal near plane cuts a hole in the aperture before the feet cross it.
+      const near = Math.min(baseNear, Math.max(0.001, doorwayDistance * 0.2));
+      if (Math.abs(camera.fov - fov) > 1e-3 || Math.abs(camera.near - near) > 1e-6) {
+        camera.fov = fov; camera.near = near; camera.updateProjectionMatrix();
+      }
     },
 
     setFly(on: boolean): void {
