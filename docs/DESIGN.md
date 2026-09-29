@@ -4482,8 +4482,11 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   at high: most of it was register pressure from main-scope wear state and the chip-step bump, now scoped or removed
   (see the commit history). Texture generation 213-221 ms -> 231-260 ms at 1024 (+18 to +41 ms; the WOOD, PLASTIC,
   RUBBER and METAL_BARE recipes run without supersampling), memory 0 MB beyond the reserved METAL_BARE layer and the
-  D18-D20 slots; prop mesh bytes unchanged (the lmUv stream existed). The budgets (+0.02 / +0.05 ms, +20 ms) are
-  exceeded.
+  D18-D20 slots; prop mesh bytes unchanged (the lmUv stream existed). The review re-measured the reviewed head
+  against tex-integ c7ca203 on a quiet machine (gpuBench(20), medians of 2-4 interleaved rounds, spread +-0.02 ms at
+  high): high +0.07 to +0.11 ms on the four frames, ultra +0.27 to +0.47 ms. Compiling the wear block into the props
+  program only (shell faces have no edge coordinates) measured within the noise (at most 0.01 ms at high), so the shell
+  keeps it. The budgets (+0.02 / +0.05 ms, +20 ms) are exceeded.
 
 **Must NOT touch:** material shaders (WP9), except that you own the albedo *numbers* via contract-changes.
 

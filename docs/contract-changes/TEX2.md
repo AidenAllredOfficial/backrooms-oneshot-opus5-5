@@ -281,8 +281,8 @@ v2 conventions").
   window band and the copier platen and control panel stay RUBBER (shell solids are untinted, so PLASTIC made them light
   grey). tests/world/golden.json is unchanged (the golden chunks hash the layout, which these landmarks do not reach
   at seed 1).
-- **Costs:** DESIGN.md lane E (high +0.05 to +0.16 ms whole frame across sessions, RenderPass +0.06 ms; ultra within
-  its +-0.5 ms noise; generation +18 to +41 ms). Over the lane budget; the EON sigma on METAL_RUST, RUBBER and kraft is
+- **Costs:** DESIGN.md lane E (high +0.05 to +0.16 ms whole frame across sessions, RenderPass +0.06 ms; the review's
+  quiet re-measure +0.07 to +0.11 ms at high and +0.27 to +0.47 ms at ultra; generation +18 to +41 ms). Over the lane budget; the EON sigma on METAL_RUST, RUBBER and kraft is
   the shared presence cost lane B and C already pay.
 - **Consumers affected:** lane 0 / WP9 (the new anchor, the props lmUv no longer 0), WP6 (tint and lmUv encoding),
   the integrator.
