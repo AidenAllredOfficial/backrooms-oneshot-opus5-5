@@ -4249,12 +4249,16 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
 - **v2 shading parameters** (the 0b block): σ CONCRETE_WALL / CONCRETE_CEIL 0.35, CONCRETE_FLOOR 0.25 × (1 − lane)
   (the matPost hook: a burnished lane is polished paste, no longer porous), TERRAZZO 0; dirt on the slab, walls,
   soffits and terrazzo.
-- **Costs** (`__backrooms.gpuBench(20)`, whole frame, medians of interleaved rounds against a5c03e1 on gallery 04,
-  07, 15 and 25): high 1600 × 900 +0.06 to +0.14 ms, ultra 2560 × 1440 +0.3 to +0.9 ms (ultra rounds vary by
-  ±0.3 ms). Bisection: the doubled CONCRETE_FLOOR texel density is ~+0.08 / +0.3 ms (the hex blend's nine fetches
-  over twice the texels; a hex blend that skips vertices of negligible weight would win back ~0.09 ms at high), the
-  slab system ~+0.05 ms at high, the other hooks ~+0.03 ms; the SSR share of the burnished lanes is ≤ 0.02 ms, so no
-  roughness clamp was needed. textures.genMs +9 ms (207 → 216), detail genMs ±0.
+- **Costs** (`__backrooms.gpuBench(20)`, whole frame, medians of interleaved rounds against tex-integ with 0b merged,
+  on gallery 04, 07, 15 and 25). High 1600 × 900 (3 rounds, ±0.02 ms): +0.23 / +0.24 / +0.10 / +0.19 ms. Of that,
+  the 0b features the rows switch on are presence costs every surface program pays once any layer sets them (so
+  shared with the other lanes that set them): σ ~+0.02–0.07 ms and the relief dirt ~+0.06–0.09 ms. The lane's own
+  cost is +0.10 / +0.14 / +0.06 / +0.10 ms: the doubled CONCRETE_FLOOR texel density +0.04–0.07 (the hex blend's nine
+  fetches over twice the texels; a hex blend that skips vertices of negligible weight would win back ~0.09 ms), the
+  slab system ≤ 0.05, the soffit's 2.4 m repeat ≤ 0.04, the stripes and the other hooks ≤ 0.02 each. Ultra 2560 × 1440
+  renders 1.4x supersampled (7.2 Mpx, 5x high's pixels) and pays about 5x: +0.8 to +1.7 ms, the lane's own +0.65 to
+  +1.2 ms (2 rounds, ±0.5 ms). The SSR share of the burnished lanes is ≤ 0.016 ms, so no roughness clamp was needed.
+  textures.genMs +15 ms (200 → 215), detail genMs ±0. Both frame budgets (+0.03 / +0.07 ms) are exceeded.
 
 #### Lane C: masonry and tile
 
