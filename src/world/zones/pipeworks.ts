@@ -455,8 +455,9 @@ export const pipeworksGenerator: ZoneGenerator = {
   districtParams,
   generate,
   palette(_s: StoreyId, d: DistrictInfo): ZonePalette {
+    // utility tunnels: raw (unpainted) concrete block
     return {
-      floorMat: Mat.CONCRETE_FLOOR, wallMat: Mat.CMU_PAINTED, ceilMat: Mat.CONCRETE_CEIL, trimMat: Mat.CMU_PAINTED,
+      floorMat: Mat.CONCRETE_FLOOR, wallMat: Mat.CMU_RAW, ceilMat: Mat.CONCRETE_CEIL, trimMat: Mat.CMU_RAW,
       ceilKind: CeilKind.CONCRETE, ceilCm: params(d).ceil, baseboard: false,
     };
   },

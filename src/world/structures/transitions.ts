@@ -6,8 +6,8 @@
 // floor / wall materials up to the connector midline and the host's beyond it, and at its inner end a fire-door
 // frame (DOORWAY + CASING | THRESHOLD | EXIT_SIGN trim) with a metal DOOR_LEAF propped open and an EXIT sign over
 // it. Host = the side with the LOWER zone rank (see ZONE_RANK) among the zones whose generators call this; ties by
-// district id. On storey 1 (and whenever a deep zone hosts) the connector is a CMU service corridor, 20 cm below the
-// floor, ramped back up at its inner end, lit by a TUBE_STRIP.
+// district id. On storey 1 (and whenever a deep zone hosts) the connector is a raw CMU service corridor, 20 cm below
+// the floor, ramped back up at its inner end, lit by a TUBE_STRIP.
 // Soft boundaries: both sides dither the neighbour's palette into their first 3 cells (floor material per hashed
 // global cell, falling off with distance; alternate wall pieces take the neighbour's wall material).
 // Every connector is tried and reverted if it would leave any walkable cell unreachable from the ports.
@@ -152,7 +152,8 @@ function connectors(ctx: ZoneGenContext, side: Side, spec: SeamSpec, other: Dist
     const snap = snapshot(l);
     const mid = D >> 1; // depths < mid take the neighbour's palette
     const cmu = deepHost || bay;
-    const outerWall = cmu ? Mat.CMU_PAINTED : otherPal.wallMat, innerWall = cmu ? Mat.CMU_PAINTED : hostPal.wallMat;
+    // service corridors and loading bays are raw (unpainted) block
+    const outerWall = cmu ? Mat.CMU_RAW : otherPal.wallMat, innerWall = cmu ? Mat.CMU_RAW : hostPal.wallMat;
     const floorDrop = ctx.key.s === 1 && !bay ? 20 : 0;
     for (let d = 0; d < D; d++) {
       for (let c = r0; c < r1; c++) {
