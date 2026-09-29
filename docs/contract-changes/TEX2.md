@@ -107,4 +107,46 @@ v2 conventions").
 
 ## Lane D: walls and ceilings
 
+### 2026-09-29 — D: wall and ceiling recipes, stain fronts, seepage tongues, wall damage, tile states — APPLIED
+- **Status:** APPLIED on the lane branch (not yet merged). World layout output is unchanged (golden.json untouched);
+  the bake's mask R and the diffuser throat's vertex tint change.
+- **`src/core/materials.ts`** (rows 0 and 7 only): WALLPAPER_L0 roughness 0.7 → 0.52 (satin vinyl), DRYWALL 0.85 →
+  0.62 (eggshell). albedoMean unchanged on every row, PLENUM included (props use PLENUM as black).
+- **`src/bake/mask.ts`** (R only): R is now the wet extent, not a drawn stain. Wall stains (leak bands, rising damp)
+  stay at or below `STAIN_MAX` = 0.65. Seepage runnel zones take `SEEP_R0` = 0.7 .. 1 and encode the runnel's progress
+  t as R = SEEP_R0 + (1 − SEEP_R0)(1 − t). Zones are tongues (`seepZoneR`: narrowing down the wall, wandering sides,
+  a rounded tip, R falling to 0 over `SEEP_EDGE` = 0.15 m), so the fronts drawn along their outline are organic. The
+  ceiling cos rings and the wall tide band are gone; ceilings near a leak get the wet extent (0.5 + 0.5 s)(1 − d / 0.9).
+  Exports `STAIN_MAX`, `SEEP_R0`, `SEEP_EDGE`, `SEEP_TIP`, `seepZoneR` (tests/bake/mask.test.ts covers the tongue).
+- **Recipes** (`textures/layers/wallpaper.ts`, `ceiling.ts`): WALLPAPER_L0, WALLPAPER_MANILA, DRYWALL, CEILING_TILE
+  and PLENUM rewritten; trims re-measured (PLENUM [0.895, 0.905, 0.916]). `SurfacePhys`: σ 0.6 on CEILING_TILE and
+  PLENUM (turns on 0b's EON code in every surface program until another lane does); the wall layers stay Lambert and
+  no lane D layer sets `dirt` (σ 0.2 on paint and paper and dust in the fissures cost 0.02-0.04 ms at high for a
+  barely visible change); WALLPAPER_L0 `detRep` 0.5 (D2) like MANILA (D17); 'detailMask' aux on WALLPAPER_L0 (0.6 on
+  ink), DRYWALL (0.6 on joints) and CEILING_TILE (1 − bar).
+- **Detail maps** (`detailRecipes/walls.ts`): D2 84 threads at the 0.15 m repeat, D5 grain and pinholes, D16
+  ROLLER_STIPPLE and D17 LINEN filled. `slope` (the pack's range) is ~2.5x each map's rms slope: D2 0.18, D5 0.04, D16
+  0.12, D17 0.15 (at 0.2-0.45 the RGBA8 variance rounded to 0). D3 PAINT is unchanged (shared with TRIM, CMU and
+  METAL_PAINTED).
+- **Family hooks** (`chunks/family/walls.ts`, `ceiling.ts`): grime profiles 2 (wallpaper), 7 (paint) and 3
+  (ceilingTile). Exports `WALL_STAIN` and `CEIL_STAIN`; `brWlFronts`, `brWlMetricGrad`, `brWlNoise`, `brWlLine`,
+  `brWlDot` and `brWlEdgeDist` are GLSL helpers in the walls family's `pars` (the ceiling family calls `brWlFronts`).
+  The analytic relief of seams, flaps, cockle, pops, blisters and the tile states is a world-space height gradient
+  (`brWlBump`, `brClBump`) added in the `normal` hooks. postSample divides out surface.ts's ±3 % per-roll shade and
+  applies ±0.8 % (one dye lot) plus a per-roll sheen. No new uniforms or samplers.
+- **`chunks/emitters.ts`** (lens aging only): `brLensAge` on PRISM and OPAL lenses (5-15 insect silhouettes and a dust
+  gradient toward one end), divided by its own mean so each lens still emits what the bake assumed.
+- **`src/mesh/ceilings.ts`** (plenum throat tint only): the diffuser throat's PLENUM tint 0.08 → 0.35.
+- **Cost** (against tex-integ, gpuBench whole frame, gallery 03 / 11 / 14 / LOBBY ceiling): high +0.19 / +0.17 /
+  +0.14 / +0.09 ms, ultra +1.84 / +1.37 / +1.17 / +0.55 ms, over the plan's +0.02 / +0.04 ms. Where it goes is in the
+  DESIGN.md lane D section (a per-block bisect; part of it is occupancy of the shared surface program). genMs and
+  memory unchanged.
+- **Consumers affected:**
+  - The concrete and masonry grime profiles (lanes B and C) still draw R above their threshold as a flat darkening.
+    Seepage zones are now 0.44-0.68 m tongues (the old wall streaks were 8-45 cm), so on CMU and concrete walls they
+    read as soft grey tongues (gallery 06, 05). To draw fronts, halo and runnels instead, those profiles can call
+    `brWlStain` (walls family `pars`, present in every surface program) or treat R ≥ SEEP_R0 as a runnel zone.
+  - Lane E: props borrowing DRYWALL, TRIM_PAINT or PLENUM get the new recipes; PLENUM's mean is unchanged.
+  - D3 PAINT is untouched.
+
 ## Lane E: props

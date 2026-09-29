@@ -4125,14 +4125,14 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 
 | Layer | Recipe essentials |
 |---|---|
-| WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls with ±2% shade offset. Faint damask/chevron SDF motif on a 0.3 m diamond lattice (±4% value, embossed height 0.2 mm). Vertical roll-seam ridge. Paper fibre fbm at 1 mm (supersampled), slight cockle (~0.25 mm over 7 cm). Satin vinyl, roughness 0.63–0.72. (Lifted edges and fading come from the WP7 mask.) |
+| WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls (texture realism v2: per-roll shade ±0.8 %, warmth ±0.5 % and sheen ±0.03 in the walls family). The Level 0 photo's print: vertical stripes on a 0.15 m pitch, a darker ink band with a column of stacked chevrons and pinlines, surface-printed flat ink (−22 %, roughness 0.48, gravure density streaks, 0.2 mm misregistration), no fleur and no stamped relief. A fabric-look ground printed and embossed in register: strie of 2.5-17 mm streaks (±5 %), raised slub dashes (+4 %), cockle only the sheen shows. Satin vinyl, roughness 0.52 (glue at the seam 0.46; the lamps' sheen shows the emboss at grazing views). D2 is a 1.8 mm over-under vinyl weave at a 0.15 m detail repeat. normalStrength 2.5, heightScale 0.4 mm. |
 | CARPET_L0 | Loop-pile micro grid (period 3 mm, **supersampled 4×**: it is below the 2.3 mm texel Nyquist limit, so the texture holds its filtered average plus pile normals) × Worley tufts. Isotropic strand speckle (no directional streaks: the layer uses hex tiling without rotation). Colour mottling (±6%). Roughness 0.95. (Macro blotches come from the mask.) |
-| CEILING_TILE | 2×2 tiles of 0.6 m. Mineral-fibre fissures (thresholded warped ridged noise, "worm holes") plus pinholes. Raised 24 mm off-white T-bar grid (roughness 0.45, metal 0.3, height step). Per-tile brightness ±3%. Slight yellowing. |
+| CEILING_TILE | 2×2 wet-felted mineral-fibre tiles of 0.6 m in a 24 mm T-bar grid. Fissures are a capsule scatter on 7, 11 and 22 mm jittered grids (tapered, bent, ragged, 1.5-3 mm deep, ~12 % of the face, their density varying in 8 cm patches), read through the cavity AO (ormh.r mean 0.94, cores ~0.55) with the albedo only −12 %; no pinholes in the base (they are D5, with the fibre grain). The bar is dielectric baked enamel (sRGB 236, 234, 228, roughness 0.33, metal 0) with a rounded hem and a thin cut-core line beside it; ormh.a is the detail mask (1 − bar). Per-tile brightness ±3 %, slight yellowing. heightScale 4 mm, normalStrength 1.5, EON σ 0.6. |
 | PANEL_LENS | Prismatic pyramid grid (4 mm) in the normal map. Two tube hot-stripes in the emissive mask (`ormh.a`, used by the low preset only; scaled so the lens mean matches the old framed texture). One continuous sheet: no frame per 0.6 m repeat (a 2x4 used to read as two squares, a sky panel as four). Albedo pale grey-white. |
-| TRIM_PAINT | Semi-gloss paint, orange peel, edge scuffs. |
-| WALLPAPER_MANILA | Beige vertical pinstripes, 0.15 m pitch, linen emboss, cockle; satin roughness ~0.72. |
+| TRIM_PAINT | Semi-gloss paint, orange peel, brush drag, edge scuffs and dings; chips to the MDF come from the paint profile (walls family). |
+| WALLPAPER_MANILA | Beige paper-backed vinyl, satin ~0.72. Two flat 0.9 mm ink pinstripes at ±1.75 mm every 0.15 m (a symmetric dip under 10 %, no light line, ±0.2 mm wobble). A linen ground printed and embossed in register (4 mm warp and weft streaks ±3.5 %, 2.5 mm slub dashes); the single threads are D17 at a 0.15 m detail repeat. |
 | CARPET_OFFICE | 0.6 m carpet tiles, pile direction rotated per tile (roughness and normal sheen), blue-grey speckle. |
-| DRYWALL | Roller stipple, eggshell. |
+| DRYWALL | Latex eggshell (roughness 0.62) from a 3/8" nap roller: mottle, 0.24 m roller laps, taped joints every 1.2 m (crowned 0.075 mm, smoother and glossier at 0.55, detail mask 0.6). The orange peel is D16 (1.8-2.5 mm craters and peaks, rms slope 0.05); screw spots, pops, patches, scuffs, blisters and flakes to the primer come from the paint profile. |
 | VINYL_VCT | 0.3 m tiles, ±4% tint per tile, chips, wax sheen (roughness 0.3–0.45). |
 | CONCRETE_FLOOR | Aggregate speckle, a few exposed pebbles, trowel swirls with burnished burns (darker, −0.14 roughness), Worley F2−F1 crack network, curing mottle, chalky laitance, a soft unimodal sheen field (roughness 0.44–0.6). (Oil spots are decals.) Isotropic enough to also serve stair risers (frame 4.8 × 3.0 m). |
 | CONCRETE_WALL | Frame 2.4 × 1.5 m: formwork seams every 1.2 m horizontally and 1.5 m vertically, tie holes. heightScale 20 mm with the face at 0.9 (POM top 0.92) and 18 mm deep conical tie holes. |
@@ -4217,6 +4217,68 @@ reports each layer's aux range (`stats().auxRange`).
 #### Lane C: masonry and tile
 
 #### Lane D: walls and ceilings
+Files: `textures/layers/wallpaper.ts` and `ceiling.ts`, `textures/detailRecipes/walls.ts`, `chunks/family/walls.ts`
+(grime profiles 2 wallpaper and 7 paint) and `ceiling.ts` (profile 3), `bake/mask.ts` (R), lens aging in
+`chunks/emitters.ts`, the diffuser throat in `mesh/ceilings.ts`. The recipes are the WP8 rows above.
+
+**Where the texture lives.** Under the baked light (mostly the ambient share, and a directional share at w ~0.3-0.5)
+a physically deep emboss shades under 1 % of luminance: at 0.5 m under the LOBBY troffers, 10x D2's rms slope of 0.07
+raised the wallpaper field's box-4 high-pass to 4.8 %, so the real slope accounts for ~0.5 %. The texture the eye
+reads at room distance is therefore what real wallcoverings also carry: a ground printed in register with the emboss
+(the Level 0 strie and slubs, the manila linen), over a mild base emboss (normalStrength 1.5-2.5, not the old 6-10
+that stamped the print into rubber and turned drywall into stucco). The detail maps (D2, D16, D17 at rms slopes
+0.05-0.07) are the grain up close, in the sheen and under raking light, and become LEAN roughness beyond ~1 m. The
+ceiling's fissures read through the cavity term (V ~0.55 in the cores): under the grazing light next to a pendant bulb
+(DIRVIS g ~2) the resolved cores go dark.
+
+**Stains** are capillary fronts. The mask's R is the wet extent: stains at or below `STAIN_MAX`, seepage runnel
+zones as tongues in `SEEP_R0`..1 (`seepZoneR`). `brWlFronts` draws 3 nested drying fronts, each a deposit darkest at
+its outer edge (3 mm wide in metres, the inner ones 20 % weaker), whose width the pixel footprint widens while the
+integral stays, so a front neither darkens nor lightens with distance. A fine field steers them: the layer's relief,
+the detail multiplier and world noise at 12 and 40 mm, applied as a metric displacement (4, 6 and 15 mm) along the wet
+extent's gradient, so a front stays one coherent ragged line on a gentle extent. Inside: a pale halo, mould specks
+inside the innermost front, efflorescence 5-20 mm above rising damp, runnels (one per 0.1 m column, narrowing down the
+wall) ending in teardrops. Ceiling tiles take the leak extent per tile (absorbing a little differently, so a stain
+steps at the T-bars) and a few carry an old lobed stain of their own with their own front spacing.
+
+**Damage.** Wallpaper: roll seams per roll pair (60 % tight, 25 % open 0.3-0.8 mm, 15 % lifted with a shadow), a peel
+edge from the mask A field's screen gradient (torn fibres, a flap showing its back and casting a shadow, exposed paper
+and adhesive), damp cockle. Paint: screw spots on a 0.4 x 0.3 m lattice (30 % flashing, 6 % popped with a ring
+crack), spackle patches, scuffs at shoe and chair height, blisters where damp, flakes to the primer; trim chips to the
+MDF. Life marks on wallpaper and drywall: picture ghosts, tack holes, tape residue, burnished hand zones. Ceiling tiles:
+3 % displaced (a plenum wedge up to 15 mm, 2 degrees), 12 % sagging, 6 % replacements from another lot. Troffer lenses
+(PRISM, OPAL): 5-15 insect silhouettes and dust toward one end, divided by their own mean. The analytic relief of
+all these is a world-space height gradient added in the family `normal` hooks.
+
+**Measured** (A/B against a5c03e1 at high; box-4 high-pass is rms (L − box9(L)) / box9(L) on a fixed crop):
+- Ceiling tile, harness layer 2: albedo dark fraction (< 0.85x median) 7.1 % → 0; ormh.r mean 0.981 → 0.939, 22 % of
+  texels below 0.9, p1 0.55; ormh.a 0 on the bars; metal 0.
+- LOBBY ceiling (pitchDeg=70, fov 50): high-pass 8.8 → 10.0 % (the plan asked 3-6 %; base was already above it).
+  Next to the MAZE bulb (gallery 11): 12.7 → 12.2 %.
+- Level 0 wallpaper (x=57, z=−1.8, fov 50): high-pass 2.8 → 2.9 % over the stripes, 1.9 → 0.9 % on an ink-free strip
+  (base's came from the stamped fleur; the plan's 2.5-4 % field is not reached at that distance); at 0.5 m 3.2 →
+  4.1 %. yawDeg=60: the upper wall is +2.8 % (plan ≥ 8 %).
+- Manila pinstripe: a −23 % dip beside a +11 % light line → a −7.8 % dip, no light line.
+- Detail rms slopes: D2 0.071, D16 0.052, D17 0.058, D5 0.011.
+- OFFICE, yawDeg=250, fov 50 (the plan's drywall framing, mostly cubicle panels): high-pass 0.82 → 0.61 %
+  (≤ 1.2 %).
+- checks=albedo,range,seam: no failures, seam max 1/255.
+- Cost against tex-integ (gpuBench(20), whole frame, 2 interleaved rounds; gallery 03, 11, 14 and the LOBBY ceiling):
+  high +0.19 / +0.17 / +0.14 / +0.09 ms, ultra +1.84 / +1.37 / +1.17 / +0.55 ms (ultra renders ~5x the pixels). The
+  plan's +0.02 / +0.04 ms is far off. A bisect at ultra (gallery 03 / 11, removing one block at a time) put the damage
+  blocks (seams, peel, cockle, flakes, chips, blisters) at 0.4 / 0.6 ms, the stain fronts at 0.3 / 0.2, the ceiling hook
+  at 0.3 / 0.1, the life marks at 0.25 / 0.2 and EON on the ceiling at 0.1 / 0.4; the savings overlap (their sum
+  exceeds the total), which suggests part of the cost is occupancy of the one surface program, not work on wall pixels.
+  Sharing the derivatives and skipping the edge solves off the peel won back 0.1-0.2 ms at ultra; dropping EON on the
+  wall layers and the fissure dust 0.02-0.04 ms at high. Lens aging and D2's 0.15 m repeat measured within noise.
+  textures.genMs 207.6 → 198.8 ms (noise), detail genMs 18.7 → 18.6 ms; no new memory.
+
+**Limits.** At 2-3 m the fissures are sub-pixel: their mean darkening is right, but a linear-in-V term cannot draw
+the raking shadows that make a fissured tile read under a bulb from across a room; the sparse 22 mm fissure family
+restores part of it. Drawing them needs a filtered horizon or a cap-moment bake (lane 0's deferred R_d byte). The wall layers
+set no `dirt`: their hand and kick zones come from the mask's G in the walls family, and 0b's relief-weighted dirt has
+no concavity to fill on paint and paper; nor `sigma` (EON at paint's ~0.2 moves a few percent at grazing angles and,
+with fissure dust on the ceiling, cost 0.02-0.04 ms at high).
 
 #### Lane E: props
 
