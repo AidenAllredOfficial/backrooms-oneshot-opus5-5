@@ -4221,12 +4221,15 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
   down with dark polyurea (70 %) or open, where the view ray meets the far wall at depth
   z = (W/2 − x·sgn t)/|t| (darkened by 0.5·e^(−z/6 mm)) or the bottom; spalls on 30 % of the 0.24 m joint segments
   (5–25 mm long, 3–10 mm wide, a paler fracture sloping 25–40° into the kerf); a dirt band beside the cut. The kerf
-  is supersampled with 4 taps across the pixel footprint and fades to its mean darkening below ~1 pixel. 60 % of the
-  panels carry one shrinkage crack between two panel edges (so every crack ends at a joint), warped at 0.4 m and
-  5 cm, 0.2–1.2 mm wide along its length, 35 % branched, with a dirty halo; sub-pixel cracks keep a 0.35-pixel
-  rendered width with scaled contrast; the dirt band beside the cut and the crack halo widen with the pixel footprint
-  at a constant integral, and below a pixel the kerf's normal and roughness fade to fixed means (so which taps hit the
-  kerf cannot make a far joint flicker). Early-outs keep the cost to a few hashes away from joints and cracks.
+  is supersampled with 4 taps across the pixel footprint and fades to its exact box-filtered mean darkening once it
+  spans less than ~2/3 of a pixel (its integral stays the kerf's width at any footprint, so far joints neither fade
+  nor darken with distance; the taps, spalls and view ray are skipped there). 60 % of the panels carry one shrinkage
+  crack between two panel edges (so every crack ends at a joint), warped at 0.4 m and 5 cm, 0.2–1.2 mm wide along its
+  length, 35 % branched, with a dirty halo; sub-pixel cracks keep a 0.35-pixel rendered width with scaled contrast;
+  the dirt band beside the cut and the crack halo widen with the pixel footprint at a constant integral, and below a
+  pixel the kerf's normal and roughness fade to fixed means (so which taps hit the kerf cannot make a far joint
+  flicker). Early-outs keep the cost to a few hashes away from joints and cracks. Low quality and the planar mirror
+  pass draw the far field only (the box-filtered kerf and the dirt band).
 - **Traffic lanes:** WP7 mask A covers the hard floors (bake/mask.ts; TEX2.md). On concrete the lanes are burnished:
   roughness × 0.62, albedo × 0.88 and a little warmer, the detail stronger (exposed fines, LEAN micro-scratches),
   dust at their edges; every door wears an entry fan into its rooms and rack aisles get two wheel tracks, which fade

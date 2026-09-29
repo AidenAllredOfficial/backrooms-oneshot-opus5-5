@@ -12,8 +12,9 @@
 //   branched, with a dirty halo;
 // - traffic lanes (WP7 mask A, bake/mask.ts): burnished darker and glossier on concrete, dulled on terrazzo;
 // - a finish class per room (the FLOOR_AUX region key): sealed, plain troweled or dusty.
-// Everything is anti-aliased against the pixel footprint (1D supersampling across the kerf, a minimum rendered width
-// with scaled contrast for sub-pixel cracks and kerfs), and gated on the per-face layer (quad-uniform).
+// Everything is anti-aliased against the pixel footprint (1D supersampling across the kerf, its exact box-filtered
+// mean once it is sub-pixel, a minimum rendered width with scaled contrast for sub-pixel cracks), and gated on the
+// per-face layer (quad-uniform).
 
 import { Mat } from '../../../core/ids.ts';
 import { Det } from '../../../textures/detailRecipes/types.ts';
@@ -107,39 +108,52 @@ vec2 brcSpall( float al, int li, uint salt ) {
 	}
 	return sw;
 }
-// The joint of one axis: x = signed metres from the line, al = along-joint metres, li = line index, t = view slope,
-// fx = pixel footprint across the joint (m). 4 taps across the footprint while the kerf is at least ~1 pixel wide,
-// fading to the kerf's mean darkening (coverage) below that. Returns the joint coverage of the pixel (the normal's
-// weight); r is the roughness of the kerf and spall taps and rc their share (the arris keeps the slab's roughness).
-// Below a pixel the normal and roughness fade to fixed means: which taps hit must not make them flicker.
-float brcJoint( float x, float al, int li, float t, float fx, bool filled, out float a, out vec3 n, out float r, out float rc, out float cav ) {
-	vec2 sw = brcSpall( al, li, 523u );
-	float a4 = 0.0, nw = 0.0, r4 = 0.0, rw = 0.0, c4 = 0.0;
-	vec3 n4 = vec3( 0.0 );
-	for ( int k = 0; k < 4; k ++ ) {
-		float xs = x + fx * ( float( k ) - 1.5 ) * 0.25;
-		float ta = 1.0, tc = 1.0;
-		brcKerfTap( xs, t, sw, filled, ta, n4, nw, r4, rw, tc );
-		a4 += ta;
-		c4 += tc;
-	}
-	a = a4 * 0.25;
-	cav = c4 * 0.25;
-	n = nw > 0.0 ? n4 / nw : vec3( 0.0, 0.0, 1.0 );
-	r = rw > 0.0 ? r4 / rw : 0.7;
-	rc = rw * 0.25;
-	float cov = nw * 0.25;
-	// sub-pixel kerf: its mean darkening over the footprint (a line that neither vanishes nor crawls)
-	float wk = 2.0 * BRC_KERF_HW + sw.x + sw.y;
+// The share of a pixel footprint f (m) centred at x that a line of width w centred on 0 covers (an exact box filter):
+// its integral over x is w at any footprint, so a sub-pixel line keeps its mean darkness at every distance
+float brcBox( float x, float w, float f ) {
+	return clamp( ( min( x + 0.5 * f, 0.5 * w ) - max( x - 0.5 * f, - 0.5 * w ) ) / f, 0.0, 1.0 );
+}
+// A soft band of half-width h (m) around d = 0 (dirt beside a cut, a crack's halo), widened by the pixel footprint f
+// with its strength scaled to keep its integral: far away it neither aliases into a dotted line nor darkens more
+float brcBand( float d, float h, float f ) {
+	return h / ( h + f ) * ( 1.0 - smoothstep( 0.0, h + f, abs( d ) ) );
+}
+// The joint of one axis: x = signed metres from the line, al = along-joint metres, li = line index, zl = a z = const
+// line (for the view slope), fx = pixel footprint across the joint (m). 4 taps across the footprint while the kerf is
+// at least ~1 pixel wide, fading to the kerf's box-filtered mean darkening below that (then the spalls, a little paler
+// than the slab on average, fade out with the taps, and the view ray is not needed). Returns the joint coverage of the
+// pixel (the normal's weight); r is the roughness of the kerf and spall taps and rc their share (the arris keeps the
+// slab's roughness). Below a pixel the normal and roughness fade to fixed means: which taps hit must not flicker them.
+float brcJoint( float x, float al, int li, bool zl, float fx, out float a, out vec3 n, out float r, out float rc, out float cav ) {
+	float wk = 2.0 * BRC_KERF_HW;
 	float k = smoothstep( 0.5 * wk, 1.5 * wk, fx );
-	if ( k > 0.0 ) {
-		float cl = clamp( wk / fx, 0.0, 1.0 ) * ( 1.0 - smoothstep( 0.5 * wk, 0.5 * wk + fx, abs( x ) ) );
-		a = mix( a, 1.0 - 0.7 * cl, k );
-		cav = mix( cav, 1.0 - 0.4 * cl, k );
-		cov = mix( cov, cl, k );
-		n = normalize( mix( n, vec3( 0.0, 0.0, 1.0 ), k ) );
-		r = mix( r, 0.7, k );
-		rc = mix( rc, cl, k );
+	float cl = brcBox( x, wk, fx );
+	a = 1.0 - 0.7 * cl;
+	cav = 1.0 - 0.4 * cl;
+	n = vec3( 0.0, 0.0, 1.0 );
+	r = 0.7;
+	rc = cl;
+	float cov = cl;
+	if ( k < 1.0 ) {
+		vec3 vw = ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz; // world direction to the eye
+		float t = - ( zl ? vw.z : vw.x ) / max( vw.y, 0.05 ); // horizontal travel across the joint per unit depth
+		bool filled = brU01( brHash2u( brWrap( ivec2( li, zl ? 1 : 0 ), ivec2( BR_CONCRETE_JOINT_P, 2 ) ), 1627u ) ) < 0.7;
+		vec2 sw = brcSpall( al, li, 523u );
+		float a4 = 0.0, nw = 0.0, r4 = 0.0, rw = 0.0, c4 = 0.0;
+		vec3 n4 = vec3( 0.0 );
+		for ( int q = 0; q < 4; q ++ ) {
+			float xs = x + fx * ( float( q ) - 1.5 ) * 0.25;
+			float ta = 1.0, tc = 1.0;
+			brcKerfTap( xs, t, sw, filled, ta, n4, nw, r4, rw, tc );
+			a4 += ta;
+			c4 += tc;
+		}
+		a = mix( a4 * 0.25, a, k );
+		cav = mix( c4 * 0.25, cav, k );
+		cov = mix( nw * 0.25, cov, k );
+		n = normalize( mix( nw > 0.0 ? n4 / nw : n, n, k ) );
+		r = mix( rw > 0.0 ? r4 / rw : 0.7, r, k );
+		rc = mix( rw * 0.25, rc, k );
 	}
 	return cov;
 }
@@ -204,14 +218,14 @@ float brcSlabCrack( vec2 s2, ivec2 pid, ivec2 pw, float p, float pf, out float h
 	float core = ( 1.0 - smoothstep( hr - 0.5 * pf, hr + 0.5 * pf, d ) ) * ( hw / hr );
 	// the halo widened by the footprint with its darkening scaled to keep its integral (no darkening with distance)
 	float hh = mix( 0.003, 0.006, float( h2 >> 30 ) / 3.0 );
-	hal = hh / ( hh + pf ) * ( 1.0 - smoothstep( 0.0, hh + pf, d ) );
+	hal = brcBand( d, hh, pf );
 	return core;
 }
 // The slab system of an up-facing CONCRETE_FLOOR (and FLOOR_PAINT stripes over it): joints, spalls, pours, panels and
 // cracks, applied in place to the surface state (albedo a, roughness multiplier rm, the filtered tangent normal nrm of
 // length nlen, ormh: r cavity, g roughness). paint: a stripe (joints only). Returns the joint coverage of the pixel.
-// Most pixels leave after a few hashes (no crack within 0.1 m, no joint within 4 cm): the kerf and the view vector
-// are only evaluated near a joint.
+// Most pixels leave after a few hashes (no crack within 0.1 m, no joint within 4 cm): the kerf is only evaluated near
+// a joint, and its taps, spalls and view vector only while it spans more than ~2/3 of a pixel.
 float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm, float nlen, inout vec4 ormh ) {
 	vec2 fw = max( fwidth( s2 ), vec2( 1e-5 ) );
 	ivec2 pid = ivec2( floor( s2 / BR_CONCRETE_JOINT ) );
@@ -240,16 +254,11 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 	bool zl = ajx.y < ajx.x; // nearer to a z = const line: across = z
 	float x = zl ? jx.y : jx.x;
 	int li = int( zl ? lj.y : lj.x );
-	vec3 vw = ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz; // world direction to the eye
-	float t = - ( zl ? vw.z : vw.x ) / max( vw.y, 0.05 );
-	uint hl = brHash2u( brWrap( ivec2( li, zl ? 1 : 0 ), ivec2( BR_CONCRETE_JOINT_P, 2 ) ), 1627u );
 	float ka, kr, krc, kc;
 	vec3 kn;
-	float cov = brcJoint( x, zl ? s2.x : s2.y, li, t, zl ? fw.y : fw.x, brU01( hl ) < 0.7, ka, kn, kr, krc, kc );
-	// dirt collected beside the cut (2.5 cm each side), widened by the footprint with its darkening scaled to keep its
-	// integral: far away the band neither aliases into a dotted line nor darkens the joint more
-	float dw = 0.025 + ( zl ? fw.y : fw.x );
-	a *= ka * ( 1.0 - 0.12 * ( 0.025 / dw ) * ( 1.0 - smoothstep( 0.0, dw, abs( x ) ) ) );
+	float cov = brcJoint( x, zl ? s2.x : s2.y, li, zl, zl ? fw.y : fw.x, ka, kn, kr, krc, kc );
+	// dirt collected beside the cut (2.5 cm each side)
+	a *= ka * ( 1.0 - 0.12 * brcBand( x, 0.025, zl ? fw.y : fw.x ) );
 	ormh.r *= kc;
 	if ( cov > 0.0 ) {
 		ormh.g = mix( ormh.g, kr, krc );
@@ -376,11 +385,13 @@ float brcLaneW = 0.0; // the slab's traffic-lane burnish 0..1 (grime branch), fo
 			if ( brcSlabOn && BR_DETAIL == 1 && uBrReflPass < 0.5 ) {
 				brcSlab( brS2, false, brA, brRoughMul, brNrm, brNLen, brOrmh );
 			} else if ( brcSlabOn ) {
-				// low quality and the planar mirror pass: the joints as their mean darkening only
-				vec2 brcJd = abs( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT;
+				// low quality and the planar mirror pass: the joints as the far field of brcSlab (the kerf's box-filtered
+				// mean darkening and the dirt band beside it, both of constant integral at any distance)
+				vec2 brcJd = ( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT;
 				vec2 brcFw = max( fwidth( brS2 ), vec2( 1e-4 ) );
-				vec2 brcLn = clamp( 2.0 * BRC_KERF_HW / brcFw, 0.0, 1.0 ) * ( 1.0 - smoothstep( vec2( BRC_KERF_HW ), BRC_KERF_HW + brcFw, brcJd ) );
-				brA *= 1.0 - 0.7 * max( brcLn.x, brcLn.y );
+				float brcLn = max( brcBox( brcJd.x, 2.0 * BRC_KERF_HW, brcFw.x ), brcBox( brcJd.y, 2.0 * BRC_KERF_HW, brcFw.y ) );
+				float brcDb = max( brcBand( brcJd.x, 0.025, brcFw.x ), brcBand( brcJd.y, 0.025, brcFw.y ) );
+				brA *= ( 1.0 - 0.7 * brcLn ) * ( 1.0 - 0.12 * brcDb );
 			}
 		} else if ( brL == BR_M_CONCRETE_FLOOR ) {
 			// risers and tower faces: no power trowel ever ran there (ormh.a holds the swirl)
