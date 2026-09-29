@@ -3,11 +3,18 @@
 
 import { Det, type DetailTable } from './types.ts';
 
-/** D6 glaze waviness (pool tile, mosaic, VCT wax): smooth, albedo neutral; tilts reflections by a few tenths of a
- * degree so they wobble across a glazed wall instead of mirroring perfectly. */
+/** D6 glaze (pool tile, mosaic, VCT wax): long-wave waviness (25 and 12 mm; a few tenths of a degree, so lamp
+ * reflections bend smoothly instead of tearing) and sparse pinholes: 0.3-0.6 mm craters in ~8 % of 5.5 mm cells,
+ * 0.04 mm deep and a little dirty, which is what makes a glaze read as fired ceramic rather than CG glass up close. */
 const GLAZE = /* glsl */ `
+#define SS 4
 void gen(vec2 uv, inout Surf s) {
-  s.height = 0.5 + 0.3 * gnoise(uv, PM(40.0), 3) + 0.2 * gnoise(uv, PM(90.0), 4);
+  float h = 0.5 + 0.3 * gnoise(uv, PM(40.0), 3) + 0.2 * gnoise(uv, PM(80.0), 4);
+  Cell p = worley(uv, PM(180.0), 0.9, 5);
+  float pr = mix(0.028, 0.055, hashf(p.id, 6)); // radius in cells (5.5 mm): 0.15-0.3 mm
+  float pin = step(hashf(p.id, 7), 0.08) * (1.0 - smoothstep(0.6 * pr, pr, p.f1));
+  s.height = h - 0.33 * pin;
+  s.albedo = vec3(1.0 - 0.15 * pin);
 }
 `;
 
@@ -57,7 +64,7 @@ ${painted ? `  // paint: the film rounds the crowns and fills between them (smoo
 `;
 
 export const MASONRY_DETAILS: DetailTable = {
-  [Det.GLAZE]: { name: 'GLAZE', glsl: GLAZE, heightScale: 0.00008, slope: 0.008, roughK: 0, cavity: 0 },
+  [Det.GLAZE]: { name: 'GLAZE', glsl: GLAZE, heightScale: 0.00018, slope: 0.02, roughK: 0.1, cavity: 0.3 },
   [Det.CMU_FACE]: { name: 'CMU_FACE', glsl: cmuFace(true), heightScale: 0.0044, slope: 1.6, roughK: 0.2, cavity: 0.6 },
   [Det.CMU_RAW]: { name: 'CMU_RAW', glsl: cmuFace(false), heightScale: 0.0028, slope: 1.8, roughK: 0.25, cavity: 0.7 },
 };
