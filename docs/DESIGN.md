@@ -4238,7 +4238,9 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
   texture's 2.4 m ABAB. Rising damp has a ragged fringe (the tide field perturbed at 0.3 m) and efflorescence blooms
   at the drying front (crystals from the detail speckle, matte, raised).
 - **Floor-paint stripes** (decal variant): the wet, film and puddle path of the slab (they carry NO_GRIME), edge
-  flakes from the stripe-local uv and width, the slab's joints through the stripe (the kerf stays unpainted) and the
+  flakes from the stripe-local uv and width (only the chips' coverage lowers the alpha: the quad's own edges are the
+  geometry's, so far stripes keep their strength), v along the line world-anchored (the pieces of a stripe clipped at
+  chunk edges continue one wear pattern), the slab's joints through the stripe (the kerf stays unpainted) and the
   slab's D12 speckle under the film (the decal variant samples the detail array: 16 units at high / ultra).
 - **v2 shading parameters** (the 0b block): σ CONCRETE_WALL / CONCRETE_CEIL 0.35, CONCRETE_FLOOR 0.25 × (1 − lane)
   (the matPost hook: a burnished lane is polished paste, no longer porous), TERRAZZO 0; dirt on the slab, walls,

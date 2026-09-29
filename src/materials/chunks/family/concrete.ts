@@ -285,7 +285,11 @@ float brcLaneW = 0.0; // the slab's traffic-lane burnish 0..1 (grime branch), fo
 				float d = r * sqrt( 1.0 - u * u ) * ( 0.8 + 0.4 * brU01( brPcg( h1 + 9u ) ) );
 				if ( ( h & 256u ) != 0u ) brcDep.x = max( brcDep.x, d ); else brcDep.y = max( brcDep.y, d );
 			}
-			brAlpha *= smoothstep( - brcFw, brcFw, min( brcAc - brcDep.x, brcWd - brcAc - brcDep.y ) );
+			// the chips' coverage only (the chipped edge's filtered step minus the plain edge's): the quad's own edges are
+			// the geometry's, so a stripe narrower than a few pixels far away keeps its alpha instead of fading out
+			vec2 brcE = vec2( brcAc, brcWd - brcAc );
+			vec2 brcChip = smoothstep( - brcFw, brcFw, brcDep - brcE ) - smoothstep( - brcFw, brcFw, - brcE );
+			brAlpha *= 1.0 - clamp( brcChip.x + brcChip.y, 0.0, 1.0 );
 		}
 		// the slab's saw-cut joints run through the stripe: the filler and the kerf stay unpainted (the slab shows)
 		if ( BR_DETAIL == 1 ) {
