@@ -58,7 +58,7 @@ void gen(vec2 uv, inout Surf s) {
 /** Pool tile, 0.15 m glazed ceramic (roughness 0.06-0.12). Each tile's face is inset 1.2-1.9 mm per side with a
  * +-0.25 mm wobble (hand-set joints: 2.4-3.8 mm, never ruler-straight), with a 4 mm cushion edge, a 'fat edge' glaze
  * ridge 3 mm inside it, a slight pillow and a +-0.5 deg tilt per axis (lippage: +-0.7 mm across a tile; +-1.5 deg
- * scattered the lamps into single-tile glints). Glaze shade +-3 %, 5 % cream and 3 % blue-white tiles from other
+ * scattered the lamps into single-tile glints). Glaze shade +-4 %, 5 % cream and 3 % blue-white tiles from other
  * batches; visible crazing (a 0.8 mm crack net plus hairlines) on 12 % of the tiles; conchoidal chips at an edge or
  * corner of 6 % of the tiles showing the matte buff bisque; a hazy glaze rim at the joint. Sanded cement grout in a
  * concave profile ~1.5 mm below the cushion foot (roughness 0.8); its along-the-line colour is world-space (shader).
@@ -86,7 +86,7 @@ void gen(vec2 uv, inout Surf s) {
   float wav = fbm(uv, PM(22.0), 2, 4) * 0.00012;
   float pillow = 0.012 * (1.0 - dot(t.local, t.local) / (2.0 * 0.075 * 0.075));
   // glaze colour: batch shade, cream and blue-white odd tiles
-  vec3 glaze = TABLE_ALBEDO * (1.0 + 0.06 * (r.z - 0.5)) * (1.0 + 0.008 * fbm(uv, PM(40.0), 2, 5));
+  vec3 glaze = TABLE_ALBEDO * (1.0 + 0.08 * (r.z - 0.5)) * (1.0 + 0.008 * fbm(uv, PM(40.0), 2, 5));
   glaze *= r2.x < 0.05 ? vec3(0.985, 0.972, 0.935) : r2.x < 0.08 ? vec3(0.975, 0.985, 1.0) : vec3(1.0);
   // crazing: a crack net (22 mm cells) and finer hairlines in the glaze of 12 % of the tiles, dirt in the cracks
   vec2 co = floor(r.zw * 16.0) / 8.0;
@@ -109,7 +109,7 @@ void gen(vec2 uv, inout Surf s) {
     chipD = dd < 1.0 ? mix(0.0006, 0.0012, fract(r2.z * 3.7)) * (1.0 - pow(dd, 1.5)) : 0.0;
   }
   float chipM = smoothstep(0.0, 0.00015, chipD) * face;
-  vec3 bisque = srgb8(214.0, 204.0, 188.0);
+  vec3 bisque = srgb8(196.0, 182.0, 160.0) * (0.85 + 0.15 * sat(chipD / 0.0008)); // buff body, dirtier toward the scoop
   // grout haze: the glaze rim next to the joint is filmed over (cement residue, cleaning chemicals)
   vec3 groutCol = srgb8(176.0, 178.0, 170.0) * (0.94 + 0.12 * vnoise(uv, PM(300.0), 6));
   float haze = (1.0 - smoothstep(0.0, 0.0045, e)) * face;
