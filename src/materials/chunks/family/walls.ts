@@ -104,6 +104,10 @@ float brWlNoise( vec2 s2, float c, uint salt ) {
 float brWlLine( float d, float hw, float fp ) { return max( 0.0, min( d + 0.5 * fp, hw ) - max( d - 0.5 * fp, - hw ) ) / fp; }
 // ...and of a small dot of radius r at offset q (a square of the same area, so the coverage is separable and exact)
 float brWlDot( vec2 q, float r, float fp ) { return brWlLine( q.x, 0.886 * r, fp ) * brWlLine( q.y, 0.886 * r, fp ); }
+// a band beside an edge (d >= 0 on its side, metres) fading out over w0..w1, which the footprint fp softens: the peak
+// drops as the band widens, so it keeps its integral (w0 + w1) / 2 and an edge detail (a torn fibre strip, a lip, a
+// cast shadow) neither darkens nor brightens a wall with distance
+float brWlBand( float d, float w0, float w1, float fp ) { return ( 1.0 - smoothstep( w0, w1 + fp, d ) ) * ( w0 + w1 ) / ( w0 + w1 + fp ); }
 // signed distance (m) to the level T of a smooth damage field pfS (positive where pfS > T) and the unit direction
 // toward that side, on the wall's (along, y) plane, from the field's screen derivatives dp and those of s2 (taken by the
 // caller in uniform control flow); the caller's fine offset ragM (metres) roughens the edge. (A fine field added to pfS
@@ -244,7 +248,7 @@ if ( brL == BR_WL_M_DRYWALL && ! brHoriz ) {
 		vec2 hsz = 0.5 * mix( vec2( 0.06 ), vec2( 0.18 ), vec2( brU01( brPcg( wlHp + 2u ) ), brU01( brPcg( wlHp + 3u ) ) ) );
 		vec2 dd = abs( brS2 - ctr ) - hsz + 0.015;
 		float sd = length( max( dd, 0.0 ) ) + min( max( dd.x, dd.y ), 0.0 ) - 0.015;
-		float pat = 1.0 - smoothstep( - 0.012, 0.012 + wlFp0, sd );
+		float pat = 1.0 - smoothstep( - 0.012 - wlFp0, 0.012 + wlFp0, sd );
 		brOrmh.g = max( brOrmh.g - 0.08 * pat, 0.03 );
 		brA *= 1.0 + 0.03 * pat;
 		brAux *= 1.0 - 0.6 * pat;
@@ -289,11 +293,11 @@ const WALLPAPER_DAMAGE = /* glsl */ `
 			float dE = brMask.a > 0.08 ? brWlEdgeDist( pfS, pfD, wlSx, wlSy, 0.01 * wlFine, 0.55, pdir ) : - 1.0;
 			if ( dE > - 0.03 ) {
 				float ex = smoothstep( - wlFp, wlFp, dE ); // exposed wall
-				float torn = ex * ( 1.0 - smoothstep( 0.0015, 0.0025 + wlFp, dE ) );
-				float flapW = mix( 0.004, 0.025, brWlNoise( brS2, 0.08, 941u ) );
-				float flap = ( 1.0 - ex ) * ( 1.0 - smoothstep( 0.7 * flapW, flapW + wlFp, - dE ) );
+				float torn = ex * brWlBand( dE, 0.0015, 0.0025, wlFp );
+				float flapW = mix( 0.004, 0.025, brWlNoise( brS2, 0.075, 941u ) );
+				float flap = ( 1.0 - ex ) * brWlBand( - dE, 0.7 * flapW, flapW, wlFp );
 				// the flap stands off the wall above the edge: its shadow falls on the exposed side below it
-				float shadow = ex * ( 1.0 - smoothstep( 0.002, 0.009 + wlFp, dE ) ) * clamp( 0.35 - pdir.y, 0.0, 1.0 );
+				float shadow = ex * brWlBand( dE, 0.002, 0.009, wlFp ) * clamp( 0.35 - pdir.y, 0.0, 1.0 );
 				float glue = smoothstep( 0.4, 0.7, g1.g + 0.3 * ( g2.r - 0.5 ) );
 				brA = mix( brA, mix( vec3( 0.5, 0.47, 0.4 ), vec3( 0.55, 0.45, 0.25 ), 0.4 * glue ), ex );
 				brOrmh.g = mix( brOrmh.g, mix( 0.7, 0.35, glue ), ex );
@@ -333,8 +337,8 @@ const PAINT_DAMAGE = /* glsl */ `
 				float core = smoothstep( 0.02, 0.06, dE );
 				brA = mix( brA, mix( vec3( 0.75, 0.74, 0.7 ), vec3( 0.52, 0.5, 0.46 ), 0.7 * core * smoothstep( 0.4, 0.7, g2.g ) ), ex );
 				brOrmh.g = mix( brOrmh.g, 0.8, ex );
-				float lip = ex * ( 1.0 - smoothstep( 0.0006, 0.0014 + wlFp, dE ) );
-				float edge = ( 1.0 - ex ) * ( 1.0 - smoothstep( 0.0004, 0.001 + wlFp, - dE ) );
+				float lip = ex * brWlBand( dE, 0.0006, 0.0014, wlFp );
+				float edge = ( 1.0 - ex ) * brWlBand( - dE, 0.0004, 0.001, wlFp );
 				brA *= ( 1.0 - 0.35 * lip ) * ( 1.0 + 0.08 * edge );
 			}
 			if ( brL == BR_WL_M_TRIM ) {
@@ -351,7 +355,7 @@ const PAINT_DAMAGE = /* glsl */ `
 					R *= 1.0 + 0.35 * sin( 3.0 * atan( d.y, d.x ) + 6.2831853 * brU01( brPcg( hc + 3u ) ) );
 					float r = length( d );
 					float chip = 1.0 - smoothstep( R - wlFp, R + wlFp, r );
-					float lip = max( 1.0 - smoothstep( R, R + 0.0006 + wlFp, r ) - chip, 0.0 );
+					float lip = ( 1.0 - chip ) * brWlBand( r - R, 0.0, 0.0006, wlFp );
 					brA = mix( brA, vec3( 0.45, 0.38, 0.28 ), chip );
 					brA *= 1.0 - 0.3 * lip;
 					brOrmh.g = mix( brOrmh.g, 0.8, chip );
