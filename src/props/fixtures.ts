@@ -60,6 +60,8 @@ function lens(layer: number, ep = 0, variant = 0, param = 0): boolean {
 /** Emitter length in cm (the TUBE / DROP / SODIUM profile parameter byte). */
 const lengthCm = (m: number): number => Math.max(1, Math.min(255, Math.round(m * 100)));
 const housing = (r: number, g: number, bb: number, rough = 0): void => B.mat(Mat.METAL_PAINTED, r, g, bb, 0, rough);
+/** Bare-metal part (spun aluminium reflectors, stainless bezels): METAL_BARE, the colour is F0. */
+const bare = (r: number, g: number, bb: number, rough: number): void => B.mat(Mat.METAL_BARE, r, g, bb, 0, rough);
 
 /** Default mount distances (m from the emitting surface to the ceiling / wall) when the ceiling is unknown. */
 const MOUNT_DEFAULT: Readonly<Record<number, number>> = {
@@ -148,7 +150,7 @@ function highbay(f: Fixture, md: number): void {
   if (lens(Mat.PLASTIC, EP.HIGHBAY)) B.uvScale(1 / r);
   disk(B, r, 24, 0.001, false, 0);
   // bell reflector: inner surface (bright aluminium), rim lip, outer shell
-  housing(0.55, 0.55, 0.53, 0.2);
+  bare(0.8, 0.8, 0.78, 0.25);
   const topR = Math.max(0.1, r * 0.45), bellH = Math.max(0.3, r * 1.4);
   lathe(B, [topR * 0.85, bellH * 0.92, r, 0.0, r + 0.014, 0.0, topR + 0.02, bellH, topR, bellH + 0.03], 16, 0, 25, 0);
   disk(B, topR * 0.85, 16, bellH * 0.92, false, 0); // reflector apex (seen from below)
@@ -275,7 +277,7 @@ function underwater(f: Fixture): void {
   lens(Mat.PLASTIC);
   disk(B, r, 24, -0.003, false, 0);
   // stainless bezel ring flush with the wall + lip
-  housing(0.55, 0.55, 0.54, 0.15);
+  bare(0.56, 0.56, 0.55, 0.2);
   annulus(B, r, r + 0.035, 24, -0.004, false);
   cylinder(B, r + 0.035, r + 0.035, -0.004, 0.0, 24, 0);
 }
