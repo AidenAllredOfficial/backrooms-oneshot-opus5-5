@@ -137,7 +137,7 @@ void gen(vec2 uv, inout Surf s) {
  * CONCRETE_CEIL. Returns the albedo multiplier over TABLE_ALBEDO, the relief in METRES above the face plane (< 0 into
  * the concrete; the recipe scales it by its heightScale) and the roughness:
  * - panels: each sheet's own tone (+-10 %) and hue (form reuse, release oil), darker bleed toward the bottom of the
- *   lift, lippage (+-0.6 mm between sheets) and pillowing between the 0.3 m studs;
+ *   lift, lippage (sheets set back 0-0.8 mm) and pillowing between the 0.3 m studs;
  * - bug holes: 0.6-7 mm (log-normal around 2 mm), clustered and denser toward the top of each lift, taller than
  *   wide with a steep top wall, 30 % half-skinned; bugK scales their number (walls 1, soffits 0.1);
  * - seams: 1.2 mm fins intact on 65 % of the 10 cm seam segments and broken into jagged scars elsewhere, a grout-leak
@@ -155,7 +155,8 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   float vL = pn.local.y / panel.y + 0.5;
   vec3 am = vec3(1.0 + 0.2 * (pr.x - 0.5)) * mix(vec3(0.985, 1.0, 1.015), vec3(1.015, 1.0, 0.985), pr.y);
   am *= 1.0 - 0.08 * (1.0 - vL);
-  float hM = 0.0012 * (pr.z - 0.5) + 0.0004 * pow(sin(3.14159265 * m.x / 0.3), 2.0);
+  // lippage: the sheets sit back by 0-0.8 mm (never proud: the relief top stays at pomTop), pillowing 0.3 mm
+  float hM = -0.0008 * pr.z + 0.0003 * pow(sin(3.14159265 * m.x / 0.3), 2.0);
   float rough = 0.72;
   // ---- plywood grain (vertical rotary-cut figure, ~9 mm) and boat-shaped patches
   float ph = uv.x * floor(FRAME.x / 0.009 + 0.5) + 1.5 * fbm(uv + pr.zw, PMxy(1.5, 0.5), 3, seed + 2)
@@ -252,9 +253,10 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
 `;
 
 /** Cast-in-place wall, frame 2.4 x 1.5 m: plywood-formed face (formFace, 1.2 x 1.5 m sheets) with 4 snap-tie holes per
- * sheet. Relief for parallax occlusion mapping: the face rests at 0.84 (x CONCRETE_WALL_HS = 16.8 mm above height 0;
- * pomTop 0.96 covers the face plus lippage, stud pillowing and fins) and the tie holes are cones from the rim down to 0
- * (the plastic cones of the snap ties leave ~17 mm deep conical recesses). Tie holes by hash: 60 % open cones with the
+ * sheet. Relief for parallax occlusion mapping: the face rests at 0.9 (x CONCRETE_WALL_HS = 18 mm above height 0,
+ * pomTop 0.92; the sheets' lippage only sits back, so the relief top stays there: a lower face would cost ultra frames
+ * extra march steps) and the tie holes are cones from the rim down to 0 (the plastic cones of the snap ties leave 18 mm
+ * deep conical recesses). Tie holes by hash: 60 % open cones with the
  * rusty rod end at the bottom, 25 % grout plugs recessed 4 mm (paler, matte, a hairline shrinkage ring), 15 % grey
  * plastic cones left in. The shader adds a per-sheet world tone and sheen (chunks/family/concrete.ts), so the 2.4 m
  * repeat does not show as ABAB. */
@@ -265,14 +267,14 @@ ${FORM_FACE}
 void gen(vec2 uv, inout Surf s) {
   FormOut f = formFace(uv, vec2(1.2, 1.5), 1.0, 3);
   vec3 col = TABLE_ALBEDO * f.am;
-  float face = 0.84 + f.hM / ${CONCRETE_WALL_HS};
+  float face = 0.9 + f.hM / ${CONCRETE_WALL_HS};
   float rough = f.rough;
   vec2 tl = vec2(abs(f.local.x) - 0.3, abs(f.local.y) - 0.375);
   float tr = length(tl);
   vec2 tid = f.pid * 4.0 + vec2(step(0.0, f.local.x), step(0.0, f.local.y));
   float kind = hashf(tid, 30);
   float tie = 1.0 - smoothstep(0.011, 0.0125 + 0.7 * aaM(), tr);
-  float cone = 0.84 * sat(tr / 0.0125);
+  float cone = 0.9 * sat(tr / 0.0125);
   float h;
   if (kind < 0.6) {
     // open cone: the concrete recess darkens by its own depth (cavity AO, POM); rust on the rod end at the bottom
@@ -286,12 +288,12 @@ void gen(vec2 uv, inout Surf s) {
     float ring = lineM(tr - 0.0112, 0.00015);
     col = mix(col, col * 1.08 * (1.0 - 0.4 * ring), tie);
     rough = mix(rough, 0.95, tie);
-    h = mix(face, 0.64, tie);
+    h = mix(face, 0.7, tie);
   } else {
     // grey plastic cone left in, 2 mm below the face
     col = mix(col, vec3(0.25), tie);
     rough = mix(rough, 0.4, tie);
-    h = mix(face, 0.74 - 0.05 * sat(1.0 - tr / 0.004), tie);
+    h = mix(face, 0.8 - 0.05 * sat(1.0 - tr / 0.004), tie);
   }
   float tieRing = gauss((tr - 0.017) / 0.003);
   col *= 1.0 - 0.08 * tieRing;
@@ -441,7 +443,7 @@ export const CONCRETE_RECIPES: RecipeTable = {
   },
   [Mat.CONCRETE_WALL]: {
     glsl: CONCRETE_WALL, normalStrength: 2.0, heightScale: CONCRETE_WALL_HS, trim: [1.047, 1.045, 1.042],
-    phys: phys(0.6, { pomTop: 0.96, det: 4, detS: 0.8, sigma: 0.35, dirt: [0.7, 0.66, 0.6, 0.5] }),
+    phys: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8, sigma: 0.35, dirt: [0.7, 0.66, 0.6, 0.5] }),
   },
   [Mat.CONCRETE_CEIL]: {
     glsl: CONCRETE_CEIL, normalStrength: 1.5, heightScale: 0.005, trim: [1.012, 1.018, 1.024],
