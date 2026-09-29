@@ -31,7 +31,7 @@ export const filingCabinet: PropBuild = (b, v) => {
       box(b, -0.2, y0 + 0.03, fz, -0.19, y1 - 0.03, front + 0.01, SKIP.PZ | SKIP.NZ);
       box(b, 0.19, y0 + 0.03, fz, 0.2, y1 - 0.03, front + 0.01, SKIP.PZ | SKIP.NZ);
     }
-    b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.22);
+    b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.1); // chrome pull
     box(b, -0.07, y1 - 0.085, fz - 0.035, 0.07, y1 - 0.06, fz - 0.015, SKIP.PZ);
     b.mat(Mat.PLASTIC, 0.5, 0.48, 0.42);
     rect(b, 0, y1 - 0.035, fz - 0.0155, 0.04, 0, 0, 0, 0.012, 0, 0, 0, -1);
@@ -124,7 +124,7 @@ export const vendingMachine: PropBuild = (b, v) => {
   // delivery flap and coin / keypad panel on the bottom bar
   b.mat(Mat.PLASTIC, 0.03, 0.03, 0.03);
   box(b, -0.3, 0.09, -0.398, 0.12, 0.25, -0.39, SKIP.PZ);
-  b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.25);
+  b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.3); // brushed stainless coin panel
   box(b, 0.18, 0.1, -0.398, 0.32, 0.3, -0.39, SKIP.PZ);
   b.mat(Mat.PLASTIC, 0.02, 0.02, 0.02);
   rect(b, 0.25, 0.26, -0.3985, 0.04, 0, 0, 0, 0.006, 0, 0, 0, -1); // coin slot
@@ -206,7 +206,7 @@ export const radio: PropBuild = (b, v) => {
     b.pop();
   }
   // carry handle
-  b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.25);
+  b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.1); // chrome handle
   tubePath(b, [-0.13, 0.17, 0, -0.11, 0.19, 0, 0.05, 0.19, 0, 0.07, 0.17, 0], 0.007, 6, 0.012, 2, 0);
 };
 

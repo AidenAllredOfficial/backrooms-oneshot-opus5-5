@@ -16,7 +16,7 @@ const BLACK_PLASTIC: RGB = [0.035, 0.035, 0.037];
 const STACK_SEAT: readonly RGB[] = [[0.3, 0.3, 0.29], [0.06, 0.1, 0.2], [0.45, 0.14, 0.03], [0.04, 0.04, 0.045]];
 export const chairStacking: PropBuild = (b, v) => {
   // tubular chrome frame
-  b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.22);
+  b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.08); // chrome plate
   const r = 0.011;
   for (const sx of [-1, 1]) {
     tubePath(b, [sx * 0.222, 0.002, -0.232, sx * 0.205, 0.44, -0.2], r, 6, 0, 0, 0); // front leg
@@ -91,7 +91,7 @@ export const officeChair: PropBuild = (b, v) => {
 };
 
 // ---------------------------------------------------------------------------------------- DESK
-const DESK_WOOD: readonly RGB[] = [[0.33, 0.21, 0.11], [0.3, 0.19, 0.1], [0.5, 0.38, 0.24], [0.16, 0.09, 0.05]];
+const DESK_WOOD: readonly RGB[] = [[0.33, 0.21, 0.11], [0.3, 0.19, 0.1], [0.5, 0.38, 0.22], [0.16, 0.09, 0.05]];
 const DESK_METAL: readonly RGB[] = [[0.3, 0.3, 0.29], [0.34, 0.32, 0.27], [0.04, 0.04, 0.045], [0.25, 0.25, 0.24]];
 export const desk: PropBuild = (b, v) => {
   const w = DESK_WOOD[v], m = DESK_METAL[v];
@@ -107,14 +107,14 @@ export const desk: PropBuild = (b, v) => {
       const y0 = 0.06 + i * 0.215;
       b.mat(Mat.METAL_PAINTED, m[0] * 0.9, m[1] * 0.9, m[2] * 0.9);
       box(b, 0.312, y0, -0.345, 0.698, y0 + 0.205, -0.33, SKIP.PZ);
-      b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.25);
+      b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.1); // chrome pull
       box(b, 0.45, y0 + 0.17, -0.36, 0.56, y0 + 0.185, -0.345, SKIP.PZ);
     }
   }
 };
 
 // ---------------------------------------------------------------------------------------- CONFERENCE_TABLE
-const CONF_WOOD: readonly RGB[] = [[0.3, 0.18, 0.09], [0.36, 0.23, 0.12], [0.12, 0.07, 0.04], [0.5, 0.38, 0.25]];
+const CONF_WOOD: readonly RGB[] = [[0.3, 0.18, 0.09], [0.36, 0.23, 0.12], [0.12, 0.07, 0.04], [0.5, 0.37, 0.22]];
 export const conferenceTable: PropBuild = (b, v) => {
   const w = CONF_WOOD[v];
   b.mat(Mat.WOOD, w[0], w[1], w[2], 0, 0.35);

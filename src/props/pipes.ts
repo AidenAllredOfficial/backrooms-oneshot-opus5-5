@@ -105,8 +105,9 @@ const endB: EndInfo = { trim: 0, kind: 'free', owner: true, other: null, bendR: 
 const refA = [0, 0, 0], refB = [0, 0, 0], tanA = [0, 0, 0], tanB = [0, 0, 0];
 
 function setPipeMaterial(p: PipeSolid, decay: number): void {
-  if (p.mat === Mat.METAL_RUST || decay >= RUST_DECAY) { B.mat(Mat.METAL_RUST); return; }
   const c = PAINTS[Math.round(p.r * 1000) % PAINTS.length];
+  // rusty runs keep their paint colour on the remnants (the rust itself is untinted)
+  if (p.mat === Mat.METAL_RUST || decay >= RUST_DECAY) { B.mat(Mat.METAL_RUST, c[0], c[1], c[2]); return; }
   B.mat(Mat.METAL_PAINTED, c[0], c[1], c[2], 0, 0.4);
 }
 

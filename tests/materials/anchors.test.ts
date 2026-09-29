@@ -78,6 +78,10 @@ describe('WP9 shader anchors (three r186)', () => {
     expect(at('map_fragment')).toBeLessThan(at('roughnessmap_fragment'));
     expect(at('roughnessmap_fragment')).toBeLessThan(at('normal_fragment_maps'));
     expect(at('normal_fragment_maps')).toBeLessThan(at('emissivemap_fragment'));
+    // lane E's clearcoat normal: three declares clearcoatNormal there, between the normal maps and the emissive map
+    expect(at('normal_fragment_maps')).toBeLessThan(at('clearcoat_normal_fragment_begin'));
+    expect(at('clearcoat_normal_fragment_begin')).toBeLessThan(at('emissivemap_fragment'));
+    expect(ShaderChunk.clearcoat_normal_fragment_begin).toMatch(/vec3 clearcoatNormal = /);
     // the material-post anchor: after three fills `material`, before lights_fragment_begin computes material.dfg
     expect(at('emissivemap_fragment')).toBeLessThan(at('lights_physical_fragment'));
     expect(at('lights_physical_fragment')).toBeLessThan(at('lights_fragment_begin'));

@@ -25,7 +25,7 @@ export const childrensPlayroom: LandmarkGenerator = {
     const lm = begin(g, ctx, site, W, L);
     if (!lm) return { entrances: [] };
     const wallMat = Mat.DRYWALL;
-    claim(lm, { floorMat: Mat.RUBBER, wallMat, ceilMat: Mat.CEILING_TILE, ceilKind: CeilKind.TILES, ceilCm: CEIL * 100, baseboard: true });
+    claim(lm, { floorMat: Mat.VINYL_VCT, wallMat, ceilMat: Mat.CEILING_TILE, ceilKind: CeilKind.TILES, ceilCm: CEIL * 100, baseboard: true });
     opening(lm, lm.rng.int(1, 3), 0, 0, -1, EdgeKind.DOORWAY, wallMat, EdgeTrim.CASING, 210);
     opening(lm, 0, lm.rng.int(3, 5), -1, 0, EdgeKind.DOORWAY, wallMat, EdgeTrim.CASING, 210);
 

@@ -290,3 +290,49 @@ v2 conventions").
   - D3 PAINT is untouched.
 
 ## Lane E: props
+
+### 2026-09-29 — E: prop tint headroom, edge coordinates, wear, metals, wood, plastic, kraft, rubber — APPLIED
+- **Status:** APPLIED by lane E on its branch.
+- **WP6 contract (props/builder.ts):**
+  - Tint: non-emissive PROP_AUX parts store `byte(tint / 2)`, at least 1 (`tintByte`); the props family decodes
+    `vBrTint.rgb x 2` at the end of postSample, where brA becomes the part's real albedo; the props postWet hook
+    divides the stored tint out again, since surface.ts multiplies by it (so the grime and wetness colours act on the
+    real albedo and are neither tinted nor halved; the same holds on shell faces of the 'wear' layers).
+    Emissive parts keep x1. METAL_RUST tints are relative to `RUST_PAINT_REF` 0.3, not the layer mean.
+  - lmUv on props (was 0, 0): face-local edge coordinates, `edgeEncode(half mm, s) = 4 max(1, round(half)) + 1 + s`
+    per axis (0 = no edge on this axis); decode `h = floor(|x| / 4)`, `s = |x| - 4h - 1`, distance `h (1 - |s|)`. The
+    sign of x marks end grain, the sign of y part kind 1 (-0.25 where that axis has no edge). The plan's "aux.y
+    part-kind byte" was not usable: aux.y is the thin-tube radius, which the vertex shader widens. `begin()` takes the
+    prop scale (edge coordinates are true millimetres); `altKind()` sets part kind 1 until the next material.
+  - UVs: GRAIN_LAYERS (WOOD, METAL_PAINTED, METAL_BARE) turn u along each face's longer side; DECORRELATE_LAYERS
+    (METAL_PAINTED, METAL_RUST, METAL_BARE, WOOD, PLASTIC, RUBBER) add a hashed per-part offset of up to one repeat
+    (emissive parts count as parts, so light states do not shift later offsets); v uses `layerRepeatY` on every layer.
+  - Colour tables: DESK_WOOD[2], CONF_WOOD[3] and CRATE_WOOD[3] blue 0.24 / 0.25 -> 0.22 (they clamped at the old
+    1x headroom and now fit the 2x one); tests/props/builder.test.ts checks that no prop part clamps.
+- **Rows (`LAYER_DEFS`):** METAL_PAINTED roughness 0.45 -> 0.4, metal 0.2 -> 0; METAL_RUST albedo [0.25, 0.14, 0.08] ->
+  [0.24, 0.085, 0.028] (the rust palette; paint remnants are runtime), roughness 0.9, metal 0; METAL_GRATE albedo 0.2 ->
+  0.095 (20 % bar cover over dark holes), roughness 0.6; WOOD roughness 0.55 -> 0.36; RUBBER albedo 0.05 -> 0.04,
+  roughness 0.62. METAL_BARE placed (props only).
+- **Channels:** aux 'wear' on METAL_PAINTED (W), METAL_BARE (smudge), METAL_RUST (corrosion order C), WOOD (finish
+  wear), PLASTIC (scuffs); 'mask' on RUBBER (bloom); aux2 on METAL_PAINTED (scratch field S).
+- **SurfacePhys:** METAL_PAINTED `det 18, detS 1`; METAL_BARE `det 8, detS 1`; METAL_RUST `det 19, detS 1, sigma 0.5`,
+  normalStrength 1.5, heightScale 0.003; RUBBER `sigma 0.3`; kraft (PLASTIC part kind 1) sigma 0.5 through the matPost
+  hook. Metals sigma 0. No dirt / wear amounts (0b's block stays off for these rows).
+- **Detail slots:** D18 ENAMEL (orange peel, heightScale 1.2e-5, S 0.02), D19 RUST_GRAIN (3e-4, S 0.4, roughK 0.1,
+  cavity 0.5), D20 KRAFT (8e-5, S 0.05); D10 HAIRCELL 2.5 -> 1.4 mm.
+- **Anchor:** `clearcoat_normal_fragment_begin` ('after'; anchors.ts, SurfaceMaterial injectionCode ->
+  `PROP_COAT_NORMAL_GLSL`): the props clearcoat uses the shading normal (base map and detail slope).
+- **Hooks (chunks/family/props.ts):** one main-scope name, `brWpTop` (postSample; read by grime and matPost); the rest
+  of the wear state is scoped inside postSample, which measurably lowered the programs' cost; pars
+  `brPropEdgeD`, `brPropEdgeHS`, `brWpExpose` and `BR_M_*` for the prop layers; postWet divides the stored tint out.
+  The rough hook replaces the override path for 'wear' layers (their ormh.g already holds the override-scaled topcoat
+  and the exposed layers' roughness).
+- **World output:** children's playroom floor RUBBER -> VINYL_VCT; pool lane rope RUBBER -> PLASTIC. The light-well
+  window band and the copier platen and control panel stay RUBBER (shell solids are untinted, so PLASTIC made them light
+  grey). tests/world/golden.json is unchanged (the golden chunks hash the layout, which these landmarks do not reach
+  at seed 1).
+- **Costs:** DESIGN.md lane E (high +0.05 to +0.16 ms whole frame across sessions, RenderPass +0.06 ms; the review's
+  quiet re-measure +0.07 to +0.11 ms at high and +0.27 to +0.47 ms at ultra; generation +18 to +41 ms). Over the lane budget; the EON sigma on METAL_RUST, RUBBER and kraft is
+  the shared presence cost lane B and C already pay.
+- **Consumers affected:** lane 0 / WP9 (the new anchor, the props lmUv no longer 0), WP6 (tint and lmUv encoding),
+  the integrator.

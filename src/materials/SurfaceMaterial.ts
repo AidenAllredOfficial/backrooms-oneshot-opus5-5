@@ -21,6 +21,7 @@ import { DETAIL_PARS_GLSL, FRAG_DETAIL_SO_GLSL } from './chunks/detail.ts';
 import { EMITTER_GLSL } from './chunks/emitters.ts';
 import { DEBUG_PARS_GLSL } from './chunks/debug.ts';
 import { familyHook } from './chunks/family/index.ts';
+import { PROP_COAT_NORMAL_GLSL } from './chunks/family/props.ts';
 import { GBUFFER_PARS_GLSL } from './chunks/gbuffer.ts';
 import { GRIME_LIB_GLSL } from './chunks/grimeLib.ts';
 import { FRAG_FOG_GLSL } from './chunks/haze.ts';
@@ -65,6 +66,7 @@ function injectionCode(): Record<string, string> {
     'fragment:roughnessmap_fragment': FRAG_ROUGHNESS_GLSL,
     'fragment:metalnessmap_fragment': FRAG_METALNESS_GLSL,
     'fragment:normal_fragment_maps': FRAG_NORMAL_GLSL,
+    'fragment:clearcoat_normal_fragment_begin': PROP_COAT_NORMAL_GLSL, // lane E: the coat on the base map's normal
     'fragment:emissivemap_fragment': FRAG_EMISSIVE_GLSL,
     'fragment:lights_physical_fragment': FRAG_MATERIAL_POST_GLSL,
     'fragment:lights_fragment_maps': FRAG_LIGHTS_GLSL,

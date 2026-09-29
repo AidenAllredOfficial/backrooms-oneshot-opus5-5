@@ -105,7 +105,8 @@ describe('WP6 surface fixtures', () => {
         }
         for (let i = 0; i < mesh.vertexCount; i++) {
           expect(mesh.flags[i] & VFlag.PROP_AUX).toBe(VFlag.PROP_AUX);
-          expect(mesh.lmUv[i * 2] + mesh.lmUv[i * 2 + 1]).toBe(0);
+          // edge coordinates (builder.ts edgeEncode) or 0 (curved axes), never NaN
+          for (const x of [mesh.lmUv[i * 2], mesh.lmUv[i * 2 + 1]]) expect(x === 0 || Math.abs(x) >= 4).toBe(true);
         }
       });
     }
@@ -336,7 +337,7 @@ describe('C.3 PartBuilder aux.z contract', () => {
     expect(a.slice(0, 4)).toEqual([120, 0, 1 | (EP.TUBE << 1) | (1 << 5), 40]);
     expect(a[4]).toBeCloseTo(0.5, 6); // u of vertex (1, 0, 0) = 1 * 0.5
     expect(a[5]).toBeCloseTo(2, 6); // v of vertex (1, 0, 1)... = 1 * 2
-    const c = one((b) => { b.emissive(Mat.PLASTIC, 1, 1, 1, 100, 0, 0, 9, EP.TUBE, 1, 120); b.uvScale(0.5, 2); b.mat(Mat.PLASTIC); }, 1);
-    expect(c[4]).toBeCloseTo(1 / 0.6, 5); // back to metres / the PLASTIC repeat (0.6 m)
+    const c = one((b) => { b.emissive(Mat.PLASTIC, 1, 1, 1, 100, 0, 0, 9, EP.TUBE, 1, 120); b.uvScale(0.5, 2); b.mat(Mat.FABRIC_PARTITION); }, 1);
+    expect(c[4]).toBeCloseTo(1 / 1.2, 5); // back to metres / the layer repeat (1.2 m; no per-part offset on this layer)
   });
 });
