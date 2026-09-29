@@ -124,7 +124,9 @@ v2 conventions").
   ff42a23): a relief dirt amount on CMU compiled the dirt / wear block into every surface program, +0.63 ms in
   POOLROOMS with no CMU on screen (so lane C sets none); brStainFront on every CMU wall pixel +0.2 ms on a full-screen
   wall (not used); EON on CMU (sigma 0.2) +0.65 ms on a full-screen CMU wall (g08), kept. The integrator budgets EON
-  once for the union of layers that set sigma.
+  once for the union of layers that set sigma. Final lane head against tex-integ (RenderPass, 3 rounds): high +0.00 to
+  +0.08 ms, ultra -0.05 to +0.27 ms on gallery 05, 08, 09 and 12; without the CMU sigma the head measures at or below
+  tex-integ, so the remainder is EON (+0.3-0.6 ms at ultra on CMU-filled frames).
 - **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
   (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. Raw block reflects about half of what the
   painted block did, so PIPEWORKS frames are darker: frame mean luminance -35 % (gallery 09) and -46 % (gallery 10, a

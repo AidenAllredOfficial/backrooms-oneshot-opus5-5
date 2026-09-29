@@ -4260,6 +4260,13 @@ Block walls read as concrete block at every distance, and the tile layers as fir
   an amber, glossier wax band 2-5 cm from the walls, and heel marks. D6 GLAZE is now long-wave waviness (25 and 12 mm,
   rms slope 0.0046) plus sparse pinholes. At detail strength 0.3 against 1, the ragged edges of the lamp reflections
   on the pool walls are unchanged (gallery 12), so D6 is not their cause.
+- **Costs** (gpuProfile RenderPass medians of 3 interleaved fresh boots against tex-integ ff42a23; run-to-run noise
+  about +-0.2 ms at high and +-0.3 ms at ultra). High 1920x1080: gallery 05 +0.05, 08 +0.08, 09 +0.00, 12 +0.07 ms.
+  Ultra 2560x1440: 05 -0.05, 08 +0.27, 09 +0.27, 12 +0.12 ms. The same tree without the CMU sigma measures at or below
+  tex-integ everywhere, so the lane's recipes and hooks are within noise and EON is the cost: +0.3-0.6 ms at ultra
+  where CMU fills the frame (08, 09), shared with the other layers that set sigma. Texture generation +21 ms (200 ms
+  against 179 ms, median of 6 fresh harness boots; the recipes evaluate only the part each output pass needs), detail
+  maps +3 ms, no memory beyond the reserved CMU_RAW layer and the D14 / D15 slots.
 
 #### Lane D: walls and ceilings
 
