@@ -89,6 +89,8 @@ if ( BR_DETAIL == 1 && ( brL == BR_M_POOL_TILE || brL == BR_M_POOL_MOSAIC ) ) {
 #endif
 			// heel marks: short black rubber streaks, one candidate per 0.24 m cell, more of them in the lanes
 			vec2 hc = brS2 / ${f(W.HEEL_CELL)};
+			// 3-6 mm wide marks: faded out before a pixel spans them (no sparkle on far floors)
+			float hfw = 1.0 - smoothstep( 0.002, 0.006, max( fwidth( brS2.x ), fwidth( brS2.y ) ) );
 			ivec2 hi = ivec2( floor( hc ) );
 			uint hh = brHash2u( brWrap( hi, ivec2( ${wrap(W.HEEL_CELL)} ) ), 1421u );
 			if ( brU01( hh ) < ${f(W.HEEL_P)} * ( 0.4 + 1.2 * brTlWear ) ) {
@@ -97,7 +99,7 @@ if ( BR_DETAIL == 1 && ( brL == BR_M_POOL_TILE || brL == BR_M_POOL_MOSAIC ) ) {
 				hp = mat2( cos( ang ), sin( ang ), - sin( ang ), cos( ang ) ) * hp;
 				float len = mix( 0.015, 0.045, brU01( brPcg( hh + 3u ) ) );
 				float wid = mix( 0.003, 0.006, brU01( brPcg( hh + 4u ) ) );
-				float hm = ( 1.0 - smoothstep( 0.6, 1.0, length( hp / vec2( len, wid ) ) ) ) * ( 0.5 + 0.5 * g2.g );
+				float hm = ( 1.0 - smoothstep( 0.6, 1.0, length( hp / vec2( len, wid ) ) ) ) * ( 0.5 + 0.5 * g2.g ) * hfw;
 				brA *= 1.0 - 0.65 * hm;
 				brRoughMul *= 1.0 - 0.2 * hm;
 			}
