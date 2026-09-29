@@ -6,14 +6,15 @@ import { phys, type RecipeTable } from './types.ts';
 /** Level 0 wallpaper: mustard paper-backed vinyl (Type I, satin) in two 0.6 m rolls. Print (the Level 0 photo's
  * identity): vertical stripe system on a 0.15 m pitch, a slightly darker ink band carrying a column of stacked
  * up-pointing chevrons, flanked by pinlines. The print is surface-printed flat ink over the emboss (5-10 um film, a
- * 0.02 mm step with rounded shoulders, not a stamped relief), -15 % in value and a touch glossier (0.56), with gravure
- * density streaks along the roll and the band fill misregistered 0.2 mm against the strokes. The vinyl ground carries a
- * fabric-look emboss the base can resolve (vertical strie, raised slub dashes in both directions) and a 0.05 mm cockle
- * over 3-5 cm that only the sheen shows; the finer thread emboss is D2 (VINYL_FABRIC). Satin roughness: ground 0.62
- * (emboss peaks -0.05, valleys +0.04), glue squeeze-out along the roll seam 0.53 (all above the SSR cut-off at high, 0.45:
- * below it the lamps glinted off single texels). ormh.a is the detail mask: 0.6 on
- * ink (the emboss under the ink film is shallower). Lifted edges, fading and stains come from the WP7 mask and the
- * walls family (chunks/family/walls.ts). */
+ * 0.02 mm step with rounded shoulders, not a stamped relief), -22 % in value and a touch glossier (0.56), with gravure
+ * density streaks along the roll and the band fill misregistered 0.2 mm against the strokes. The ground is a
+ * fabric-look print in register with its emboss: a strie of 2.5-17 mm streaks (+-5 %) and raised slub dashes (+4 %,
+ * vertical 3 x 25 mm and horizontal 25 x 3 mm), which carry the field's texture at room distance (the emboss alone
+ * shaded < 1 % under the baked light), and a 0.05 mm cockle over 3-5 cm that only the sheen shows; the finer thread
+ * emboss is D2 (VINYL_FABRIC). Satin roughness: ground 0.62 (emboss peaks -0.05, valleys +0.04), glue squeeze-out
+ * along the roll seam 0.53 (all above the SSR cut-off at high, 0.45: below it the lamps glinted off single texels).
+ * ormh.a is the detail mask: 0.6 on ink (the emboss under the ink film is shallower). Lifted edges, fading and stains
+ * come from the WP7 mask and the walls family (chunks/family/walls.ts). */
 const WALLPAPER_L0 = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -36,7 +37,7 @@ void gen(vec2 uv, inout Surf s) {
   // gravure ink density streaks (along the roll, ~12 cm wide)
   float den = 0.88 + 0.12 * (0.5 + 0.5 * gnoise(uv, PMxy(8.0, 2.0), 21));
   // vinyl ground: vertical strie, slub dashes (vertical 3 x 25 mm, horizontal 25 x 3 mm), cockle, formation
-  float strie = gnoise(uv, PMxy(60.0, 1.5), 14) * 0.6 + gnoise(uv, PMxy(240.0, 3.0), 15) * 0.4;
+  float strie = gnoise(uv, PMxy(60.0, 1.5), 14) * 0.4 + gnoise(uv, PMxy(160.0, 2.0), 15) * 0.35 + gnoise(uv, PMxy(400.0, 4.0), 18) * 0.35;
   Cell sv = worley(uv, PMxy(300.0, 40.0), 0.9, 31);
   float slubV = step(hashf(sv.id, 32), 0.3) * (1.0 - smoothstep(0.15, 0.55, sv.f1));
   Cell sh = worley(uv, PMxy(40.0, 300.0), 0.9, 33);
@@ -47,19 +48,19 @@ void gen(vec2 uv, inout Surf s) {
   float age = fbm(uv, PM(2.5), 3, 16);
   float bandTone = 0.5 + 0.5 * cos(6.2831853 * xs / 0.15); // 1 at the ink band centre
   vec3 c = TABLE_ALBEDO;
-  c *= 1.0 + 0.02 * slub + 0.012 * strie + 0.02 * formation;
+  c *= 1.0 + 0.04 * slub + 0.05 * strie + 0.02 * formation;
   // ground print: the band is a slightly deeper mustard, the gap between a paler cream-yellow
   c *= mix(vec3(1.035, 1.03, 1.05), vec3(0.93, 0.915, 0.85), band * 0.85 + 0.15 * bandTone);
   // ageing: slightly browner, deeper patches
   c *= mix(vec3(1.0), vec3(0.965, 0.95, 0.9), sat(age * 1.6));
-  // ink: about -15 % value, browner (more saturated): the print must read at room distance
-  c *= mix(vec3(1.0), vec3(0.86, 0.83, 0.72), ink * den);
+  // ink: about -22 % value, browner (more saturated): the chevrons must read at room distance
+  c *= mix(vec3(1.0), vec3(0.8, 0.76, 0.62), ink * den);
   // roll seam: hairline gap, dirt line
   float gap = lineM(dSeam, 0.00025);
   float seamDirt = gauss(dSeam / 0.004);
   c *= 1.0 - 0.3 * gap - 0.04 * seamDirt;
   s.albedo = c;
-  s.height = 0.5 + 0.04 * inkH + 0.03 * strie + 0.08 * slub + 0.12 * cockle + 0.2 * gauss(dSeam / 0.0018) - 0.2 * gap;
+  s.height = 0.5 + 0.04 * inkH + 0.06 * strie + 0.16 * slub + 0.12 * cockle + 0.2 * gauss(dSeam / 0.0018) - 0.2 * gap;
   float glue = gauss(dSeam / 0.004);
   s.rough = mix(0.62 + 0.04 * sat(-strie) - 0.05 * slub - 0.03 * sat(strie), 0.56, ink);
   s.rough = mix(s.rough, 0.53, glue);
@@ -142,17 +143,15 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-// normalStrength: these heightScales keep the relief at its real depth (a few tenths of a millimetre: POM, cavity AO and
-// the grime masks read it), but the authored height fields are smoother than the real surfaces, whose emboss, knockdown
-// and orange peel reach 3-10 degree micro-slopes over 1-5 mm. At 1x the normals stayed under 1 degree (mip-0 tan mean
-// 0.007-0.015) and the walls shaded flat under any light; the strengths bring the Level 0 wallpaper and the drywall to
-// ~0.07-0.08 (manila and trim stay near 0.015: the linen is finer than a texel, and semi-gloss enamel is smooth). They
-// act before the mips (Toksvig and LEAN see the same slopes). Props that need a plain matte surface do not borrow these
-// layers (kraft boxes on DRYWALL read as stucco).
+// normalStrength (texture realism v2): the base texel (1.17-2.34 mm) holds only the relief it can resolve (slubs,
+// strie, laps, joints, cockle), at a mild 1.5-2.5x over its real depth; the grain the eye reads up close is in the
+// detail maps (D2, D16, D17: rms slopes 0.05-0.07), which become LEAN roughness with distance. The old 6-10x made
+// the wallpaper's print a rubber stamp and the drywall stucco. Props that need a plain matte surface do not borrow
+// these layers (kraft boxes on DRYWALL read as stucco).
 // trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const WALL_RECIPES: RecipeTable = {
   [Mat.WALLPAPER_L0]: {
-    glsl: WALLPAPER_L0, normalStrength: 1.5, heightScale: 0.0004, trim: [1.007, 1.018, 1.037],
+    glsl: WALLPAPER_L0, normalStrength: 2.5, heightScale: 0.0004, trim: [1.007, 1.018, 1.037],
     phys: phys(0.35, { det: 2, detS: 1, detRep: 0.5, sigma: 0.2 }), aux: 'detailMask',
   },
   [Mat.WALLPAPER_MANILA]: {
