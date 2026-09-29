@@ -72,15 +72,15 @@ describe('locker banks on tall metal partitions', () => {
     expect(cap).toBeGreaterThan(0);
   });
 
-  it('the enamel paint carries the clearcoat bit (aux.z & 2); handles, plates and interiors do not', () => {
+  it('aged enamel: no clearcoat bit, a satin override on the paint; handles, plates and locks are bare metal', () => {
     const m = buildTileProps(fakeNeighborhood(room(200)), key)!;
-    let coat = 0, bare = 0;
+    let paint = 0, bare = 0;
     for (let v = 0; v < m.vertexCount; v++) {
-      if ((m.aux[v * 4 + 2] & 2) === 0) { bare++; continue; }
-      coat++;
-      expect(m.layer[v]).toBe(Mat.METAL_PAINTED);
+      expect(m.aux[v * 4 + 2] & 2).toBe(0);
+      if (m.layer[v] === Mat.METAL_BARE) bare++;
+      else if (m.layer[v] === Mat.METAL_PAINTED && m.aux[v * 4] === Math.round(0.26 * 255)) paint++;
     }
-    expect(coat).toBeGreaterThan(m.vertexCount / 3);
+    expect(paint).toBeGreaterThan(m.vertexCount / 3);
     expect(bare).toBeGreaterThan(0);
   });
 

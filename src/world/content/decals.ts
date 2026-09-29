@@ -267,7 +267,7 @@ export function placeDecals(ctx: ZoneGenContext): void {
     if (fits(f, y, h)) B.add(wallDecal(DecalKind.SCUFF, f, rng.range(-0.5, 0.5), y, rng.range(0.4, 0.9), h, 0.55), catScuff);
   }
 
-  // 8. CRACK on concrete floors and walls
+  // 8. CRACK on concrete floors and on concrete and block walls
   const catCrack = { left: 8 };
   for (let c = 0; c < N * N && !B.full; c++) {
     if (!isOpenFloor(l, c) || l.floorMat[c] !== Mat.CONCRETE_FLOOR) continue;
@@ -277,7 +277,7 @@ export function placeDecals(ctx: ZoneGenContext): void {
   }
   for (const f of faces) {
     if (B.full) break;
-    if (f.mat !== Mat.CONCRETE_WALL && f.mat !== Mat.CMU_PAINTED) continue;
+    if (f.mat !== Mat.CONCRETE_WALL && f.mat !== Mat.CMU_PAINTED && f.mat !== Mat.CMU_RAW) continue;
     if (!rng.chance(0.05 * (l.decay[cellIdx(f.li, f.lj)] / 256))) continue;
     const h = rng.range(0.8, 1.3), y = f.floor + rng.range(0.4, 1.4) + h / 2;
     if (fits(f, y, h)) B.add(wallDecal(DecalKind.CRACK, f, rng.range(-0.5, 0.5), y, 0.7, h, 0.65, rng.range(-0.3, 0.3)), catCrack);

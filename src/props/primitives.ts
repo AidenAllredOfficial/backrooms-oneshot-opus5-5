@@ -11,16 +11,41 @@ const TAU = Math.PI * 2;
 /** Face skip bits for box / bevelBox. */
 export const SKIP = { NX: 1, PX: 2, NY: 4, PY: 8, NZ: 16, PZ: 32 } as const;
 
+/** Position across a face axis of half extent h, in [-1, 1] (0 on a degenerate axis). */
+const rel = (d: number, h: number): number => (h > 1e-9 ? d / h : 0);
+/** The axis (0 x, 1 y, 2 z) whose faces show end grain: the longest half extent when it is at least 1.5x the next,
+ * else -1 (a cube-ish block has no end faces). */
+function endAxis(hx: number, hy: number, hz: number): number {
+  const l = hx >= hy && hx >= hz ? 0 : hy >= hz ? 1 : 2;
+  const h = [hx, hy, hz];
+  const next = Math.max(h[(l + 1) % 3], h[(l + 2) % 3]);
+  return h[l] >= 1.5 * next ? l : -1;
+}
+
 // ------------------------------------------------------------------------------------------ boxes
 
-/** Axis-aligned box, 12 triangles minus 2 per skipped face. Planar UVs per face. */
+/** Axis-aligned box, 12 triangles minus 2 per skipped face. Planar UVs per face (in grain mode u runs along the face's
+ * longer side), edge coordinates per face (builder.ts edgeEncode; faces across the box's longest axis are end grain). */
 export function box(b: PartBuilder, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, skip = 0): void {
-  if (!(skip & SKIP.NX)) b.quad(b.v(x0, y0, z0, -1, 0, 0, z0, y0), b.v(x0, y0, z1, -1, 0, 0, z1, y0), b.v(x0, y1, z1, -1, 0, 0, z1, y1), b.v(x0, y1, z0, -1, 0, 0, z0, y1));
-  if (!(skip & SKIP.PX)) b.quad(b.v(x1, y0, z0, 1, 0, 0, -z0, y0), b.v(x1, y1, z0, 1, 0, 0, -z0, y1), b.v(x1, y1, z1, 1, 0, 0, -z1, y1), b.v(x1, y0, z1, 1, 0, 0, -z1, y0));
-  if (!(skip & SKIP.NY)) b.quad(b.v(x0, y0, z0, 0, -1, 0, x0, z0), b.v(x1, y0, z0, 0, -1, 0, x1, z0), b.v(x1, y0, z1, 0, -1, 0, x1, z1), b.v(x0, y0, z1, 0, -1, 0, x0, z1));
-  if (!(skip & SKIP.PY)) b.quad(b.v(x0, y1, z0, 0, 1, 0, x0, z0), b.v(x0, y1, z1, 0, 1, 0, x0, z1), b.v(x1, y1, z1, 0, 1, 0, x1, z1), b.v(x1, y1, z0, 0, 1, 0, x1, z0));
-  if (!(skip & SKIP.NZ)) b.quad(b.v(x0, y0, z0, 0, 0, -1, -x0, y0), b.v(x0, y1, z0, 0, 0, -1, -x0, y1), b.v(x1, y1, z0, 0, 0, -1, -x1, y1), b.v(x1, y0, z0, 0, 0, -1, -x1, y0));
-  if (!(skip & SKIP.PZ)) b.quad(b.v(x0, y0, z1, 0, 0, 1, x0, y0), b.v(x1, y0, z1, 0, 0, 1, x1, y0), b.v(x1, y1, z1, 0, 0, 1, x1, y1), b.v(x0, y1, z1, 0, 0, 1, x0, y1));
+  const hx = (x1 - x0) / 2, hy = (y1 - y0) / 2, hz = (z1 - z0) / 2;
+  const cx = x0 + hx, cy = y0 + hy, cz = z0 + hz;
+  const long = endAxis(hx, hy, hz);
+  // one vertex of a face whose uv axes are (a: half ha, centre ca, coordinate pa) and (b...); normal axis `ax`
+  const V = (x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number,
+    ha: number, sa: number, hb: number, sb: number, ax: number): number => {
+    const end = ax === long;
+    if (b.grain && hb > ha) return b.v(x, y, z, nx, ny, nz, v, u, b.ec(hb, sb, end), b.ec(ha, sa));
+    return b.v(x, y, z, nx, ny, nz, u, v, b.ec(ha, sa, end), b.ec(hb, sb));
+  };
+  const X = (x: number, y: number, z: number, n: number, u: number): number => V(x, y, z, n, 0, 0, u, y, hz, rel(z - cz, hz), hy, rel(y - cy, hy), 0);
+  const Y = (x: number, y: number, z: number, n: number): number => V(x, y, z, 0, n, 0, x, z, hx, rel(x - cx, hx), hz, rel(z - cz, hz), 1);
+  const Z = (x: number, y: number, z: number, n: number, u: number): number => V(x, y, z, 0, 0, n, u, y, hx, rel(x - cx, hx), hy, rel(y - cy, hy), 2);
+  if (!(skip & SKIP.NX)) b.quad(X(x0, y0, z0, -1, z0), X(x0, y0, z1, -1, z1), X(x0, y1, z1, -1, z1), X(x0, y1, z0, -1, z0));
+  if (!(skip & SKIP.PX)) b.quad(X(x1, y0, z0, 1, -z0), X(x1, y1, z0, 1, -z0), X(x1, y1, z1, 1, -z1), X(x1, y0, z1, 1, -z1));
+  if (!(skip & SKIP.NY)) b.quad(Y(x0, y0, z0, -1), Y(x1, y0, z0, -1), Y(x1, y0, z1, -1), Y(x0, y0, z1, -1));
+  if (!(skip & SKIP.PY)) b.quad(Y(x0, y1, z0, 1), Y(x0, y1, z1, 1), Y(x1, y1, z1, 1), Y(x1, y1, z0, 1));
+  if (!(skip & SKIP.NZ)) b.quad(Z(x0, y0, z0, -1, -x0), Z(x0, y1, z0, -1, -x0), Z(x1, y1, z0, -1, -x1), Z(x1, y0, z0, -1, -x1));
+  if (!(skip & SKIP.PZ)) b.quad(Z(x0, y0, z1, 1, x0), Z(x1, y0, z1, 1, x1), Z(x1, y1, z1, 1, x1), Z(x0, y1, z1, 1, x0));
 }
 /** Triangle count of box(). */
 export const boxTris = (skip = 0): number => {
@@ -42,16 +67,28 @@ export function bevelBox(b: PartBuilder, x0: number, y0: number, z0: number, x1:
   const YI = [skipF(1, 0) ? y0 : y0 + cc, skipF(1, 1) ? y1 : y1 - cc];
   const ZI = [skipF(2, 0) ? z0 : z0 + cc, skipF(2, 1) ? z1 : z1 - cc];
   const S2 = Math.SQRT1_2, S3 = 1 / Math.sqrt(3);
+  // edge coordinates over the outer extents: a face's inner rim lies cc from the box edge; chamfers and corners are on it
+  const H = [(x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2], C = [x0 + H[0], y0 + H[1], z0 + H[2]];
+  const long = endAxis(H[0], H[1], H[2]);
   // faces
   for (let axis = 0; axis < 3; axis++) {
     for (let side = 0; side < 2; side++) {
       if (skipF(axis, side)) continue;
       const sg = side ? 1 : -1;
+      const end = axis === long;
+      // uv axes: x faces (z, y), y faces (x, z), z faces (x, y); grain mode puts u on the longer one
+      const ua = axis === 0 ? 2 : 0, va = axis === 1 ? 2 : 1;
+      const swap = b.grain && H[va] > H[ua];
+      const W = (x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number): number => {
+        const p = [x, y, z];
+        const ea = b.ec(H[ua], rel(p[ua] - C[ua], H[ua])), eb = b.ec(H[va], rel(p[va] - C[va], H[va]));
+        return swap ? b.v(x, y, z, nx, ny, nz, v, u, end ? -eb : eb, ea) : b.v(x, y, z, nx, ny, nz, u, v, end ? -ea : ea, eb);
+      };
       const P = (i: number, j: number): number => {
         // i, j index the two other axes' inner coordinates
-        if (axis === 0) return b.v(X[side], YI[i], ZI[j], sg, 0, 0, ZI[j] * sg, YI[i]);
-        if (axis === 1) return b.v(XI[i], Y[side], ZI[j], 0, sg, 0, XI[i], ZI[j]);
-        return b.v(XI[i], YI[j], Z[side], 0, 0, sg, XI[i] * -sg, YI[j]);
+        if (axis === 0) return W(X[side], YI[i], ZI[j], sg, 0, 0, ZI[j] * sg, YI[i]);
+        if (axis === 1) return W(XI[i], Y[side], ZI[j], 0, sg, 0, XI[i], ZI[j]);
+        return W(XI[i], YI[j], Z[side], 0, 0, sg, XI[i] * -sg, YI[j]);
       };
       b.quad(P(0, 0), P(1, 0), P(1, 1), P(0, 1));
     }
@@ -74,8 +111,10 @@ export function bevelBox(b: PartBuilder, x0: number, y0: number, z0: number, x1:
               p[a] = f === 0 ? O[a][sa] : I[a][sa];
               p[bb] = f === 0 ? I[bb][sb] : O[bb][sb];
               p[along] = I[along][t];
-              const u = along === 0 ? p[0] : p[2], v = along === 1 ? p[1] : along === 0 ? p[1] + p[2] : p[1] + p[0];
-              pts.push(b.v(p[0], p[1], p[2], n[0], n[1], n[2], u, v));
+              let u = along === 0 ? p[0] : p[2], v = along === 1 ? p[1] : along === 0 ? p[1] + p[2] : p[1] + p[0];
+              if (b.grain && along === 1) { const q = u; u = v; v = q; } // u along the chamfer
+              const ea = b.ec(H[along], rel(p[along] - C[along], H[along])), eb = b.ec(0, f ? 1 : -1);
+              pts.push(b.v(p[0], p[1], p[2], n[0], n[1], n[2], u, v, ea, eb));
             }
           }
           b.quad(pts[0], pts[1], pts[3], pts[2]);
@@ -84,14 +123,15 @@ export function bevelBox(b: PartBuilder, x0: number, y0: number, z0: number, x1:
     }
   }
   // corners
+  const ce = b.ec(0, 0);
   for (let sx = 0; sx < 2; sx++) {
     for (let sy = 0; sy < 2; sy++) {
       for (let sz = 0; sz < 2; sz++) {
         if (skipF(0, sx) || skipF(1, sy) || skipF(2, sz)) continue;
         const nx = (sx ? 1 : -1) * S3, ny = (sy ? 1 : -1) * S3, nz = (sz ? 1 : -1) * S3;
-        const a = b.v(X[sx], YI[sy], ZI[sz], nx, ny, nz, 0, 0);
-        const c2 = b.v(XI[sx], Y[sy], ZI[sz], nx, ny, nz, cc, 0);
-        const d = b.v(XI[sx], YI[sy], Z[sz], nx, ny, nz, 0, cc);
+        const a = b.v(X[sx], YI[sy], ZI[sz], nx, ny, nz, 0, 0, ce, ce);
+        const c2 = b.v(XI[sx], Y[sy], ZI[sz], nx, ny, nz, cc, 0, ce, ce);
+        const d = b.v(XI[sx], YI[sy], Z[sz], nx, ny, nz, 0, cc, ce, ce);
         b.tri(a, c2, d);
       }
     }
@@ -137,7 +177,15 @@ export function hexa(b: PartBuilder, c: readonly number[], skip = 0): void {
     const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
     const uvOf = (p: [number, number, number]): [number, number] =>
       ax >= ay && ax >= az ? [p[2], p[1]] : ay >= az ? [p[0], p[2]] : [p[0], p[1]];
-    const V = (p: [number, number, number]): number => { const t = uvOf(p); return b.v(p[0], p[1], p[2], nx, ny, nz, t[0], t[1]); };
+    // edge coordinates over the face's bounding box in its uv projection (exact for rectangular faces)
+    const ts = ps.map(uvOf);
+    const ua = Math.min(...ts.map((t) => t[0])), ub = Math.max(...ts.map((t) => t[0]));
+    const va = Math.min(...ts.map((t) => t[1])), vb = Math.max(...ts.map((t) => t[1]));
+    const hu = (ub - ua) / 2, hv = (vb - va) / 2;
+    const V = (p: [number, number, number]): number => {
+      const t = uvOf(p);
+      return b.v(p[0], p[1], p[2], nx, ny, nz, t[0], t[1], b.ec(hu, rel(t[0] - ua - hu, hu)), b.ec(hv, rel(t[1] - va - hv, hv)));
+    };
     b.quad(V(p0), V(p1), V(p2), V(p3));
   }
 }
@@ -153,10 +201,16 @@ export function rect(
 ): void {
   const lu = 2 * Math.hypot(ux, uy, uz), lv = 2 * Math.hypot(vx, vy, vz);
   const u0 = atlas ? atlas[0] : 0, v0 = atlas ? atlas[1] : 0, u1 = atlas ? atlas[2] : lu, v1 = atlas ? atlas[3] : lv;
-  const a = b.v(cx - ux - vx, cy - uy - vy, cz - uz - vz, nx, ny, nz, u0, v0);
-  const c1 = b.v(cx + ux - vx, cy + uy - vy, cz + uz - vz, nx, ny, nz, u1, v0);
-  const c2 = b.v(cx + ux + vx, cy + uy + vy, cz + uz + vz, nx, ny, nz, u1, v1);
-  const d = b.v(cx - ux + vx, cy - uy + vy, cz - uz + vz, nx, ny, nz, u0, v1);
+  // edge coordinates (and, in grain mode, u along the longer side) of a (su, sv) corner
+  const swap = !atlas && b.grain && lv > lu;
+  const V = (x: number, y: number, z: number, su: number, sv: number, u: number, v: number): number => {
+    const ea = b.ec(lu / 2, su), eb = b.ec(lv / 2, sv);
+    return swap ? b.v(x, y, z, nx, ny, nz, v, u, eb, ea) : b.v(x, y, z, nx, ny, nz, u, v, ea, eb);
+  };
+  const a = V(cx - ux - vx, cy - uy - vy, cz - uz - vz, -1, -1, u0, v0);
+  const c1 = V(cx + ux - vx, cy + uy - vy, cz + uz - vz, 1, -1, u1, v0);
+  const c2 = V(cx + ux + vx, cy + uy + vy, cz + uz + vz, 1, 1, u1, v1);
+  const d = V(cx - ux + vx, cy - uy + vy, cz - uz + vz, -1, 1, u0, v1);
   b.quad(a, c1, c2, d);
 }
 
@@ -189,6 +243,13 @@ export function annulus(b: PartBuilder, r0: number, r1: number, n: number, y: nu
 
 // ------------------------------------------------------------------------------------------ revolution
 
+/** Vertex of a curved side (cylinder, lathe, sweep): u around, v along; edge coordinates 0 around (no edge) and
+ * (half, s) along, the length's half and the position in [-1, 1]; grain mode swaps u / v so u runs along. */
+function tubeV(b: PartBuilder, x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number, half: number, s: number): number {
+  const e = b.ec(half, s);
+  return b.grain ? b.v(x, y, z, nx, ny, nz, v, u, e, 0) : b.v(x, y, z, nx, ny, nz, u, v, 0, e);
+}
+
 /** Frustum along +Y from y0 (radius r0) to y1 (radius r1), n segments. caps: 1 bottom, 2 top. Smooth sides.
  * Triangles: 2n + (n-2) per cap. */
 export function cylinder(b: PartBuilder, r0: number, r1: number, y0: number, y1: number, n: number, caps = 0, phase = 0.5): void {
@@ -200,8 +261,9 @@ export function cylinder(b: PartBuilder, r0: number, r1: number, y0: number, y1:
   for (let k = 0; k <= n; k++) {
     const a = ((k + phase) * TAU) / n, c = Math.cos(a), s = Math.sin(a);
     const u = (k / n) * TAU * circ;
-    const vb = b.v(r0 * c, y0, r0 * s, c / nl, slope / nl, s / nl, u, y0);
-    const vt = b.v(r1 * c, y1, r1 * s, c / nl, slope / nl, s / nl, u, y1);
+    // edge coordinates: none around, the distance to the ends along; grain mode runs u along the axis
+    const vb = tubeV(b, r0 * c, y0, r0 * s, c / nl, slope / nl, s / nl, u, y0, h / 2, -1);
+    const vt = tubeV(b, r1 * c, y1, r1 * s, c / nl, slope / nl, s / nl, u, y1, h / 2, 1);
     if (k > 0) b.quad(pb, vb, vt, pt);
     pb = vb; pt = vt;
   }
@@ -226,7 +288,10 @@ export function lathe(b: PartBuilder, prof: readonly number[], n: number, caps =
   const cosLim = Math.cos((smoothDeg * Math.PI) / 180);
   let vacc = 0;
   let rmax = 0;
+  let plen = 0; // profile length: edge coordinates along it (the ends are the lathe's rims)
   for (let i = 0; i < np; i++) rmax = Math.max(rmax, prof[i * 2]);
+  for (let i = 0; i < np - 1; i++) plen += Math.hypot(prof[i * 2 + 2] - prof[i * 2], prof[i * 2 + 3] - prof[i * 2 + 1]);
+  const ph = plen / 2;
   for (let s = 0; s < np - 1; s++) {
     const r0 = prof[s * 2], y0 = prof[s * 2 + 1], r1 = prof[s * 2 + 2], y1 = prof[s * 2 + 3];
     const sl = Math.hypot(r1 - r0, y1 - y0);
@@ -248,8 +313,8 @@ export function lathe(b: PartBuilder, prof: readonly number[], n: number, caps =
       const u = (k / n) * TAU * rmax;
       const ah = ((k + phase - 0.5) * TAU) / n; // apex normal direction between ring vertices
       const ca = axis0 || axis1 ? Math.cos(ah) : c, sa = axis0 || axis1 ? Math.sin(ah) : si;
-      const va = b.v(r0 * c, y0, r0 * si, n0r * (axis0 ? ca : c), n0y, n0r * (axis0 ? sa : si), u, vacc);
-      const vb = b.v(r1 * c, y1, r1 * si, n1r * (axis1 ? ca : c), n1y, n1r * (axis1 ? sa : si), u, vacc + sl);
+      const va = tubeV(b, r0 * c, y0, r0 * si, n0r * (axis0 ? ca : c), n0y, n0r * (axis0 ? sa : si), u, vacc, ph, rel(vacc - ph, ph));
+      const vb = tubeV(b, r1 * c, y1, r1 * si, n1r * (axis1 ? ca : c), n1y, n1r * (axis1 ? sa : si), u, vacc + sl, ph, rel(vacc + sl - ph, ph));
       if (k > 0) {
         if (axis0) b.tri(va, vb, p1);
         else if (axis1) b.tri(p0, va, vb);
@@ -299,7 +364,9 @@ export function torus(b: PartBuilder, R: number, r: number, a0: number, a1: numb
     for (let j = 0; j <= nMin; j++) {
       const p = (j / nMin) * TAU, cp = Math.cos(p), sp = Math.sin(p);
       const rr = R + r * cp;
-      cur.push(b.v(rr * ct, r * sp, rr * st, cp * ct, sp, cp * st, t * R, (j / nMin) * TAU * r));
+      // edge coordinates: along an open arc (its ends), none around the tube
+      const ea = a1 - a0 >= TAU - 1e-6 ? 0 : b.ec(((a1 - a0) * R) / 2, (2 * i) / nMaj - 1);
+      cur.push(b.v(rr * ct, r * sp, rr * st, cp * ct, sp, cp * st, t * R, (j / nMin) * TAU * r, ea, 0));
     }
     if (prev) for (let j = 0; j < nMin; j++) b.quad(prev[j], cur[j], cur[j + 1], prev[j + 1]);
     prev = cur.slice();
@@ -378,9 +445,12 @@ export function sweep(
     const seg = TAU / n;
     twist -= Math.round(twist / seg) * seg;
   }
-  // cumulative length
+  // cumulative length (and the total: edge coordinates along the tube, whose ends are joints and cut ends)
   let acc = 0;
   let prevRing = -1;
+  let total = 0;
+  for (let i = 1; i < np; i++) total += Math.hypot(pts[i * 3] - pts[i * 3 - 3], pts[i * 3 + 1] - pts[i * 3 - 2], pts[i * 3 + 2] - pts[i * 3 - 1]);
+  const th = total / 2;
   for (let i = 0; i < np; i++) {
     if (i > 0) acc += Math.hypot(pts[i * 3] - pts[i * 3 - 3], pts[i * 3 + 1] - pts[i * 3 - 2], pts[i * 3 + 2] - pts[i * 3 - 1]);
     const tx = T[i * 3], ty = T[i * 3 + 1], tz = T[i * 3 + 2];
@@ -391,7 +461,7 @@ export function sweep(
     for (let k = 0; k <= n; k++) {
       const a = ((k + 0.5) * TAU) / n + rot, c = Math.cos(a), s = Math.sin(a);
       const nx = c * ax + s * bx, ny = c * ay + s * by, nz = c * az + s * bz;
-      const id = b.v(pts[i * 3] + r * nx, pts[i * 3 + 1] + r * ny, pts[i * 3 + 2] + r * nz, nx, ny, nz, (k / n) * TAU * r, acc);
+      const id = tubeV(b, pts[i * 3] + r * nx, pts[i * 3 + 1] + r * ny, pts[i * 3 + 2] + r * nz, nx, ny, nz, (k / n) * TAU * r, acc, th, rel(acc - th, th));
       if (k === 0) ringStart = id;
     }
     if (prevRing >= 0) for (let k = 0; k < n; k++) b.quad(prevRing + k, ringStart + k, ringStart + k + 1, prevRing + k + 1);
@@ -549,13 +619,17 @@ export function offsetPoly(p: readonly number[], d: number): number[] {
 export function extrude(b: PartBuilder, prof: readonly number[], z0: number, z1: number, caps = 3): void {
   const n = prof.length / 2;
   const s = polyArea(prof) > 0 ? 1 : -1;
+  const hz = (z1 - z0) / 2;
   let acc = 0;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const ax = prof[i * 2], ay = prof[i * 2 + 1], bx = prof[j * 2], by = prof[j * 2 + 1];
     const ex = bx - ax, ey = by - ay, l = Math.hypot(ex, ey) || 1;
     const nx = (ey / l) * s, ny = (-ex / l) * s; // outward
-    b.quad(b.v(ax, ay, z0, nx, ny, 0, acc, z0), b.v(bx, by, z0, nx, ny, 0, acc + l, z0), b.v(bx, by, z1, nx, ny, 0, acc + l, z1), b.v(ax, ay, z1, nx, ny, 0, acc, z1));
+    // side strip: edge coordinates across it (the profile corners) and along the extrusion (the caps)
+    const V = (x: number, y: number, z: number, u: number, su: number, sz: number): number =>
+      sideV(b, x, y, z, nx, ny, 0, u, z, l / 2, su, hz, sz);
+    b.quad(V(ax, ay, z0, acc, -1, -1), V(bx, by, z0, acc + l, 1, -1), V(bx, by, z1, acc + l, 1, 1), V(ax, ay, z1, acc, -1, 1));
     acc += l;
   }
   if (caps) {
@@ -564,9 +638,31 @@ export function extrude(b: PartBuilder, prof: readonly number[], z0: number, z1:
       if (!(caps & (1 << e))) continue;
       const z = e === 0 ? z0 : z1, nz = e === 0 ? -1 : 1;
       const ids: number[] = [];
-      for (let i = 0; i < n; i++) ids.push(b.v(prof[i * 2], prof[i * 2 + 1], z, 0, 0, nz, prof[i * 2] * -nz, prof[i * 2 + 1]));
+      capVerts(b, prof, z, nz, ids);
       for (let t = 0; t < tri.length; t += 3) b.tri(ids[tri[t]], ids[tri[t + 1]], ids[tri[t + 2]]);
     }
+  }
+}
+
+/** Vertex of a planar side strip with uv (u across, v along) and edge coordinates (hu, su) across and (hv, sv) along;
+ * grain mode runs u along the strip's longer side. */
+function sideV(b: PartBuilder, x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number,
+  hu: number, su: number, hv: number, sv: number): number {
+  const ea = b.ec(hu, su), eb = b.ec(hv, sv);
+  return b.grain && hv > hu ? b.v(x, y, z, nx, ny, nz, v, u, eb, ea) : b.v(x, y, z, nx, ny, nz, u, v, ea, eb);
+}
+
+/** Cap vertices of an extrusion (polygon `prof` at z, facing nz) into `ids`: uv (x -nz, y), edge coordinates over the
+ * polygon's bounding box (exact for rectangles, the nearest box side for other profiles). */
+function capVerts(b: PartBuilder, prof: readonly number[], z: number, nz: number, ids: number[]): void {
+  let xa = Infinity, xb = -Infinity, ya = Infinity, yb = -Infinity;
+  for (let i = 0; i < prof.length; i += 2) {
+    xa = Math.min(xa, prof[i]); xb = Math.max(xb, prof[i]); ya = Math.min(ya, prof[i + 1]); yb = Math.max(yb, prof[i + 1]);
+  }
+  const hx = (xb - xa) / 2, hy = (yb - ya) / 2;
+  for (let i = 0; i < prof.length; i += 2) {
+    const x = prof[i], y = prof[i + 1];
+    ids.push(sideV(b, x, y, z, 0, 0, nz, x * -nz, y, hx, rel(x - xa - hx, hx), hy, rel(y - ya - hy, hy)));
   }
 }
 export const extrudeTris = (n: number, caps = 3): number => 2 * n + ((caps & 1) ? n - 2 : 0) + ((caps & 2) ? n - 2 : 0);
@@ -590,19 +686,22 @@ export function extrudeBevel(b: PartBuilder, prof: readonly number[], z0: number
     const l = Math.hypot(prof[j * 2] - prof[i * 2], prof[j * 2 + 1] - prof[i * 2 + 1]);
     const ax = prof[i * 2], ay = prof[i * 2 + 1], bx = prof[j * 2], by = prof[j * 2 + 1];
     const iax = inner[i * 2], iay = inner[i * 2 + 1], ibx = inner[j * 2], iby = inner[j * 2 + 1];
-    // straight band
-    b.quad(b.v(ax, ay, z0 + cc, nx, ny, 0, acc, z0), b.v(bx, by, z0 + cc, nx, ny, 0, acc + l, z0), b.v(bx, by, z1 - cc, nx, ny, 0, acc + l, z1), b.v(ax, ay, z1 - cc, nx, ny, 0, acc, z1));
+    // straight band (edge coordinates across the side and along the whole length: the chamfers sit on the ends)
+    const hz = (z1 - z0) / 2, sz = (z: number): number => rel(z - z0 - hz, hz);
+    const V = (x: number, y: number, z: number, nz: number, u: number, v: number, su: number, k: number): number =>
+      sideV(b, x, y, z, nx * k, ny * k, nz, u, v, l / 2, su, hz, sz(z));
+    b.quad(V(ax, ay, z0 + cc, 0, acc, z0, -1, 1), V(bx, by, z0 + cc, 0, acc + l, z0, 1, 1), V(bx, by, z1 - cc, 0, acc + l, z1, 1, 1), V(ax, ay, z1 - cc, 0, acc, z1, -1, 1));
     // chamfer bands (normal halfway between side and cap)
     const k = Math.SQRT1_2;
-    b.quad(b.v(iax, iay, z0, nx * k, ny * k, -k, acc, z0), b.v(ibx, iby, z0, nx * k, ny * k, -k, acc + l, z0), b.v(bx, by, z0 + cc, nx * k, ny * k, -k, acc + l, z0 + cc), b.v(ax, ay, z0 + cc, nx * k, ny * k, -k, acc, z0 + cc));
-    b.quad(b.v(ax, ay, z1 - cc, nx * k, ny * k, k, acc, z1 - cc), b.v(bx, by, z1 - cc, nx * k, ny * k, k, acc + l, z1 - cc), b.v(ibx, iby, z1, nx * k, ny * k, k, acc + l, z1), b.v(iax, iay, z1, nx * k, ny * k, k, acc, z1));
+    b.quad(V(iax, iay, z0, -k, acc, z0, -1, k), V(ibx, iby, z0, -k, acc + l, z0, 1, k), V(bx, by, z0 + cc, -k, acc + l, z0 + cc, 1, k), V(ax, ay, z0 + cc, -k, acc, z0 + cc, -1, k));
+    b.quad(V(ax, ay, z1 - cc, k, acc, z1 - cc, -1, k), V(bx, by, z1 - cc, k, acc + l, z1 - cc, 1, k), V(ibx, iby, z1, k, acc + l, z1, 1, k), V(iax, iay, z1, k, acc, z1, -1, k));
     acc += l;
   }
   const tri = triangulate(inner);
   for (let e = 0; e < 2; e++) {
     const z = e === 0 ? z0 : z1, nz = e === 0 ? -1 : 1;
     const ids: number[] = [];
-    for (let i = 0; i < n; i++) ids.push(b.v(inner[i * 2], inner[i * 2 + 1], z, 0, 0, nz, inner[i * 2] * -nz, inner[i * 2 + 1]));
+    capVerts(b, inner, z, nz, ids);
     for (let t = 0; t < tri.length; t += 3) b.tri(ids[tri[t]], ids[tri[t + 1]], ids[tri[t + 2]]);
   }
 }
@@ -641,6 +740,9 @@ export function heightGrid(
     out[0] = nx2 / l; out[1] = ny2 / l; out[2] = nz2 / l;
   };
   const n3 = [0, 0, 0];
+  // edge coordinates from the grid parameters (the sheet's rim is its edge), half extents from its first row / column
+  const hi = Math.hypot(xOf(nx, 0) - xOf(0, 0), yOf(nx, 0) - yOf(0, 0), zOf(nx, 0) - zOf(0, 0)) / 2;
+  const hj = Math.hypot(xOf(0, nz) - xOf(0, 0), yOf(0, nz) - yOf(0, 0), zOf(0, nz) - zOf(0, 0)) / 2;
   for (let j = 0; j < nz; j++) {
     row?.(j);
     const r0: number[] = [], r1: number[] = [];
@@ -649,7 +751,7 @@ export function heightGrid(
         const jj = j + k;
         nrm(i, jj, n3);
         const x = xOf(i, jj), z = zOf(i, jj);
-        const id = b.v(x, yOf(i, jj), z, n3[0], n3[1], n3[2], x, z);
+        const id = b.v(x, yOf(i, jj), z, n3[0], n3[1], n3[2], x, z, b.ec(hi, (2 * i) / nx - 1), b.ec(hj, (2 * jj) / nz - 1));
         (k ? r1 : r0).push(id);
       }
     }

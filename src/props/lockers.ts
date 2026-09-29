@@ -62,8 +62,9 @@ function styleOf(l: ChunkLayout, s: number, cx: number, cz: number, li: number, 
   return { paint, tiers, numBase: 100 * (1 + ((hash4(h, line, 5, 1) >>> 7) % 8)) };
 }
 
-// enamel paint: a clearcoat lobe over the base (aux.z bit 1; dust dulls it, chunks/materialPost.ts)
-const paintMat = (c: RGB, k: number, rough = 0.38): void => B.mat(Mat.METAL_PAINTED, c[0] * k, c[1] * k, c[2] * k, 0, rough, true);
+// aged baked enamel: one satin layer (no clearcoat); the override scales the recipe's roughness, which keeps its
+// variation, and the runtime wear chips the door edges and the kick zone (chunks/family/props.ts)
+const paintMat = (c: RGB, k: number, rough = 0.26): void => B.mat(Mat.METAL_PAINTED, c[0] * k, c[1] * k, c[2] * k, 0, rough);
 
 /** 1..3 seven-segment digits centred at (cx, cy) on the plane z (facing +Z). */
 function digits(n: number, cx: number, cy: number, z: number): void {
@@ -88,41 +89,37 @@ function digits(n: number, cx: number, cy: number, z: number): void {
 
 /** One door (hinge on its -X edge) in the door-local frame: x 0..w, y 0..h, back at z = 0, front at z = DT. */
 function door(w: number, h: number, paint: RGB, tone: number, dent: number, seed: number, louvres: number, lowLouvres: number, num: number, lock: boolean): void {
-  paintMat(paint, tone);
-  // UVs are part-local metres: shift each door's sheet by a random texture offset (geometry unchanged) so the
-  // paint's scratches / rust spots do not repeat at the same place on every door
-  const ou = 1.2 * rnd(seed, 11), ov = 1.2 * rnd(seed, 12);
-  B.push();
-  B.translate(-ou, -ov, 0);
+  paintMat(paint, tone); // (the builder offsets each part's uv: doors do not repeat one texture region)
   if (dent > 0) {
     // front face as a sheet with a shallow dent (the shading carries it); bevelled rim on the other faces
-    bevelBox(B, ou, ov, 0, ou + w, ov + h, DT, 0.004, SKIP.NZ | SKIP.PZ);
+    bevelBox(B, 0, 0, 0, w, h, DT, 0.004, SKIP.NZ | SKIP.PZ);
     const dx = 0.1 + (w - 0.2) * rnd(seed, 1), dy = 0.2 + (h - 0.4) * rnd(seed, 2), r = 0.07 + 0.05 * rnd(seed, 3);
     const nx = 4, ny = 8;
-    B.translate(ou, ov + h, DT);
+    B.push();
+    B.translate(0, h, DT);
     B.rotX(Math.PI / 2); // grid (x, height, z) -> (x, -z, +height): height is the outward offset
-    B.translate(-ou, 0, -ov);
-    heightGrid(B, nx, ny, (i) => ou + (w * i) / nx, (i, j) => {
+    heightGrid(B, nx, ny, (i) => (w * i) / nx, (i, j) => {
       if (i === 0 || j === 0 || i === nx || j === ny) return 0;
       const px = (w * i) / nx - dx, py = h - (h * j) / ny - dy;
       return -dent * Math.exp(-(px * px + py * py) / (r * r));
-    }, (_i, j) => ov + (h * j) / ny, null);
+    }, (_i, j) => (h * j) / ny, null);
+    B.pop();
   } else {
-    bevelBox(B, ou, ov, 0, ou + w, ov + h, DT, 0.004, SKIP.NZ);
+    bevelBox(B, 0, 0, 0, w, h, DT, 0.004, SKIP.NZ);
   }
-  B.pop();
   // pressed louvres: a dark slot under a proud lip
   const lv = (y: number): void => {
     B.mat(Mat.METAL_PAINTED, DARK[0], DARK[1], DARK[2], 0, 0.6);
+    B.altKind(); // a shadow stand-in: never worn through
     rect(B, w / 2, y, DT + 0.0008, 0.09, 0, 0, 0, 0.0045, 0, 0, 0, 1);
     paintMat(paint, tone * 1.06);
     box(B, w / 2 - 0.095, y + 0.0045, DT, w / 2 + 0.095, y + 0.011, DT + 0.005, SKIP.NZ | SKIP.NX | SKIP.PX);
   };
   for (let k = 0; k < louvres; k++) lv(h - 0.07 - k * 0.028);
   for (let k = 0; k < lowLouvres; k++) lv(0.06 + k * 0.028);
-  // number plate (aluminium, dark digits) above the louvres
+  // number plate (anodised aluminium, dark digits) above the louvres
   const py = h - 0.035;
-  B.mat(Mat.METAL_PAINTED, 0.45, 0.45, 0.43, 0, 0.3);
+  B.mat(Mat.METAL_BARE, 0.8, 0.8, 0.78, 0, 0.35);
   box(B, w / 2 - 0.028, py - 0.012, DT, w / 2 + 0.028, py + 0.012, DT + 0.002, SKIP.NZ);
   B.mat(Mat.METAL_PAINTED, DARK[0], DARK[1], DARK[2], 0, 0.5);
   digits(num, w / 2, py, DT + 0.0026);
@@ -130,13 +127,13 @@ function door(w: number, h: number, paint: RGB, tone: number, dent: number, seed
   const hy = h > 1.2 ? 0.9 : h * 0.5;
   B.mat(Mat.METAL_PAINTED, 0.03, 0.03, 0.03, 0, 0.5);
   box(B, w - 0.062, hy - 0.06, DT, w - 0.03, hy + 0.06, DT + 0.002, SKIP.NZ);
-  B.mat(Mat.METAL_PAINTED, 0.55, 0.55, 0.53, 0, 0.18);
+  B.mat(Mat.METAL_BARE, -1, -1, -1, 0, 0.12); // chrome-plated lift handle
   box(B, w - 0.054, hy - 0.045, DT + 0.002, w - 0.038, hy + 0.045, DT + 0.018, SKIP.NZ);
   if (lock) {
-    // padlock hanging from the hasp
-    B.mat(Mat.METAL_PAINTED, 0.4, 0.3, 0.1, 0, 0.25);
+    // padlock hanging from the hasp: tarnished brass body, steel shackle
+    B.mat(Mat.METAL_BARE, 0.78, 0.56, 0.26, 0, 0.35);
     box(B, w - 0.066, hy - 0.11, DT + 0.004, w - 0.026, hy - 0.07, DT + 0.02, 0);
-    B.mat(Mat.METAL_PAINTED, 0.55, 0.55, 0.53, 0, 0.18);
+    B.mat(Mat.METAL_BARE, -1, -1, -1, 0, 0.25);
     box(B, w - 0.058, hy - 0.07, DT + 0.009, w - 0.052, hy - 0.045, DT + 0.015, 0);
     box(B, w - 0.04, hy - 0.07, DT + 0.009, w - 0.034, hy - 0.045, DT + 0.015, 0);
   }
@@ -189,6 +186,7 @@ function side(y0: number, top: number, st: Style, sideSeed: number, along: numbe
       } else {
         // dark door-gap backing
         B.mat(Mat.METAL_PAINTED, DARK[0], DARK[1], DARK[2], 0, 0.7);
+        B.altKind();
         rect(B, x0 + w / 2, yb + hT / 2, D, w / 2, 0, 0, 0, hT / 2, 0, 0, 0, 1);
       }
       B.push();

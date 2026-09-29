@@ -565,9 +565,11 @@ export const Mat = {
   CMU_PAINTED: 12, POOL_TILE: 13, POOL_MOSAIC: 14, METAL_PAINTED: 15, METAL_RUST: 16, METAL_GRATE: 17,
   WOOD: 18, PLASTIC: 19, FABRIC_PARTITION: 20, PLENUM: 21, RUBBER: 22, SIGNAGE: 23, DECAL_ATLAS: 24,
   FLOOR_PAINT: 25, TERRAZZO: 26, METAL_DECK: 27, // 27 was SPARE_27: corrugated roof deck (WAREHOUSE TRUSS ceilings)
+  // texture realism v2 reserved layers (placeholder recipes; nothing places them in the world until their lanes do)
+  CMU_RAW: 28, METAL_BARE: 29,
 } as const;
 export type MatId = ValueOf<typeof Mat>;
-export const MAT_COUNT = 28;
+export const MAT_COUNT = 30;
 
 // DECAL_ATLAS / SIGNAGE layers are 4x4 atlases; slot s occupies uv [(s%4)/4, floor(s/4)/4] .. +1/4
 export const DecalKind = {
@@ -678,18 +680,19 @@ export const VFlag = {
 } as const;
 
 // ---------------------------------------------------------------- debug views (int uniform; no recompiles)
-// 16-23 belong to the graphics-realism packages (black until their package lands); the materials harness's private
-// anti-tiling rotation view is index 63
+// 16-23 belong to the graphics-realism packages (black until their package lands), 24-26 to texture realism v2; the
+// materials harness's private anti-tiling rotation view is index 63
 export const DebugView = {
   FINAL: 0, ALBEDO: 1, NORMAL: 2, ROUGHNESS: 3, LIGHTMAP: 4, DIRECTIONALITY: 5, AO: 6, FLICKER: 7,
   MASK: 8, LAYER: 9, TEXEL: 10, ZONE: 11, ROOM: 12, UV: 13, EMISSION: 14, LIGHT_VOLUME: 15,
   WETNESS: 16, HEIGHT: 17, VOLUMETRIC: 18, BOUNCE: 19, WATER: 20, PROBE: 21, SPECW: 22, SSAO: 23,
+  AUX: 24, TEXTILE: 25, RELIEF: 26,
 } as const;
 export type DebugViewId = ValueOf<typeof DebugView>;
 export const DEBUG_VIEW_NAMES: readonly string[] = [
   'final', 'albedo', 'normal', 'roughness', 'lightmap', 'directionality', 'ao', 'flicker', 'mask', 'layer',
   'texel', 'zone', 'room', 'uv', 'emission', 'lv', 'wetness', 'height', 'volumetric', 'bounce', 'water', 'probe',
-  'specw', 'ssao',
+  'specw', 'ssao', 'aux', 'textile', 'relief',
 ];
 ```
 
@@ -1624,7 +1627,7 @@ export type { Vec3 };
 
 import { Mat, type MatId, SurfaceSound, type SurfaceSoundId } from './ids.ts';
 
-export type GrimeProfile = 'carpet' | 'wallpaper' | 'ceilingTile' | 'concrete' | 'tile' | 'metal' | 'none';
+export type GrimeProfile = 'carpet' | 'wallpaper' | 'ceilingTile' | 'concrete' | 'tile' | 'metal' | 'paint' | 'masonry' | 'none';
 
 export interface MaterialLayerDef {
   id: MatId;
@@ -1648,15 +1651,15 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 1, name: 'CARPET_L0', repeat: 2.4, tileSize: 0, hexTile: 1.2, albedoMean: [0.33, 0.25, 0.1], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.35, reflective: true },
   { id: 2, name: 'CEILING_TILE', repeat: 1.2, tileSize: 0.6, albedoMean: [0.6, 0.56, 0.44], roughness: 0.9, metal: 0, grime: 'ceilingTile', sound: S.CARPET, absorption: 0.6, reflective: false },
   { id: 3, name: 'PANEL_LENS', repeat: 0.6, tileSize: 0, albedoMean: [0.7, 0.7, 0.68], roughness: 0.3, metal: 0, grime: 'none', sound: S.METAL, absorption: 0.05, reflective: false },
-  { id: 4, name: 'TRIM_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.45, 0.4, 0.3], roughness: 0.5, metal: 0, grime: 'wallpaper', sound: S.WOOD, absorption: 0.05, reflective: false },
+  { id: 4, name: 'TRIM_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.45, 0.4, 0.3], roughness: 0.5, metal: 0, grime: 'paint', sound: S.WOOD, absorption: 0.05, reflective: false },
   { id: 5, name: 'WALLPAPER_MANILA', repeat: 1.2, tileSize: 0, albedoMean: [0.5, 0.42, 0.28], roughness: 0.8, metal: 0, grime: 'wallpaper', sound: S.CARPET, absorption: 0.1, reflective: false },
   { id: 6, name: 'CARPET_OFFICE', repeat: 2.4, tileSize: 0.6, albedoMean: [0.12, 0.13, 0.15], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.3, reflective: false },
-  { id: 7, name: 'DRYWALL', repeat: 2.4, tileSize: 0, albedoMean: [0.62, 0.6, 0.55], roughness: 0.85, metal: 0, grime: 'wallpaper', sound: S.CONCRETE, absorption: 0.08, reflective: false },
+  { id: 7, name: 'DRYWALL', repeat: 2.4, tileSize: 0, albedoMean: [0.62, 0.6, 0.55], roughness: 0.85, metal: 0, grime: 'paint', sound: S.CONCRETE, absorption: 0.08, reflective: false },
   { id: 8, name: 'VINYL_VCT', repeat: 1.2, tileSize: 0.3, albedoMean: [0.45, 0.43, 0.38], roughness: 0.35, metal: 0, grime: 'tile', sound: S.VINYL, absorption: 0.03, reflective: true },
   { id: 9, name: 'CONCRETE_FLOOR', repeat: 4.8, repeatY: 3.0, tileSize: 0, hexTile: 2.4, albedoMean: [0.3, 0.29, 0.27], roughness: 0.6, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: true },
   { id: 10, name: 'CONCRETE_WALL', repeat: 2.4, repeatY: 1.5, tileSize: 0, albedoMean: [0.35, 0.34, 0.32], roughness: 0.85, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.03, reflective: false },
   { id: 11, name: 'CONCRETE_CEIL', repeat: 4.8, repeatY: 3.0, tileSize: 0, albedoMean: [0.33, 0.32, 0.3], roughness: 0.9, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.03, reflective: false },
-  { id: 12, name: 'CMU_PAINTED', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.5, 0.5, 0.46], roughness: 0.5, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.05, reflective: false },
+  { id: 12, name: 'CMU_PAINTED', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.5, 0.5, 0.46], roughness: 0.5, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.05, reflective: false },
   { id: 13, name: 'POOL_TILE', repeat: 1.2, tileSize: 0.15, albedoMean: [0.72, 0.76, 0.76], roughness: 0.08, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 14, name: 'POOL_MOSAIC', repeat: 0.6, tileSize: 0.3, albedoMean: [0.35, 0.6, 0.65], roughness: 0.1, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 15, name: 'METAL_PAINTED', repeat: 1.2, repeatY: 1.0, tileSize: 0, albedoMean: [0.4, 0.4, 0.38], roughness: 0.45, metal: 0.2, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
@@ -1672,6 +1675,10 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 25, name: 'FLOOR_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.65, 0.6, 0.2], roughness: 0.5, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: false },
   { id: 26, name: 'TERRAZZO', repeat: 2.4, tileSize: 0, albedoMean: [0.5, 0.48, 0.44], roughness: 0.25, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 27, name: 'METAL_DECK', repeat: 1.2, tileSize: 0, albedoMean: [0.3, 0.3, 0.29], roughness: 0.5, metal: 0.6, grime: 'metal', sound: S.METAL, absorption: 0.05, reflective: false },
+  // texture realism v2 layers: CMU_RAW (lane C: PIPEWORKS walls, service corridors), METAL_BARE (lane E: chrome and
+  // stainless prop hardware)
+  { id: 28, name: 'CMU_RAW', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.38, 0.372, 0.346], roughness: 0.9, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.07, reflective: false },
+  { id: 29, name: 'METAL_BARE', repeat: 0.6, tileSize: 0, albedoMean: [0.56, 0.56, 0.56], roughness: 0.3, metal: 1, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
 ];
 export const layerRepeatY = (d: MaterialLayerDef): number => d.repeatY ?? d.repeat;
 /** The only layers WP4 may use on tower shell geometry (edges and periodic solids). No trims inside towers. */
@@ -4059,7 +4066,7 @@ export function createBakeCache(): BakeCache;
 
 ### WP8: Procedural textures (GPU)
 
-**Goal:** 28 tileable PBR layers at 1024² (512² on low) that read as real materials at 1–3 m, generated on the GPU in < 400 ms behind the loading screen. Measured albedo must match `LAYER_DEFS`.
+**Goal:** 30 tileable PBR layers (28 placed, 2 reserved by texture realism v2) at 1024² (512² on low) that read as real materials at 1–3 m, generated on the GPU in < 400 ms behind the loading screen. Measured albedo must match `LAYER_DEFS`.
 
 **Files:** `src/textures/*`, `harness/materials.html`, `src/harness/materials.ts`, `tests/textures/*`.
 
@@ -4093,7 +4100,7 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
    1. Recipe with `uOut = HEIGHT` → scratch.
    2. Recipe with `uOut = ALBEDO` → `setRenderTarget(albedoRT, L)`. **Recipes output LINEAR albedo**: the target is SRGB8_ALPHA8 and the hardware encodes on write (three treats render-target output as linear working space). `Surf.albedo` is linear; recipe constants written as sRGB bytes go through `srgbToLinear()` in `glsl/common.ts`.
    3. Recipe with `uOut = ORMH` (cavity AO from the scratch height: horizon-based, along 8 azimuths the steepest rise over radii 1-16 texels, V = 1 − mean(sin² h), the cosine-weighted visibility) → `setRenderTarget(ormhRT, L)`.
-   4. Normal pass: a wrap-sampled Sobel over the scratch × `heightScale` × `normalStrength` → `setRenderTarget(normalRT, L)`. `normalStrength` > 1 where the authored height field is smoother than the real surface at its real depth (heightScale also drives POM, the cavity and the puddle shorelines): WALLPAPER_L0 / MANILA ×6, DRYWALL ×10, TRIM_PAINT ×4, CONCRETE_FLOOR ×6, CONCRETE_WALL ×5, CONCRETE_CEIL ×3, which brings their mip-0 slopes from 0.3-1.4° to the 3-5° of embossed vinyl, knockdown and board-formed concrete (tan θ mean ~0.06-0.08; the slab 0.02, manila and trim 0.015). These layers now carry visible wall and slab texture, so props that need a plain matte surface do not borrow them: kraft boxes and bottle labels use PLASTIC with a 0.85 roughness override (on DRYWALL the boxes read as stucco).
+   4. Normal pass: a wrap-sampled Sobel over the scratch × `heightScale` × `normalStrength` → `setRenderTarget(normalRT, L)`. `normalStrength` > 1 where the authored height field is smoother than the real surface at its real depth (heightScale also drives POM, the cavity and the puddle shorelines): WALLPAPER_L0 / MANILA ×6, DRYWALL ×10, TRIM_PAINT ×4 (the concrete layers use physical amplitudes since texture realism v2 lane B: CONCRETE_FLOOR ×1.75, CONCRETE_WALL ×2, CONCRETE_CEIL ×1.5), which brings their mip-0 slopes from 0.3-1.4° to the 3-5° of embossed vinyl, knockdown and board-formed concrete (tan θ mean ~0.06-0.08; the slab 0.02, manila and trim 0.015). These layers now carry visible wall and slab texture, so props that need a plain matte surface do not borrow them: kraft boxes and bottle labels use PLASTIC with a 0.85 roughness override (on DRYWALL the boxes read as stucco).
 4. **Before the final draw into each array target, set `texture.generateMipmaps = true`.** `renderer.render()` then calls `updateRenderTargetMipmap` for the current target: one `generateMipmap(TEXTURE_2D_ARRAY)` per target. Mutable storage was verified via `texImage3D`.
 5. `setRenderTarget(null)`. Yield to the main thread every 4 layers (`await new Promise(requestAnimationFrame)`) and report progress.
 6. **Signage and decals.**
@@ -4104,42 +4111,45 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
    **Water normals** (512², RG): 2 octaves of periodic gradient noise.
    **Cookie** (512², RGBA16F; package F): the beam profile of `lighting/flashlightOptics.ts` (`beamProfileGlsl`: a softly square LED-die core, a dark ring, a yellow phosphor ring, corona, flat spill, reflector lip, crisp rim) times lens dirt and a thumb smudge, cool core / warm spill. The texture spans `CONE × MAP_FOCUS` (see WP11 §4).
 8. **Detail maps** (package B, only when `QualityConfig.detailMaps`: boot generates them after the layers, a quality
-   switch lazily; `TextureSet.detail`). One `WebGLArrayRenderTarget(512, 512, 12)` RGBA8, linear, trilinear + anisotropic,
+   switch lazily; `TextureSet.detail`). One `WebGLArrayRenderTarget(512, 512, 21)` RGBA8, linear, trilinear + anisotropic,
    repeat, over a 0.3 m frame (divides NOISE_WRAP, STOREY_PITCH and TILE_SIZE). Recipes (`textures/detail.ts`, the layer
    recipe environment): D0 cut pile, D1 loop pile, D2 embossed vinyl paper, D3 rolled paint, D4 fine concrete (sand,
    pinholes), D5 mineral fibre, D6 glaze waviness, D7 basket weave, D8 brushed sheet, D9 open wood grain, D10 haircell, D11
-   the puddle ripple. Per layer: HEIGHT → the shared scratch, then the pack pass (`DETAIL_MAIN`, the normal pass's Scharr
+   the puddle ripple, D12-D20 the texture realism v2 slots (below). Per layer: HEIGHT → the shared scratch, then the pack pass (`DETAIL_MAIN`, the normal pass's Scharr
    slope `br_slope`): rg = mean slope / S, b = albedo multiplier × AO × cavity / 2, a = E[|slope|²] / 2S², S about 4 × the
    layer's rms slope (harness `extra=detail`, `stats().detailMoments`). The box-filtered mips keep both slope moments
    exact (LEAN). ~15 MiB, ~15 ms compile + ~20 ms generation.
 
-**Recipes** (`uv.x` ∈ [0,1) spans `repeat` metres and `uv.y` spans `layerRepeatY` metres, so layers with `repeatY` are authored in a non-square frame; all noise is periodic with an integer period, so every layer tiles). Output `Surf{ albedo (linear), alpha, height, rough, metal, ao, emissive }`.
+**Recipes** (`uv.x` ∈ [0,1) spans `repeat` metres and `uv.y` spans `layerRepeatY` metres (or the recipe's generator `frame`, texture realism v2), so layers with `repeatY` are authored in a non-square frame; all noise is periodic with an integer period, so every layer tiles). Output `Surf{ albedo (linear), alpha, height, rough, metal, ao, emissive, aux, lean }` (aux and lean: texture realism v2, below).
 - **Sampling limits.** Every periodic feature spans ≥ 3 texels at 1024² (and at 512² on low), or is supersampled 4× inside the generator (box-filtered), so no moiré is baked into the texture.
 - **No one-off features in short repeats.** Anything that must not visibly repeat (lifted wallpaper edges, fades, carpet blotches, oil spots) is NOT in the layer texture; it comes from the world-space grime/mask path (WP7 mask, WP9 hashed world features) instead.
 
 | Layer | Recipe essentials |
 |---|---|
-| WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls with ±2% shade offset. Faint damask/chevron SDF motif on a 0.3 m diamond lattice (±4% value, embossed height 0.2 mm). Vertical roll-seam ridge. Paper fibre fbm at 1 mm (supersampled), slight cockle (~0.25 mm over 7 cm). Satin vinyl, roughness 0.63–0.72. (Lifted edges and fading come from the WP7 mask.) |
-| CARPET_L0 | Loop-pile micro grid (period 3 mm, **supersampled 4×**: it is below the 2.3 mm texel Nyquist limit, so the texture holds its filtered average plus pile normals) × Worley tufts. Isotropic strand speckle (no directional streaks: the layer uses hex tiling without rotation). Colour mottling (±6%). Roughness 0.95. (Macro blotches come from the mask.) |
-| CEILING_TILE | 2×2 tiles of 0.6 m. Mineral-fibre fissures (thresholded warped ridged noise, "worm holes") plus pinholes. Raised 24 mm off-white T-bar grid (roughness 0.45, metal 0.3, height step). Per-tile brightness ±3%. Slight yellowing. |
+| WALLPAPER_L0 | Base mustard sRGB ≈ (173,158,97) = linear (0.42, 0.34, 0.12), matching `albedoMean` (decided here; WP7 and WP8 both use the table). Two 0.6 m rolls (texture realism v2: per-roll shade ±0.8 %, warmth ±0.5 % and sheen ±0.03 in the walls family). The Level 0 photo's print: vertical stripes on a 0.15 m pitch, a darker ink band with a column of stacked chevrons and pinlines, surface-printed flat ink (−22 %, roughness 0.48, gravure density streaks, 0.2 mm misregistration), no fleur and no stamped relief. A fabric-look ground printed and embossed in register: strie of 2.5-17 mm streaks (±5 %), raised slub dashes (+4 %), cockle only the sheen shows. Satin vinyl, roughness 0.52 (glue at the seam 0.46; the lamps' sheen shows the emboss at grazing views). D2 is a 1.8 mm over-under vinyl weave at a 0.15 m detail repeat. normalStrength 2.5, heightScale 0.4 mm. |
+| CARPET_L0 | Worn cut pile (saxony), 1.2 m frame, hex tiled at 0.6 m (no autocorrelation peak above 0.02 at 0.6 or 1.2 m lags, top-down view=albedo). ormh.r = pile visibility V (mean 0.61, p5 0.24: 3.3 mm tuft tips shifted along their lean, dark cracks and holes between them, clumps of ~20 mm that differ in fullness ±15 % and part in short dark runs where neighbours lean apart, ~20 % matted patches); ormh.b/a = the pile lean (aux `lean`). Albedo = the fibre colour: per-clump ±5 % and per-tuft ±7 % value, ±2 % hue, heathered off-shade tufts (5 % olive-brown, 3 % straw, 1 % near-black), paler and less saturated tips, ±4 % mottle, sparse lint; no crown / crease shading (that is V). heightScale 4 mm, normalStrength 0.45, roughness 0.86-1. Detail D0. Shading, nap and grime: Lane A below. |
+| CEILING_TILE | 2×2 wet-felted mineral-fibre tiles of 0.6 m in a 24 mm T-bar grid. Fissures are a capsule scatter on 7, 11 and 22 mm jittered grids (tapered, bent, ragged, 1.5-3 mm deep, ~12 % of the face, their density varying in 8 cm patches), read through the cavity AO (ormh.r mean 0.94, cores ~0.55) with the albedo only −12 %; no pinholes in the base (they are D5, with the fibre grain). The bar is dielectric baked enamel (sRGB 236, 234, 228, roughness 0.33, metal 0) with a rounded hem and a thin cut-core line beside it; ormh.a is the detail mask (1 − bar). Per-tile brightness ±3 %, slight yellowing. heightScale 4 mm, normalStrength 1.5, EON σ 0.6. |
 | PANEL_LENS | Prismatic pyramid grid (4 mm) in the normal map. Two tube hot-stripes in the emissive mask (`ormh.a`, used by the low preset only; scaled so the lens mean matches the old framed texture). One continuous sheet: no frame per 0.6 m repeat (a 2x4 used to read as two squares, a sky panel as four). Albedo pale grey-white. |
-| TRIM_PAINT | Semi-gloss paint, orange peel, edge scuffs. |
-| WALLPAPER_MANILA | Beige vertical pinstripes, 0.15 m pitch, linen emboss, cockle; satin roughness ~0.72. |
-| CARPET_OFFICE | 0.6 m carpet tiles, pile direction rotated per tile (roughness and normal sheen), blue-grey speckle. |
-| DRYWALL | Roller stipple, eggshell. |
-| VINYL_VCT | 0.3 m tiles, ±4% tint per tile, chips, wax sheen (roughness 0.3–0.45). |
-| CONCRETE_FLOOR | Aggregate speckle, a few exposed pebbles, trowel swirls with burnished burns (darker, −0.14 roughness), Worley F2−F1 crack network, curing mottle, chalky laitance, a soft unimodal sheen field (roughness 0.44–0.6). (Oil spots are decals.) Isotropic enough to also serve stair risers (frame 4.8 × 3.0 m). |
-| CONCRETE_WALL | Frame 2.4 × 1.5 m: formwork seams every 1.2 m horizontally and 1.5 m vertically, tie holes. heightScale 20 mm with the face at 0.9 (POM top 0.92) and 18 mm deep conical tie holes. |
-| CONCRETE_CEIL | Board-form grain. |
-| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses), recessed mortar with pooled (glossier, darker) paint, paint over pores and bridged voids, each block face tilted ±0.35°. heightScale 14 mm: ~6 mm tooled joints (POM). |
-| POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.75. Crazing on a quarter of the tiles, a hazy glaze rim at the joint. 3 mm grout, light grey, roughness 0.7. |
-| POOL_MOSAIC | 2.5 cm aqua mosaic, per-chip tilt ±0.5°. |
-| METAL_PAINTED, METAL_RUST, METAL_GRATE | Chipped paint; rust mask (fbm threshold plus downward streaks); grate with dark holes (albedo plus height). |
-| WOOD, PLASTIC, FABRIC_PARTITION, PLENUM, RUBBER | Standard recipes. |
-| FLOOR_PAINT | Yellow or white worn paint, alpha from threshold noise. |
-| TERRAZZO | Chips in a grey matrix, polished (roughness 0.13–0.2, pits and brass strips rougher). |
-| METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms. Frame 1.2 m. |
-| METAL_PAINTED | Frame 1.2 × 1.0 m. |
+| TRIM_PAINT | Semi-gloss paint, orange peel, brush drag, edge scuffs and dings; chips to the MDF come from the paint profile (walls family). |
+| WALLPAPER_MANILA | Beige paper-backed vinyl, satin ~0.72. Two flat 0.9 mm ink pinstripes at ±1.75 mm every 0.15 m (a symmetric dip under 10 %, no light line, ±0.2 mm wobble). A linen ground printed and embossed in register (4 mm warp and weft streaks ±3.5 %, 2.5 mm slub dashes); the single threads are D17 at a 0.15 m detail repeat. |
+| CARPET_OFFICE | Level-loop carpet tiles (0.6 m) over a 1.2 m frame; the loop rows run along u in every tile and the shader's per-tile rotation lays them quarter-turn / random. Tweed flecks 5-15 mm long along the rows (charcoal 45 %, slate 33 %, light grey 13 %, black 7 %, teal or rust 2 %, a palette that hits the table albedo within 3.5 %) on 2.34 mm rows of exactly 2 texels (rows off the texel grid beat into moire), per-row streaks, ±3 % dye per texture tile, a fine seam hidden by the pile in 10-40 mm runs. V 0.78 (row gaps), lean = the row direction × 0.3, roughness 0.86-0.92. Detail D1. |
+| DRYWALL | Latex eggshell (roughness 0.62) from a 3/8" nap roller: mottle, 0.24 m roller laps, taped joints every 1.2 m (crowned 0.075 mm, smoother and glossier at 0.55, detail mask 0.6). The orange peel is D16 (1.8-2.5 mm craters and peaks, rms slope 0.05); screw spots, pops, patches, scuffs, blisters and flakes to the primer come from the paint profile. |
+| VINYL_VCT | 0.3 m tiles. Calendered vinyl chips in three populations (dark 30 %, light 25 %, accents and charcoal 12 %) stretched 3:1 along u (the per-tile rotation lays them quarter-turn) over faint marbling; 30–40 % of the face is > 6 % off the tile median. Tile tone ±3 %, 4 % other-lot tiles at ±6 %. Continuous 0.3 mm butt joints with a 1 mm dirt fillet, dirt-filled corner chips on 5 % of the tiles. Wax 0.2–0.28 (joints 0.6); glaze lobe 0.22, rough component 0.7. |
+| CONCRETE_FLOOR | Square 2.4 m generator frame (2.34 mm texels, hex cell 1.2 m; the tower risers, v = y / 3.0, stretch it 1.25×). A hard-troweled slab is flat, so it reads through tone and sheen: soft clouds, lacy hydration mottle, flush aggregate shadows, dark specks and light / dark flecks, 4–8 mm pinholes with dirty cores (2 mm deep: pits, never beads), serpentine power-trowel passes (0.45–0.58 m discs, the last pass wins: fish-scale rims and partial blade arcs) with burnished zones (darker, glossier) and chalky laitance, dragged-load scratches, ±1 mm waviness; roughness 0.35–0.8, darker = glossier. ormh.a (`mask`) holds the trowel swirl outside the laitance. Detail D12 SLAB. Joints, spalls, cracks, pours, traffic lanes and finish classes are world-space (WP9, lane B). (Oil spots are decals.) |
+| CONCRETE_WALL | Frame 2.4 × 1.5 m, plywood-formed (`formFace`, shared with CONCRETE_CEIL): 1.2 × 1.5 m sheets with their own tone (±10 %), bleed toward the lift bottom, lippage and stud pillowing; clustered log-normal bug holes (0.6–7 mm, denser toward the top of each lift, taller than wide, 30 % half-skinned); fins intact or broken into scars, grout-leak lines, one-sided sand streaks; the rotary-cut plywood grain with boat patches; satin skin (0.72) with matte torn patches and satin form-oil blotches. heightScale 20 mm with the face at 0.9 (POM top 0.92; lippage only sets sheets back) and 18 mm deep snap-tie cones: open with a rusty rod end (60 %), grout plugs (25 %), plastic cones (15 %). The shader adds a per-sheet world tone and sheen. |
+| CONCRETE_CEIL | Square 2.4 m frame: the plywood-formed face at 1.2 × 2.4 m sheets, few bug holes, rebar ghosting on some sheets, tie-wire rust dots. |
+| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses, third bond), from the `cmuBlock()` body it shares with CMU_RAW. Each block's face is inset 4–6 mm per side with a ±0.6 mm wavy arris (joints 8–12 mm), rounded over 2 mm; the mortar is tooled concave (7 mm jointer, 4.5 mm deep) with burrs on ~12 % of the joint length. Faces: lippage ±0.45 mm (each world block is tilted ±0.37° by the shader), 6–10 mm aggregate pits up to 1.6 mm deep and low crowns, an open-texture field per block that drives the ≥ 3 mm voids (painted: shallow, rim-rounded, albedo × 0.96), chips on 10 % of the edges and 25 % of the corners (≤ 8 mm, 65 % painted over), roller lap bands, joints × 0.86 (pooled paint and dust). Roughness: face 0.52, voids 0.72, joints 0.58, fresh chips 0.85. `ormh.a` is the detail mask (1 on faces, 0.3 in joints). Everything under 3 mm is D14 CMU_FACE's. heightScale 6 mm with the face at 0.79, POM top 0.95 (the relief fills the height range, so the march spends no steps above the faces). |
+| CMU_RAW | The same blocks unpainted: light natural grey, salt-and-pepper, sRGB (166, 164, 159), ±4 % per block (the shader adds ±6 %) and 20 % batch casts, voids × 0.5, fresh chips × 0.8, a lighter sandy mortar (the block colour × 1.16 / 1.15 / 1.12, sRGB (177, 175, 167)) with a faint efflorescence haze, roughness 0.9 / 0.92, detail D15 CMU_RAW. PIPEWORKS walls, service corridors and loading bays. |
+| POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.76. Hand-set joints: each face is inset 1.2–1.9 mm per side with a ±0.25 mm wobble. A fat-edge glaze ridge on the cushion; batch shade ±4 %, 5 % cream and 3 % blue-white tiles; crazing (a 0.8 mm net plus hairlines) on 12 %; conchoidal chips showing the buff bisque on 6 %; a hazy glaze rim at the joint. Sanded grout sRGB (176, 178, 170), concave, roughness 0.8. `ormh.a` is the grout coverage: the shader colours the grout along its lines in world space. |
+| POOL_MOSAIC | 2.5 cm glass mosaic on 0.3 m sheets, with wider joints at the sheet edges. Chips with 2 mm rounded corners (grout diamonds), a 1 mm edge round, a 0.15 mm dome, lippage ±0.25 mm and tilt ±0.5°. Five related hues (±6°, value 0.83–1.19) plus 5 % accents. The colour sits inside the glass: cloud (±8 %), streaks, bubbles in 5 % of the chips, a darker, more saturated edge band. Chip roughness 0.05–0.08, grout 0.8; `ormh.a` is the grout coverage. |
+| METAL_PAINTED, METAL_RUST, METAL_GRATE | Lane E (below): a neutral wear-ready topcoat with oil-canning, a wear field (ormh.a) and a scratch field (albedo.a); the corrosion order and its stages (paint remnants at runtime); galvanised 19-W-4 grating with dark holes. |
+| FABRIC_PARTITION | Polyester basket weave seen from 1-3 m (the 1.17 mm threads are detail D7's): faint horizontal barre streaks (±3 % and ±2 %), two-tone heather (× 0.82 / × 1.14, softened along the thread axes), 2 % slubs 4-10 mm long, 2 % pills, cloth waviness (0.8 mm over 5-20 cm, normalStrength 2) for the grazing sheen. V 0.88, roughness 1. Also dresses upholstery, seats, bags and mattresses. |
+| WOOD, PLASTIC, RUBBER | Lane E (below): boards cut from their own logs (cathedral arches, butt joints, finish-wear field); moulded plastic with flow lines, sink marks and a scuff field; black rubber with bloom and crazing. |
+| PLENUM | Standard recipe. |
+| FLOOR_PAINT | A 0.25 mm film (yellow or white by tint). On stripes u runs across and v along (mesh/decals.ts): wheel-track bands with tyre dirt, wear that takes the slab's high points first (a pore stipple, not blobs), roughness 0.4 fresh to 0.6 worn. Edge flakes, joints, the slab's detail and wetness come from the shader. |
+| TERRAZZO | 0.6 m precast tiles (repeat 1.2, tileSize 0.6): polygonal crushed-marble chips (Voronoi cells shrunk by a per-chip gap at 15, 6 and 3 mm lattices, ~70–75 % coverage) in a restrained palette (white, light grey, buff, charcoal, rare muted accents) with per-chip value, a tone gradient and veins; chips 0.07–0.1, matrix 0.16–0.22 (and ~20 µm lower), pits 0.4, 1.5 mm grout 0.7; per-tile tilt ±0.15° and lippage, so reflections step at the joints. Detail D13 POLISH. |
+| METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms, white-rust blooms and drip lines in the rib bottoms (lane E). Frame 1.2 m. |
+| METAL_PAINTED | Frame 1.2 × 1.0 m (props map v by the 1.0 m repeatY too). |
 
 **Acceptance**
 - `tests/textures`: `LAYER_RECIPES` covers every `MatId`; every GLSL snippet declares `gen`.
@@ -4148,6 +4158,421 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
   - The page calls `__backrooms.layerAlbedoCheck()`, and every layer is within 10% of its `albedoMean` per channel (absolute floor 0.01). The check is a **reduction shader over mip level 0** (decoded to linear before averaging), not the driver's sRGB 1×1 mip (some drivers average sRGB mips in gamma space).
   - `tileSeamCheck` max edge delta < 2/255.
 - Generation time < 400 ms at 1024 on the target machine, plus shader compile ≤ 1.5 s under ANGLE (both logged separately and counted in the boot budget).
+
+**Texture realism v2 conventions (TEX2; `docs/contract-changes/TEX2.md`).** The v2 lanes code against these; lane 0
+(foundation) set them up without changing a pixel.
+- **Recipe rows.** Each family file declares its layers as `RecipeBody = { glsl, normalStrength, heightScale, trim?,
+  phys, aux?, aux2?, frame? }` (`textures/layers/types.ts`): the albedo calibration trim (was the `TRIM` table of
+  `registry.ts`) and the `SurfacePhys` row (was `SURFACE_PHYS` in `chunks/params.ts`, which now collects the rows from
+  `LAYER_RECIPES_FULL`) sit next to the GLSL. Family files: `layers/carpet.ts` (A), `layers/concrete.ts` (B: slabs,
+  formwork, soffit, FLOOR_PAINT, TERRAZZO), `layers/masonry.ts` (C: CMU_PAINTED, CMU_RAW), `layers/tile.ts` (C),
+  `layers/wallpaper.ts` and `layers/ceiling.ts` (D), `layers/metal.ts` and `layers/misc.ts` (E); SIGNAGE and
+  DECAL_ATLAS stay in `signage.ts` / `decals.ts`.
+- **SurfacePhys v2 fields**, all neutral by default (`phys(por, {...})`): `sigma` (EON diffuse roughness, 0 = Lambert),
+  `pile` [kp, kv] (0 = off; kp > 0 also skips the baked-light cavity visibility), `detRep` (detail repeat scale, 1; the
+  repeat 0.3 m × detRep must still divide 19.2, 3.0 and NOISE_WRAP), `detTint` (rgb, 0), `detSO` (detail cavity into
+  specular occlusion, 0), `dirt` / `wear` ([r, g, b, amount], amount 0), `reliefM` (metres of full convexity, 0.001).
+  They reach the shaders as GLSL const arrays indexed by the layer (`BR_L_SIGMA`, `BR_L_PILE`, `BR_L_DETREP`,
+  `BR_L_DETTINT`, `BR_L_DETSO`, `BR_L_DIRT`, `BR_L_WEAR`, `BR_L_RELIEF`, `BR_AUX_KIND`, `BR_L_AUX2`), not uniforms.
+- **Generator frame.** `frame?: [w, h]` metres is generator-only (the recipe `FRAME`, the normal pass's texel metres,
+  the cavity metric) and defaults to `[repeat, repeatY]`; the mesher's UVs still follow `LAYER_DEFS`, so a floor layer
+  can be authored square while its tower walls keep `repeatY` 3.0. Hence `w` = `repeat` and `h` = `repeat` or `repeatY`.
+- **Channels.** `Surf` gains `float aux` and `vec2 lean`. ormh.a follows the layer's aux kind (`AuxKind`): `none` 0 (every
+  layer before v2 but the two below), `emissive` Surf.emissive (PANEL_LENS, SIGNAGE), `detailMask` Surf.aux (default 1;
+  multiplies the detail strength), `wear` Surf.aux as a rank-normalised threshold field (P(W < x) = x), `mask` Surf.aux
+  as a family-defined mask, `lean` Surf.lean in [-1, 1]: ormh.b = x · 0.5 + 0.5, ormh.a = y · 0.5 + 0.5 (the shader
+  forces metalness to 0 on such layers). albedo.a = Surf.alpha is a second aux channel on layers with `aux2`, allowed
+  on every layer but the alpha-tested METAL_GRATE, SIGNAGE, DECAL_ATLAS and FLOOR_PAINT.
+- **Reserved layers.** `Mat.CMU_RAW` = 28 (repeat 2.4 × 1.0, roughness 0.9, grime `masonry`; reserved as the
+  CMU_PAINTED body at raw grey 0.22, now lane C's raw block at albedo 0.38 / 0.372 / 0.346 on PIPEWORKS walls, service
+  corridors and loading bays) and `Mat.METAL_BARE` = 29 (repeat 0.6, albedo 0.56, roughness 0.3, metal 1; reserved as flat
+  metal, now lane E's brushed and chrome prop hardware: handles, pull plates, pool rails). `MAT_COUNT` 30 (the `materials` test scene keeps its 28 layers). The
+  harness gallery is 7 × 5.
+- **Grime profiles** 7 `paint` (DRYWALL, TRIM_PAINT) and 8 `masonry` (CMU_PAINTED, CMU_RAW) start as verbatim copies of
+  the wallpaper and concrete branches (WP9 below).
+- **Detail slots.** `DETAIL_COUNT` 21; the recipes live in `textures/detailRecipes/{textile, mineral, walls, masonry,
+  props}.ts` (ids in `detailRecipes/types.ts` `Det`), `textures/detail.ts` is the index and keeps D11 RIPPLE. D12 SLAB and
+  D13 POLISH (B), D14 CMU_FACE and D15 CMU_RAW (C), D16 ROLLER_STIPPLE and D17 LINEN (D), D18 ENAMEL, D19 RUST_GRAIN and
+  D20 KRAFT (E) are neutral placeholders (height 0.5, albedo 1, heightScale 1e-4, slope 0.05, no cavity) until their
+  lanes fill them. 21 layers of 512² take ~29 MiB (high and ultra only).
+- **Ownership.** Each lane edits only its family files, its `LAYER_DEFS` rows and its detail and hook files; the core
+  files (`glsl/common.ts`, `programs.ts`, `registry.ts`, `detail.ts`, the bakers, `chunks/surface.ts`,
+  `materialPost.ts`, `haze.ts`, `pom.ts`) belong to lane 0.
+
+#### Lane 0: foundation
+0a: the file split, the recipe rows, the channels, the reserved ids and slots and the hook points, bit-identical on the
+28 gallery framings (high) and 4 medium framings (`node tools/ab.mjs --base a5c03e1 --expect same`).
+
+0b is the shared shading that the lanes drive through their `SurfacePhys` rows (WP9, "Shared shading (0b)"):
+- EON rough diffuse (`sigma`);
+- the baked light's cavity visibility, linear in V;
+- relief-aware dirt and wear (`dirt`, `wear`, `reliefM`);
+- the detail controls (`detRep`, 'detailMask', `detTint`, `detSO`);
+- the grime helpers `brHeightBlend` and `brStainFront`.
+
+The only change at the defaults is the visibility term. It moves joints, grout, pits and perforations: darker under
+wide or grazing light, lighter where the old cone had blacked them out. With `DIRVIS.LINEAR` set to false, the gallery
+(28 framings at high, 4 at medium) is bit-identical to 0a. The materials harness also
+reports each layer's aux range (`stats().auxRange`).
+
+#### Lane A: textiles
+Pile under overhead light reads through occlusion and view dependence, not through normals (the baked light on floors
+is ~0.5-0.6 directional and near vertical). The recipes (table above) store the pile visibility V in ormh.r and, on
+the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades them (TS twins `pileVisibility`,
+`napDiffuse`; tests/materials/textile.test.ts):
+- **Pile visibility** (matPost, layers with `phys.pile` [kp, kv]: L0 [1, 0.8], office [1, 1.2], fabric [0.6, 1.5]):
+  the diffuse albedo the lights see (`material.diffuseContribution`: punctual, baked and ambient alike) × Dv = 1 − kp
+  (1 − V) μv^kv (μv = n_g · v): looking down the gaps between the tufts show dark, at grazing the tips hide them.
+  Linear in V, so the mips are unbiased (the same floor area at 1.5 m and 6 m under the same angle, over view=albedo:
+  +1-2 % far against near; a5c03e1 +7 %). Dv stands for the generic texture-cavity multiply, which postLight divides back out of the
+  ambient, and for 0b's cavity visibility on the baked direct light, which skips pile layers; wet pile uses
+  V^(1 + 0.6 × absorbed water) (its valleys open). The Level 0 fibre trap T = 0.69 × chroma^0.3 now multiplies only
+  the diffuse (it was 0.55 on the whole radiance, sheen and specular included). The gaps keep their luminance but are
+  deeper in colour than the tips (their light has crossed more dyed fibre; a grey multiplier left them olive-grey up
+  close): the visibility K = Dv × the detail's becomes K + (1 − K) 0.15 (c / m − 1) per channel, c = (albedo / max
+  channel)^1.5 and m its luminance-weighted mean (TS twin `pileGap`), linear in K. Under standing water and a saturated
+  film, postWet raises ormh.r to 1 on pile layers (Dv keeps the saved V): the generic specular occlusion and the SSR
+  weight read ormh.r, and with V there a puddle's reflection was occluded by the tuft gaps (specular occlusion ~0.47
+  instead of ~0.93 at the mean V, grazing; +1-2 % on the damp patch of the LOBBY pitch −12° framing).
+- **EON** (lane 0b): σ 0.75 (L0), 0.5 (office), 0.4 (fabric). It darkens rough pile seen at grazing under overhead
+  light (forward scattering), which the trap absorbs: the gallery 11 carpet / wall luminance ratio is −4 % at high and
+  +3 % at medium against a5c03e1. Under the torch it flattens the spot a little (0.6 R over the centre 0.806 against
+  0.804 in a5c03e1 and 0.774 before EON).
+- **Detail on pile layers:** the detail map's multiplier (tuft cracks, ply splits) is applied as visibility with the
+  same view hiding, 1 + (am − 1)(0.35 + 0.65 μv^kv), not as albedo (view=albedo keeps the fibre colour).
+- **Nap** (cut pile): s = v_t · lean, v_t the unit tangent direction to the camera; the diffuse × clamp(1 − 0.32 s
+  sin θv, 0.6, 1.4) (fibre ends in view when the pile leans toward the camera: darker) and the sheen × clamp(1 − 0.6 s,
+  0.2, 1.8). The lean is the texel clump lean (× 0.6) plus, on Level 0 floors, a world nap along each 3.84 m broadloom
+  roll (20 % of the widths laid reversed, ±25° wobble over 0.6 m, magnitude 0.5 + 0.5 × wear), flipped inside
+  pile-reversal patches (~15 % of the floor where a 0.96 m value noise plus a 0.3 / 0.1 m wobble crosses a threshold:
+  0.3-1.2 m blotches with a crisp edge, one noise instead of a disc loop). Yaw 0 against yaw 180 at pitch −25° from one
+  eye: the floor changes by 10 % relative to the base (EON's backscatter takes back part of it).
+- **Office tiles:** the loop-pile detail turns with its tile (rotated about the tile centre by the tile's M, its slope
+  turned back); k = (v_t · row)² shades the diffuse × (0.96 + 0.08 k (1 − μv)) and the sheen × (0.6 + 0.8 k); a world
+  dye lot per 0.6 m tile (±3 %, one in 12 a replacement from another lot at ±8 %), one in 20 with a lifted edge, and the
+  seam drawn analytically (1.5 mm × 0.6, anti-aliased by the footprint, so it survives the mips).
+- **Sheen:** colour = amount (L0 0.3, office 0.3, fabric 0.45) × mix(sqrt(albedo), its luma, 0.3) (fibre surfaces
+  reflect nearly white), × (1 − 0.8 × absorbed water) (damp fibres keep a little grazing gloss; at half, damp patches
+  read grey at grazing), × (1 − 0.7 film), × (1 − 0.2 wear), none under standing water.
+- **Carpet grime** (profile 1): the damp patch ends at a wicking front ~3 cm wide, ragged by ±2 cm, sized in metres
+  through the wet field's slope (a shallow field crossing the threshold draws a contour, not a speckled band), then
+  deepens inward; a dried tide ring 2.5 cm outside it; worn lanes close the pile (V → mix(V, 0.9, 0.7 w)) and hold soil
+  (× (0.90, 0.87, 0.82)) instead of lightening; spills of 5-30 cm (25 % of 2.4 m cells, at most one per cell and kept inside
+  it, so a pixel hashes its own cell only) with a sharp blotchy edge and a darker 1.5 cm rim. Thin world features are filtered by the pixel footprint: the spill edge and rim widen to it (the
+  rim keeps its coverage), the reversal-patch edge is no sharper than fwidth of its field, and the front's 2.5 cm
+  raggedness fades out before its cells shrink below a pixel (unfiltered, they alias into dots that crawl in motion).
+- **Detail lattices:** a regular period that is not a power-of-two number of texels beats in the box-filtered mips
+  (94 tuft rows at 5.4 texels drew horizontal streaks 1-2 m away): the tuft rows, the loop pitch and the weave use 2, 4
+  or 8 texels.
+- Debug view 25 `textile`: r = Dv, g = the nap diffuse factor / 2, b = 0.5 + 0.5 s.
+- **Cost** (RTX 5070 Ti laptop; whole frame, `gpuBench(20)` after `waitForIdle`, tex-integ 3eb5d47 against lane A,
+  median of 2 interleaved rounds; the rounds agree within ~0.02 ms at high, ~0.08 at ultra): high (1600 × 900) +0.24 ms
+  on gallery 00, +0.26 Level 0 straight down, +0.09 EXECUTIVE_SUITE −55°, +0.03 on a frame without textiles
+  (CONCRETE −55°); ultra (2240 × 1260) +0.55, +0.65, +0.18, ±0.02. Where it goes, measured by reverting one part at a
+  time against the earlier tex-integ ff42a23 at high: SMAA ~0.1 ms on a carpet-filled frame (the pile's pixel-scale
+  contrast gives it edges everywhere: without SMAA the straight-down difference drops from +0.34 to +0.25); the 1.2 m
+  frame's finer mips ~0.03-0.05; the pile shading (Dv, nap, detail visibility, trap) ~0.1, and removing any one of its
+  parts saved at most 0.03; EON's presence 0.06 on every frame, which lanes B and C now share. The spill lookup that
+  reads one feature cell instead of 3 × 3, and the office's lazy outline wobble, took 0.05-0.08 off. Reading `BR_L_SIGMA` and `BR_L_PILE` through compares instead of dynamically indexed const arrays
+  (lane 0's materialPost.ts and pom.ts) measured a further 0.01-0.04 ms at high. textures.genMs 210 against 213,
+  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB. All of this is over the lane's +0.03 / +0.07 ms.
+- Not done: the torch retro term (it needs the punctual share of the direct diffuse, which the hooks do not see); lint
+  / hair SDFs and buckling ripples.
+
+#### Lane B: concrete, terrazzo, floor paint
+Under overhead lamps a slab shows almost no diffuse relief (for Lambert, Σ n·Lᵢ = n·ΣLᵢ), so real concrete reads
+through tone structure, dirty pores, joints with depth and specular lanes. Lane B moves everything bigger than the
+2.4 m texture into world space (`chunks/family/concrete.ts`) and keeps the textures physical (the WP8 rows above):
+- **Slab system** (up-facing CONCRETE_FLOOR, the grime branch): pours of 4 × 2 panels and 4.8 m panels with their
+  own tone (±6 % / ±3 %), hue and sheen (× 0.85–1.15); saw-cut kerfs 4.4 mm wide with 1.5 mm arrises, filled 4 mm
+  down with dark polyurea (70 %) or open, where the view ray meets the far wall at depth
+  z = (W/2 − x·sgn t)/|t| (darkened by 0.5·e^(−z/6 mm)) or the bottom; spalls on 30 % of the 0.24 m joint segments
+  (5–25 mm long, 3–10 mm wide, a paler fracture sloping 25–40° into the kerf); a dirt band beside the cut. The kerf
+  is supersampled with 4 taps across the pixel footprint and fades to its exact box-filtered mean darkening once it
+  spans less than ~2/3 of a pixel (its integral stays the kerf's width at any footprint, so far joints neither fade
+  nor darken with distance; the taps, spalls and view ray are skipped there). 60 % of the panels carry one shrinkage
+  crack between two panel edges (so every crack ends at a joint), warped at 0.4 m and 5 cm, 0.2–1.2 mm wide along its
+  length, 35 % branched, with a dirty halo; sub-pixel cracks keep a 0.35-pixel rendered width with scaled contrast;
+  the dirt band beside the cut and the crack halo widen with the pixel footprint at a constant integral, and below a
+  pixel the kerf's normal and roughness fade to fixed means (so which taps hit the kerf cannot make a far joint
+  flicker). Early-outs keep the cost to a few hashes away from joints and cracks. Low quality and the planar mirror
+  pass draw the far field only (the box-filtered kerf and the dirt band).
+- **Traffic lanes:** WP7 mask A covers the hard floors (bake/mask.ts; TEX2.md). On concrete the lanes are burnished:
+  roughness × 0.62, albedo × 0.88 and a little warmer, the detail stronger (exposed fines, LEAN micro-scratches),
+  dust at their edges; every door wears an entry fan into its rooms and rack aisles get two wheel tracks, which fade
+  out over 2 m past the end of a rack row. On terrazzo the lanes lose the polish (roughness × 3.5, the rough lobe
+  covers 40 % more) and the edges by the walls keep yellowed wax.
+- **Finish class** per room (the FLOOR_AUX region key): sealed 35 % (roughness × 0.6, the trowel swirl stronger
+  through ormh.a), plain 45 %, dusty 20 % (roughness × 1.3, albedo × 1.06, detail × 0.7). Risers drop the swirl.
+- **Walls and soffits:** oil only drips onto floors; on walls and soffits the same grime fields are matte soot. Each
+  form sheet (1.2 × 1.5 m on walls, 1.2 × 2.4 m on soffits, world grid) gets its own tone and sheen, which breaks the
+  texture's 2.4 m ABAB. Rising damp has a ragged fringe (the tide field perturbed at 0.3 m) and efflorescence blooms
+  at the drying front (crystals from the detail speckle, matte, raised).
+- **Floor-paint stripes** (decal variant): the wet, film and puddle path of the slab (they carry NO_GRIME), edge
+  flakes from the stripe-local uv and width (only the chips' coverage lowers the alpha: the quad's own edges are the
+  geometry's, so far stripes keep their strength), v along the line world-anchored (the pieces of a stripe clipped at
+  chunk edges continue one wear pattern), the slab's joints through the stripe (the kerf stays unpainted) and the
+  slab's D12 speckle under the film (the decal variant samples the detail array: 16 units at high / ultra).
+- **v2 shading parameters** (the 0b block): σ CONCRETE_WALL / CONCRETE_CEIL 0.35, CONCRETE_FLOOR 0.25 × (1 − lane)
+  (the matPost hook: a burnished lane is polished paste, no longer porous), TERRAZZO 0; dirt on the slab, walls,
+  soffits and terrazzo.
+- **Costs** (`__backrooms.gpuBench(20)`, whole frame, medians of interleaved rounds against tex-integ with 0b merged,
+  on gallery 04, 07, 15 and 25). High 1600 × 900 (3 rounds, ±0.02 ms): +0.23 / +0.24 / +0.10 / +0.19 ms. Of that,
+  the 0b features the rows switch on are presence costs every surface program pays once any layer sets them (so
+  shared with the other lanes that set them): σ ~+0.02–0.07 ms and the relief dirt ~+0.06–0.09 ms. The lane's own
+  cost is +0.10 / +0.14 / +0.06 / +0.10 ms: the doubled CONCRETE_FLOOR texel density +0.04–0.07 (the hex blend's nine
+  fetches over twice the texels; a hex blend that skips vertices of negligible weight would win back ~0.09 ms), the
+  slab system ≤ 0.05, the soffit's 2.4 m repeat ≤ 0.04, the stripes and the other hooks ≤ 0.02 each. Ultra 2560 × 1440
+  renders 1.4x supersampled (7.2 Mpx, 5x high's pixels) and pays about 5x: +0.8 to +1.7 ms, the lane's own +0.65 to
+  +1.2 ms (2 rounds, ±0.5 ms). The SSR share of the burnished lanes is ≤ 0.016 ms, so no roughness clamp was needed.
+  textures.genMs +15 ms (200 → 215), detail genMs ±0. Both frame budgets (+0.03 / +0.07 ms) are exceeded.
+
+#### Lane C: masonry and tile
+Block walls read as concrete block at every distance, and the tile layers as fired, set and waxed tile.
+- **CMU below 3 mm: D14 CMU_FACE / D15 CMU_RAW** (`detailRecipes/masonry.ts`). Grit (3.3 mm) and sand (1.6 mm)
+  crowns stand out of a paste of fine sand; crevices open where three grits meet; 0.8-2.5 mm voids cluster in
+  under-compacted 'open' patches. D14 is painted: the film rounds and levels the relief (x 0.6), bridges voids under
+  ~0.9 mm and lines the rest as shallow pits in the face colour, so voids read through shading and the cavity, not
+  dark albedo (rms slope 0.39). D15 keeps the full relief, deep voids at x 0.65 and a salt-and-pepper tone per grain
+  (rms slope 0.44). The painted face therefore reads as sandpaper rather than a plastic sheet with holes (gallery 09's
+  pits at < 0.6 x the local mean: 2.9 % of the near wall before, 0.2 % on raw block now).
+- **CMU base v2** (`layers/masonry.ts`, table above): `cmuBlock()` is shared by both layers. Joints vary block to
+  block and are tooled concave; chips, voids and lap bands are resolved at the base texel. The detail mask (ormh.a,
+  0.3 in the joints) keeps the tooled mortar smoother than the face. The base also carries 6-10 mm aggregate pits (up
+  to 1.6 mm deep) and low crowns, which are the whole face texture on medium and low, where no detail maps are bound:
+  at 0.7 mm the medium face read as a smooth sheet with a few voids (1.5 px high-pass at gallery 08's 0.45 m: 0.8 %,
+  now 1.1 %, base 2.7 %; at 1.5 m 2.3 %, now 2.6 %, base 3.0 %). The painted joints are 14 % darker than the face
+  (pooled paint and dust; 0b's cavity visibility alone leaves tooled joints faint at mid range).
+- **World block variation** (`chunks/family/masonry.ts` postSample / postDetail): a key from the wall position follows
+  the texture's third bond (wrapping at NOISE_WRAP / 0.4 m and 15 courses per storey, so it never jumps at a tile
+  edge) and gives every world block a paint lot (+-4.5 % value, +-1 % warmth; raw +-6 %), first-coat flashing (+-0.05
+  roughness), a +-0.37 deg tilt (lippage: sheen steps between blocks at mid range), a texture class (6 % touch-up, 4 %
+  heavily filled, 10 % open) and its own patch of the aggregate (a detail-uv offset). Faces only: the joint share
+  comes from the detail mask. The flashing is kept small because the probe's roughness fade (0.5-0.65) turns sheen
+  differences into lamp-reflection steps, and the rough hook caps painted CMU at 0.67 so that no block straddles SSR's
+  G-buffer eligibility cut (0.7), where blocks popped between the two paths with distance. The same hook undoes the
+  cotangent frame's u / v scaling on these walls (TEX2.md, lane C: a core issue on every layer with repeatY !=
+  repeat), which had shaded head joints, tilts and chips at 42 % of their slope. Without detail maps, the rough hook
+  adds D14 / D15's unresolved slope variance (0.12 / 0.18) to alpha^2, so the walls keep their matte sheen.
+- **CMU_RAW** is placed on PIPEWORKS walls, the transition service corridors and the loading bays; CONCRETE, WAREHOUSE
+  and the towers stay painted. Its table albedo is 0.38, light natural grey block (LRV 35-40; the detail multiplier is
+  divided by its 1x1-mip mean, so the rendered face averages the table value). That is three quarters of the painted
+  block's 0.5, so PIPEWORKS frames at high are 24 % (gallery 09) and 27 % (gallery 10) darker than with painted walls,
+  and 6 % brighter under the torch (EON backscatter). At 0.28 the walls read near-black brown under the zone's bulbs.
+- **Masonry grime** (profile 8): in the damp band of painted block the paint flakes in ragged patches that show the raw
+  block at the same uv (CMU_RAW's albedo and relief, two trilinear fetches in one branch on the smooth damp field, raw
+  roughness, the aggregate roughened) with a salt bloom and a lifted film edge, and 2-8 mm blisters dome the film where
+  it holds. Seepage stains are brownish and wick further along the joints; efflorescence crusts the drying front and
+  blooms three times as strongly in the joints of the bottom 0.6 m; dirt gathers on the joint ledges and in the joints
+  of the bottom courses; rubber scuffs mark the cart and boot heights.
+- **0b switches:** EON sigma is the facet roughness below the detail map (painted 0.2, raw 0.3; 0b adds the
+  unresolved detail variance, so far walls reach ~0.33 / 0.43). The relief-aware dirt and brStainFront are not used:
+  measured at ultra, the dirt amount compiles 0b's block into every surface program (+0.63 ms in POOLROOMS with no CMU
+  on screen) and the nested fronts cost 0.2 ms on a full-screen CMU wall.
+- **Tile** (`layers/tile.ts`, table above; `chunks/family/tile.ts`): POOL_TILE and POOL_MOSAIC store their grout
+  coverage in ormh.a. The shader colours the grout along its lines in world space: per-tile rotation would split a
+  texture-space variation down the middle of each line. Dry, up-facing pool deck glaze is dulled to 0.17 (art
+  direction: no slip-resistant matte variant), and a splash film still turns it glossy. Up-facing VCT takes lane wear
+  from mask A (lane B's hard-floor wear: +0.22 roughness, a little lighter and greyer where A passes 0.25, so mostly in
+  decayed areas), an amber, glossier wax band 2-5 cm from the walls, and heel marks. D6 GLAZE is now long-wave waviness (25 and 12 mm,
+  rms slope 0.0046) plus sparse pinholes. At detail strength 0.3 against 1, the ragged edges of the lamp reflections
+  on the pool walls are unchanged (gallery 12), so D6 is not their cause.
+- **Costs** (gpuProfile RenderPass medians of 3 interleaved fresh boots against tex-integ ff42a23; run-to-run noise
+  about +-0.2 ms at high and +-0.3 ms at ultra). High 1920x1080: gallery 05 +0.05, 08 +0.08, 09 +0.00, 12 +0.07 ms.
+  Ultra 2560x1440: 05 -0.05, 08 +0.27, 09 +0.27, 12 +0.12 ms. The same tree without the CMU sigma measures at or below
+  tex-integ everywhere, so the lane's recipes and hooks are within noise and EON is the cost: +0.3-0.6 ms at ultra
+  where CMU fills the frame (08, 09), shared with the other layers that set sigma. A later review (same method, 5
+  trees interleaved in one session) measured more on the painted close-up, gallery 08 at ultra: +0.63 ms against
+  ff42a23 and +0.66 / +0.41 ms against tex-integ 9b8a06f (lane B merged, so EON is already compiled in), +0.21 ms at
+  high; gallery 09 (raw block) -0.12 ms ultra and -0.09 ms high. With lane B merged, dropping the CMU sigma or the
+  per-block key does not lower it, so it is not EON. Texture generation +21 ms (200 ms
+  against 179 ms, median of 6 fresh harness boots; the recipes evaluate only the part each output pass needs), detail
+  maps +3 ms, no memory beyond the reserved CMU_RAW layer and the D14 / D15 slots.
+
+#### Lane D: walls and ceilings
+Files: `textures/layers/wallpaper.ts` and `ceiling.ts`, `textures/detailRecipes/walls.ts`, `chunks/family/walls.ts`
+(grime profiles 2 wallpaper and 7 paint) and `ceiling.ts` (profile 3), `bake/mask.ts` (R), lens aging in
+`chunks/emitters.ts`, the diffuser throat in `mesh/ceilings.ts`. The recipes are the WP8 rows above.
+
+**Where the texture lives.** Under the baked light (mostly the ambient share, and a directional share at w ~0.3-0.5)
+a physically deep emboss shades under 1 % of luminance: at 0.5 m under the LOBBY troffers, 10x D2's rms slope of 0.07
+raised the wallpaper field's box-4 high-pass to 4.8 %, so the real slope accounts for ~0.5 %. The texture the eye
+reads at room distance is therefore what real wallcoverings also carry: a ground printed in register with the emboss
+(the Level 0 strie and slubs, the manila linen), over a mild base emboss (normalStrength 1.5-2.5, not the old 6-10
+that stamped the print into rubber and turned drywall into stucco). The detail maps (D2, D16, D17 at rms slopes
+0.05-0.07) are the grain up close, in the sheen and under raking light, and become LEAN roughness beyond ~1 m. The
+ceiling's fissures read through the cavity term (V ~0.55 in the cores): under the grazing light next to a pendant bulb
+(DIRVIS g ~2) the resolved cores go dark.
+
+**Stains** are capillary fronts. The mask's R is the wet extent: stains at or below `STAIN_MAX`, seepage runnel
+zones as tongues in `SEEP_R0`..1 (`seepZoneR`). `brWlFronts` draws 3 nested drying fronts, each a deposit darkest at
+its outer edge (3 mm wide in metres, the inner ones 20 % weaker), whose width the pixel footprint widens while the
+integral stays, so a front neither darkens nor lightens with distance. A fine field steers them: the layer's relief,
+the detail multiplier and world noise at 12 and 40 mm, applied as a metric displacement (4, 6 and 15 mm) along the wet
+extent's gradient, so a front stays one coherent ragged line on a gentle extent. Inside: a pale halo, mould specks
+inside the innermost front, efflorescence 5-20 mm above rising damp (only where the wet side is below the front, so
+not around a low seepage tongue's tip), runnels (one per 0.1 m column, narrowing down the wall) ending in teardrops.
+Ceiling tiles take the leak extent per tile (absorbing a little differently, so a stain steps at the T-bars) and a
+few carry an old lobed stain of their own with their own front spacing.
+
+**Damage.** Wallpaper: roll seams per roll pair (60 % tight, 25 % open 0.3-0.8 mm, 15 % lifted with a shadow), a peel
+edge from the mask A field's screen gradient (torn fibres, a flap showing its back and casting a shadow, exposed paper
+and adhesive), damp cockle. Paint: screw spots on a 0.4 x 0.3 m lattice (30 % flashing, 6 % popped with a ring
+crack), spackle patches, scuffs at shoe and chair height, blisters where damp, flakes to the primer; trim chips to the
+MDF. Life marks on wallpaper and drywall: picture ghosts, tack holes, tape residue, burnished hand zones. Ceiling tiles:
+3 % displaced (a plenum wedge up to 15 mm, 2 degrees), 12 % sagging, 6 % replacements from another lot. Troffer lenses
+(PRISM, OPAL): 5-15 insect silhouettes and dust toward one end, divided by their own mean. The analytic relief of
+all these is a world-space height gradient added in the family `normal` hooks. Thin features keep their integral as
+the pixel footprint widens them, so none darkens or brightens a wall with distance: lines and dots are box-filtered
+(`brWlLine`, `brWlDot`) and edge bands (torn fibres, flaps, cast shadows, flake and chip lips) lower their peak as
+they widen (`brWlBand`); tests/materials/wallsCeiling.test.ts runs these helpers' GLSL. The reflection passes (the
+water mirror and the probe) skip the small features (seams, cockle, scuffs, chips, blisters, screw spots, patches,
+life marks, runnels and the tile states), and the tile states are shell-only (a fallen tile prop is never displaced).
+
+**Measured** (A/B against a5c03e1 at high; box-4 high-pass is rms (L − box9(L)) / box9(L) on a fixed crop):
+- Ceiling tile, harness layer 2: albedo dark fraction (< 0.85x median) 7.1 % → 0; ormh.r mean 0.981 → 0.939, 22 % of
+  texels below 0.9, p1 0.55; ormh.a 0 on the bars; metal 0.
+- LOBBY ceiling (pitchDeg=70, fov 50): high-pass 8.8 → 10.0 % (the plan asked 3-6 %; base was already above it).
+  Next to the MAZE bulb (gallery 11): 12.7 → 12.2 %.
+- Level 0 wallpaper (x=57, z=−1.8, fov 50): high-pass 2.8 → 2.9 % over the stripes, 1.9 → 0.9 % on an ink-free strip
+  (base's came from the stamped fleur; the plan's 2.5-4 % field is not reached at that distance); at 0.5 m 3.2 →
+  4.1 %. yawDeg=60: the upper wall is +2.8 % (plan ≥ 8 %).
+- Manila pinstripe: a −23 % dip beside a +11 % light line → a −7.8 % dip, no light line.
+- Detail rms slopes: D2 0.071, D16 0.052, D17 0.058, D5 0.011.
+- OFFICE, yawDeg=250, fov 50 (the plan's drywall framing, mostly cubicle panels): high-pass 0.82 → 0.61 %
+  (≤ 1.2 %).
+- checks=albedo,range,seam: no failures, seam max 1/255.
+- Cost against tex-integ (gpuBench(20), whole frame, 2 interleaved rounds; gallery 03, 11, 14 and the LOBBY ceiling):
+  high +0.19 / +0.17 / +0.14 / +0.09 ms, ultra +1.84 / +1.37 / +1.17 / +0.55 ms (ultra renders ~5x the pixels). The
+  plan's +0.02 / +0.04 ms is far off. A bisect at ultra (gallery 03 / 11, removing one block at a time) put the damage
+  blocks (seams, peel, cockle, flakes, chips, blisters) at 0.4 / 0.6 ms, the stain fronts at 0.3 / 0.2, the ceiling hook
+  at 0.3 / 0.1, the life marks at 0.25 / 0.2 and EON on the ceiling at 0.1 / 0.4; the savings overlap (their sum
+  exceeds the total), which suggests part of the cost is occupancy of the one surface program, not work on wall pixels.
+  Sharing the derivatives and skipping the edge solves off the peel won back 0.1-0.2 ms at ultra; dropping EON on the
+  wall layers and the fissure dust 0.02-0.04 ms at high. Lens aging and D2's 0.15 m repeat measured within noise.
+  textures.genMs 207.6 → 198.8 ms (noise), detail genMs 18.7 → 18.6 ms; no new memory. After merging lanes A, B and C
+  (tex-integ c7ca203, which already carries EON and relief dirt): high +0.17 / +0.15 / +0.13 / +0.08 ms, ultra (gallery
+  03 / 11) +1.31 / +0.25 ms.
+- Review (same method, tex-integ c7ca203; high: 3 interleaved rounds, which agree within ~0.02 ms; ultra: 2 rounds,
+  ±0.3-0.5 ms). High, gallery 03 / 11 / 14 / LOBBY ceiling: +0.20 / +0.14 / +0.13 / +0.11 ms after the review fixes
+  (the lane head measured +0.23 / +0.18 / +0.17 / +0.11: skipping the small features in the probe's capture passes
+  saves 0.02-0.04). A bisect at high that removes one block at a time finds no single owner: the wall stains save
+  0.015-0.02 ms, the damage blocks 0-0.03, the life marks 0.01-0.03 (0.06 on the ceiling-only LOBBY framing, where
+  they never run: the cost is the shared surface program's occupancy) and the ceiling hook 0-0.03; the glossier paint
+  and T-bars (probe and SSR paths) and EON on the ceiling are within noise at high. Ultra, gallery 03 / 11 (the lane
+  head): +0.89 / +0.74 ms, and +0.51 / +0.41 ms with `probe=0&ssr=0`, so ~0.35 ms of the ultra cost is the probe
+  and SSR now running on the satin wallpaper (0.52), the eggshell drywall (0.62) and the enamel T-bars (0.33).
+  Raising the drywall field to 0.665 (above the probe's 0.65 fade), adding the relief to the detail slope instead of
+  its own vec2 and merging the two wall grime branches all measured within noise.
+- Distance (review): with the exposure fixed (EV 10), the lane's change of a wall patch's luminance at fov 50 and at
+  fov 90 (the same patch at 2.1x the pixel footprint) is +2.55 / +2.42 % on the Level 0 wallpaper, +2.94 / +3.15 %
+  on OFFICE drywall, +2.56 / +2.21 % on the LOBBY ceiling and +1.34 / +1.44 % on manila: no drift with distance
+  beyond 0.35 %. Two captures 2 cm apart (wallpaper, fov 50) show no crawl; medium and ultra render cleanly.
+
+**Limits.** At 2-3 m the fissures are sub-pixel: their mean darkening is right, but a linear-in-V term cannot draw
+the raking shadows that make a fissured tile read under a bulb from across a room; the sparse 22 mm fissure family
+restores part of it. Drawing them needs a filtered horizon or a cap-moment bake (lane 0's deferred R_d byte). The wall layers
+set no `dirt`: their hand and kick zones come from the mask's G in the walls family, and 0b's relief-weighted dirt has
+no concavity to fill on paint and paper; nor `sigma` (EON at paint's ~0.2 moves a few percent at grazing angles and,
+with fissure dust on the ceiling, cost 0.02-0.04 ms at high).
+
+#### Lane E: props
+Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those materials because wear follows exposure
+(edges, kick zones, hands) and each layer keeps its own colours under the part tint. The shading is in
+`chunks/family/props.ts`, the recipes in `layers/metal.ts` and `layers/misc.ts`, the details in
+`detailRecipes/props.ts` and the geometry side in `props/builder.ts` and `props/primitives.ts`.
+- **Tint headroom and topcoat mask.** Non-emissive prop parts store `byte(tint / 2)` (at least 1) and postSample decodes
+  x2, so a part can be up to twice its layer mean: chrome, white enamel, pale woods and the rack orange no longer clamp
+  to the layer colour. The tint colours only the topcoat: diffuse = recipe x mix(1, tint, brWpTop), so primer, steel
+  and rust keep their own colours (the old tint turned locker chips and scratches into black ink strokes). From there
+  to postWet brA is the part's real albedo, so the grime and wetness colours (rust run-off, dust, efflorescence) stay
+  their own instead of taking the paint's tint; postWet divides the stored tint out again before surface.ts multiplies
+  it in. METAL_RUST tints are relative to a neutral 0.3 paint (`RUST_PAINT_REF`), so a rusty part keeps its paint
+  colour on the remnants.
+- **Edge coordinates.** Props light from the light volume, so their lmUv stream is free. The primitives write
+  `4 round(half mm) + (1 + s)` per face axis (half the face's extent, s in [-1, 1] across it; affine over a planar face,
+  so the interpolation is exact; within 0.5 mm at 1 m in float32). The distance to the nearer edge is half (1 - |s|).
+  bevelBox faces are measured over the outer extents (their rims lie one chamfer in), chamfers and corners are on the
+  edge, curved sides carry none around and the distance to their ends along (pipe joints, tube ends), extrusion caps
+  and hexahedra use their bounding box. The x sign marks end grain (faces across a part's clearly longest axis), the y
+  sign part kind 1 (kraft board on PLASTIC; a painted shadow stand-in on METAL_PAINTED that never wears).
+- **Grain axis and part offsets.** On WOOD, METAL_PAINTED and METAL_BARE the primitives turn u along each face's longer
+  side (door leaves get vertical grain, rails and slats run lengthwise; curved sides run u along). Every part of the prop
+  layers gets a hashed uv offset of up to one repeat, so sibling doors, slats and boards never share a texture region
+  (the lockers' manual offset is gone). Prop v now uses the layer's repeatY (METAL_PAINTED's 1.0 m frame was stretched
+  1.2x on props).
+- **Wear.** The 'wear' layers store a rank-normalised threshold field W in ormh.a (P(W < x) = x). The level is the
+  expected exposed share: base 0.3-2 % by prop hash and age, + age x (0.24 e^(-d / 2.5 mm) + 0.05 e^(-d / 12 mm) at
+  distance d from a face edge, + 0.14 in the kick zone below 0.35 m on vertical faces, + 0.015 in the hand band at
+  1.15 m); age = 0.6 + 0.5 decay (the anchor cell's dust bits) +- 0.25 per prop. A texel is exposed where W is below
+  the level, over a linear ramp of half-width a = fwidth(W) + 0.01, widened to 0.5 once the footprint hides the 8 mm
+  flakes (4-16 texels). For uniform W the ramp's mean is the level only while level >= a, so a lower level moves to
+  2 sqrt(a l) - a: the exposed share equals the level at every distance (tests/props/wear.test.ts).
+- **METAL_PAINTED** is a neutral topcoat: +-2 % coat thickness, oil-canning (+-0.45 mm over 0.15-0.4 m, which bends
+  lamp reflections), roughness 0.4 +- 0.015 (random gloss mottle read as lumps in grazing lamp reflections, so the gloss varies
+  through grease, kick-zone chalking and chips instead); W from 17 cm clusters, 2.5 cm chip groups and angular 8 mm flakes that
+  break first along their borders; albedo.a (aux2) a scratch field (0-2 segments of 8-80 mm per 60 mm cell, 60 %
+  within 15 degrees of u, depth class 0.3-1). Runtime: topcoat, then a primer ring (grey, or red oxide on 40 % of the
+  props, roughness 0.7), then the steel core 0.06 further down W (F0 0.56, roughness 0.3; on old props oxidised
+  (0.10, 0.07, 0.05)). Scratches are stress-whitened after the tint
+  (luma x 1.3 + 0.04, roughness + 0.15), the deepest cut to steel; the kick zone is chalkier (+0.12 roughness) and the
+  hand band of props greasier (roughness x 0.65 in the grime tide field; not on shell walls and roll-up doors, where
+  its blobs read as wet clouds in the lamp reflections). (A chip-step bump from the screen derivatives of the
+  exposure was tried and dropped: under overhead light it was barely visible for 0.03-0.05 ms.) D18 ENAMEL is 2-4 mm orange peel at
+  +-6 um with faint buffing swirls. The part's roughness override scales the topcoat (ormh.g x override / 0.4), so
+  the recipe's variation survives (locker doors 0.26). Only car paint keeps the clearcoat: its weight is the topcoat x
+  (1 - dust), its roughness max(0.05, 0.35 x override), and its normal the shading normal, so D18's orange peel is on
+  the lacquer (a new `clearcoat_normal_fragment_begin` anchor; the geometric normal made ruler-straight reflections).
+  Coated parts, like tubes, get no oil-canning: car bodies are stiff stamped panels, and the waviness broke their lamp
+  reflections into jagged SSR blocks.
+- **METAL_BARE** (layer 29, repeat 0.6): the albedo is F0 (+-2 %), brushing along u in F0 and roughness, water-spot
+  rings (a limescale film, dielectric), sparse pits, D8 BRUSHED at full strength; W is a smudge field that the hand
+  band fills (rougher, 10 % darker). Chrome (locker handles, chair frames, pulls; override 0.08-0.12), polished and
+  brushed stainless (pool ladder, door pull plates, coin panels; 0.15-0.3), anodised aluminium plates and a brass
+  padlock (tints up to 1.6 x the 0.56 mean) moved to it from METAL_PAINTED.
+- **METAL_RUST** stores the corrosion order C in ormh.a (warped clusters, rust spots of 5-25 mm, blister discs) and
+  the rust it would show everywhere: blister halos, lifted flake plates (8-30 mm, tilted and lifted 0.2-1 mm, a fresh
+  orange gap along their borders), deep scale with tubercles and log-normally sized pits that crowd where C is lowest;
+  relief 3 mm per unit, normal strength 1.5, D19 RUST_GRAIN (1-2 mm tubercles, micro-flake edges). The paint remnants
+  are runtime: paint where C passes 0.62 +- 0.05 by age, + 0.25 on pipe undersides and + 0.3 near joints and tube ends,
+  dulled and stained brown within 0.2 of C above it (rust bleeding under the film). Run-off streaks hang below rusty
+  areas: three coarse C taps 3, 8 and 18 cm up the surface (the uv step of a world rise from the screen derivatives)
+  times the drip field, blended from two world projections (no 45-degree seam on tanks and pipes). Rust is dielectric at 0.88-0.95 with EON sigma 0.5.
+- **WOOD** cuts each board (90-300 mm, packed across v) from its own log: the pith 2-25 cm under the face and to one
+  side, rings R = sqrt(d^2 + z^2) + t x with a per-board grain slope t (20-60 mm per m, either way; plus a +-3 mm
+  sweep of the pith over ~20 cm) from the board's butt joint, so 3-10 nested arches of irregular spacing point along a
+  board; ring width 3-8 mm +-40 % (at 2-5 mm the flank rings were finer than the 1.2 mm texels and faded to a plain
+  brown), gradual earlywood into an abruptly ending latewood, hue +-3 %, value +-10 %, rings finer than ~3 samples
+  faded to their mean. The runtime wears the finish off (W: edges, the hand band, tops): lighter,
+  greyer, roughness 0.6; end-grain faces are 30 % darker and 0.2 rougher. Crates and pallets are sawn (override 0.85).
+- **PLASTIC**: flow-line gloss bands, sink marks, a scuff field (stress-whitened scuffs at edges and the kick zone,
+  UV chalking of old up-facing parts); parts with an override below 0.12 (glass, screens) skip the haircell and scuffs.
+  D10 HAIRCELL is a 1.4 mm EDM texture. Kraft board is PLASTIC part kind 1: D20 KRAFT (C-flute ribs every 7.9 mm,
+  +-18 um, fibre floc, specks) replaces the haircell, the liner is matte (0.85, EON sigma 0.5), crushed and darker within
+  ~6 mm of the edges, with a dark lid seam; rack loads carry packing tape.
+- **RUBBER** (0.04): antiozonant bloom on up-facing and old parts, ozone crazing, rubbed glossier patches, roughness
+  0.62 +- 0.08, EON sigma 0.3. The children's playroom floor is VINYL_VCT now and the pool lane rope polypropylene.
+  The light-well panes and the copier platen and panel stay RUBBER: shell solids take their layer's mean albedo with no
+  tint or roughness override, and as PLASTIC they turned into light grey panels.
+- **METAL_GRATE** is hot-dip galvanised 19-W-4 bar grating (5 mm bars at 30 x 100 mm, zinc 0.36 at roughness 0.6,
+  white-rust flecks, dirt at the junctions, holes at 0.02; table 0.095); the server rack fronts that 0b's visibility
+  term had lightened are dark behind the bars again. METAL_DECK gets white-rust blooms and drip lines in the rib bottoms.
+- **Grime profile 6** (metal): rust run-off on painted and grating steel from the drips and the smooth tide field (not
+  the speckle channel, which made leopard spots), none on bare metal; METAL_RUST uses its own run-off. Up-facing shell
+  steel gathers dust (props get the anchor cell's).
+- **Costs** (against tex-integ 3eb5d47, interleaved fresh boots, other agents capturing alongside). Whole frame
+  (`gpuBench(20)`, 1600 x 900 high): +0.05 to +0.16 ms on the LOCKER_ROOM landmark, the WAREHOUSE spawn, the locker
+  close-up and the rust tank across three sessions (a quiet session measured +0.04 ms on the warehouse and the locker
+  close-up); the high RenderPass (`gpuProfile(3)`, locker close-up) +0.06 ms. Ultra 2560 x 1440: RenderPass -0.05 to
+  +0.53 ms, whole frame -0.04 to +0.84 ms (run-to-run noise +-0.5 ms). Before the cuts the wear block cost +0.12-0.14 ms
+  at high: most of it was register pressure from main-scope wear state and the chip-step bump, now scoped or removed
+  (see the commit history). Texture generation 213-221 ms -> 231-260 ms at 1024 (+18 to +41 ms; the WOOD, PLASTIC,
+  RUBBER and METAL_BARE recipes run without supersampling), memory 0 MB beyond the reserved METAL_BARE layer and the
+  D18-D20 slots; prop mesh bytes unchanged (the lmUv stream existed). The review re-measured the reviewed head
+  against tex-integ c7ca203 on a quiet machine (gpuBench(20), medians of 2-4 interleaved rounds, spread +-0.02 ms at
+  high): high +0.07 to +0.11 ms on the four frames, ultra +0.27 to +0.47 ms. Compiling the wear block into the props
+  program only (shell faces have no edge coordinates) measured within the noise (at most 0.01 ms at high), so the shell
+  keeps it. The budgets (+0.02 / +0.05 ms, +20 ms) are exceeded.
 
 **Must NOT touch:** material shaders (WP9), except that you own the albedo *numbers* via contract-changes.
 
@@ -4323,10 +4748,10 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
     get zero, and the faces are small.
   - `material.multiScatteringCompensation` is only initialised by three's `lights_fragment_begin` when punctual lights exist; our chunk **sets it itself** from `material.dfg` exactly as r186 does: `material.multiScatteringCompensation = 1.0 + material.specularColorBlended * (1.0 / (material.dfg.x + material.dfg.y) - 1.0);` (`material.dfg` is always set by `lights_fragment_begin`), so harness scenes without the flashlight match the game.
   - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
-    `chunks/pom.ts FRAG_DIRVIS_GLSL`): the cavity's visibility cone (not lite): the texture cavity V is the
-    cosine-weighted visibility of a cone around the mapped normal, V = sin² α, so the light is seen while
-    `N·L > cos α = sqrt(1 − V)` (`smoothstep(cos α ∓ 0.15)`): grout, joints, pile gaps and fissures shadow the baked
-    light as it grazes (Chan's `clamp(|N·L| + 2·ao² − 1)` never fired at the textures' V ≥ 0.9);
+    `chunks/pom.ts FRAG_DIRVIS_GLSL`): the texture cavity's visibility of the light (not lite; texture realism v2 0b,
+    below), `1 − (1 − V)·g`, linear in the cavity V so the mips stay unbiased: grout, joints, pits and fissures keep
+    less of the baked light the wider it spreads and the lower it stands (the earlier cone test,
+    `N·L > sqrt(1 − V)`, lit them fully under overhead lamps and vanished in the coarse mips);
     on ultra (`BR_POM` 2) the parallax hit also marches up to 4 steps toward the light up to the relief top (step
     midpoints, one per march step length; skipped when the shadow would be under half a pixel long; occlusion × 8 per
     unit of height above the ray, × the parallax fade; not × w: `brDirVis` scales only the directional share already).
@@ -4407,6 +4832,104 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   - `view=lightmap|directionality|ao|mask|layer|texel|emission` all render with no errors;
   - `view=final` shows specular sheen on damp carpet and the troffer reflection streaks on wet vinyl.
 - **Leak:** `testScene=leak&view=final`, dark-room luma < 0.02 (WP14 imageStats).
+
+**Texture realism v2 conventions (TEX2).** The shader side of the WP8 conventions above.
+- **Channel decode** (`chunks/surface.ts` FRAG_MAP_GLSL, main scope after the base sampling and the alpha test; hex
+  blended and rotated like the other channels): `int brAuxK` (`BR_AUX_KIND[brL]`), `float brAux` (ormh.a on
+  `detailMask` / `wear` / `mask` layers, 0 on `lean` layers), `float brAux2` (albedo.a on `aux2` layers, else 0),
+  `vec2 brLean` (the lean vector in the continuous uv frame, counter-rotated by transpose(M) on rotated-tile layers),
+  `mat2 brRotM` (the rotated-tile transform M, identity elsewhere), `vec2 brRotC` (the rotated cell's centre in the
+  continuous uv, 0 elsewhere), `brMuH` (the 1 × 1-mip mean height; the puddle block reads it too) and
+  `brRel = (brNrm.w − brMuH) · heightScale` (metres above the layer's mean plane). brMuH and brRel are read-only
+  expressions (#defines), not variables: each use is a fetch, so read them behind a quad-uniform gate (one
+  unconditional fetch per pixel at main scope cost ~0.3 ms per ultra frame). `brMetal` is 0 on `lean`
+  layers. `float brAm` (the detail albedo multiplier over its mean, 1 where no detail layer was fetched) is main-scope
+  under BR_DETAIL_MAPS.
+- **Family hooks** (`chunks/family/index.ts`): `chunks/family/{textile, walls, ceiling, concrete, masonry, tile,
+  props}.ts` each export `{ pars, postSample, postDetail, grime, postWet, rough, normal, matPost, postLight, preFog }`,
+  concatenated in that family order at fixed points: pars at the end of the fragment common block; postSample after the
+  decode, before the detail fetch (may change brA, brOrmh, brNrm, brDetUv, brDetDx, brDetDy); postDetail inside the
+  detail block after the fetch, before it is applied (may rescale brAm, brDetSl, brDetVar); grime inside
+  `if ( brGrime != 0 )` after the shared lookups, one `else if ( brGrime == BR_G_<PROFILE> )` clause per profile (one
+  exclusive chain: separate ifs compiled to different rounding); postWet
+  after the wetness and puddle block; rough after the LEAN term; normal after the detail slope; matPost after three
+  fills `material` (wet F0 and glaze coverage applied; `bool brCoat` declared), before the specular AA; postLight after
+  FRAG_AO_REFL_GLSL; preFog in the fog replacement outside the debug views, before the submerged optics. The grime
+  branches moved verbatim: carpet (1) to textile, wallpaper (2) and paint (7, a copy of 2) to walls, ceilingTile (3)
+  to ceiling, concrete (4) to concrete, masonry (8, a copy of 4) to masonry, tile (5) to tile, metal (6) to props.
+  The textile sheen moved to textile.matPost, the clearcoat fields to props.matPost and the Level 0 pile trap from
+  `haze.ts` to textile.preFog. Hooks gate on brL or brGrime (quad-uniform), respect BR_DECAL, BR_LITE and
+  BR_DETAIL_MAPS, and skip expensive work when uBrReflPass > 0.5.
+- **Debug views** 24 `aux` (r brAux, g brAux2; lean layers show rg = lean · 0.5 + 0.5, b = 1), 25 `textile` (the
+  textile family's; black until it shows something) and 26 `relief` (r / b the relief above / below the mean in units
+  of `BR_L_RELIEF`, g the cavity 1 − ormh.r). They leave main early where their values exist, through
+  `if ( uDebugView == BR_DV_<VIEW> ) BR_DEBUG_EXIT( v )` (`chunks/debug.ts` DEBUG_PARS_GLSL: the fog stage's decal
+  premultiply, HDR clamp and empty specular G-buffer), instead of going through the fog-stage view list: a value read
+  there stays live through the whole shader, and six of them cost ~0.3 ms per ultra frame (register pressure).
+- **Shared shading (0b).** Every term is neutral at the rows' defaults; lanes switch them on in their `SurfacePhys`.
+  - *Rough diffuse* (`chunks/brdf.ts`, TS twin `eonBrdf`): three's `RE_Direct_Physical`, taken from ShaderChunk at
+    build time, becomes `brRE_Direct` (`#define RE_Direct` in the clipping_planes_pars slot, after
+    lights_physical_pars). It keeps three's Lambert line and adds EON minus Lambert where the global `brDiffSigma`
+    > 0, for the baked dominant-direction lobe and the flashlight. EON is the energy-preserving Fujii Oren-Nayar of
+    Portsmouth, Kutz and Hill (2025): `f = ρ(A + B·s/t) + f_ms`, `A = 1/(π + (π/2 − 2/3)σ)`, `B = σA`. Its
+    multiple-scattering lobe takes `ρ_ms = ρ`, because ρ is the calibrated macroscopic albedo, so the directional
+    albedo stays ρ at every angle (the white furnace holds within 0.1 %). material post sets
+    `brDiffSigma = min(1, sqrt(BR_L_SIGMA² + 0.5·(brDetVar + brVar)))` on layers with `BR_L_SIGMA > 0` and 0
+    elsewhere; the family matPost hooks may rescale it. The ambient and gradient terms and the sheen stay as they
+    were. At σ 0.45 the single scattering over Lambert is 0.885 at L = V = N and 1.48 at L = V, 60° off the normal:
+    under a torch at the eye the hot spot flattens and the oblique floor lifts.
+  - *Cavity visibility of the baked light* (`chunks/pom.ts` `DIRVIS`, TS twin `dirVis`):
+    `vis = 1 − (1 − V)·g`. The light is a cap of half-angle β around L, with `cos β = 2R_d − 1`. `g = 1.04·(2 −
+    (1 + cb²)c² − 1.5(1 − cb²)(1 − c²))` is twice the cap's cosine-weighted mean sin²θ, the hemisphere's being ½,
+    with `c = N_g·L` and `cb = max(cos β, min(sin θ_L, 0.55))` (the part of a wide cap below the horizon is cut).
+    Against a ray-marched height-field reference of grooves, tooled joints, pits and rough fields under caps of
+    25-85° at 0-75° from the normal, the rms error is 0.066 and the bias +0.003 (tests/materials/brdf.test.ts
+    re-runs a reduced set). A collimated light along the normal reaches the bottom of any open cavity; grazing and
+    wide light lose most.
+    - R_d, the direct light's own resultant length, is not baked. The baked w is R_d times the direct share of the
+      irradiance, and full bakes of nine zones (all terms against direct only, per texel) show that share swinging
+      from 0.25 on grazing-lit walls to 0.95 on floors under a lamp, while R_d stays at 0.85-1.0. The plan's
+      `R_d ≈ w / 0.8` therefore read grazing walls as a hemisphere-wide cap and gave their joints and pits about
+      twice the light the cap model gives at the baked R_d. The estimate is `R_d = clamp(0.95 + 0.15·w − 0.2·c)`,
+      fitted to two tiles per zone of those bakes: rms 0.055 in visibility against 0.097 for `w / 0.8`, weighted by
+      the directional energy (the other two tiles: 0.053 against 0.092; a sweep test re-checks it on two zones).
+    - `g ≤ 2`, so the clamp at 0 never engages above V = 0.5. The term stays linear in V over faces, joints and pits,
+      and the same wall patch has the same mean at 1.5 m and at 6 m (−1.75 % and −1.80 % against no term; the old
+      cone: −0.77 % and −0.15 %). A narrow light near the horizon would ask for more (shallow relief shadows like
+      cot(elevation) there), but only 1 % of the baked directional energy falls there.
+    - Skipped where `BR_L_PILE.x > 0`: the textile family carries pile visibility itself.
+    - Known limit: V is a scalar. The shadow of a pit or joint under a narrow light is a threshold in the horizon
+      angle, which a term linear in V can only average, so pits under raking light are softer than under the old
+      cone (PIPEWORKS corridor, joint / face 0.74 with the cone, 0.85 now), and a light spread along the horizon
+      (corridor lamps at both ends) still reads as one cap. Darker joints are the lanes' dirt (`BR_L_DIRT`).
+  - *Relief-aware dirt and wear* (`chunks/surface.ts`, inside the grime block after the profile chain; compiled in
+    by `BR_RELIEF_GRIME` once any layer sets an amount). Dirt is
+    `amt·conc^1.5·clamp(0.35 + 1.2·mask.G + 0.4·foot, 0, 1)`, where `conc = 1 − ormh.r` and `foot` falls from the
+    wall base to 0.6 m. It multiplies the albedo toward `BR_L_DIRT.rgb` and adds 0.12 of roughness (into ormh.g, so
+    the glaze unmixing sees it). Wear is `amt·clamp(brRel / BR_L_RELIEF, 0, 1)^1.2·traffic`, where traffic is mask A
+    on floors and falls from 0.3 m to 1.5 m on walls; it mixes the albedo toward `BR_L_WEAR.rgb`. brRel is measured
+    from the layer's mean plane, not from its neighbourhood. A block face above its joints is convex all over, so
+    arris wear needs a local 'wear' aux field.
+  - *Detail controls* (`chunks/surface.ts`, `chunks/detail.ts`):
+    - `BR_L_DETREP` divides the detail uv, its footprint and the puddle ripple's scale, so the detail repeats every
+      0.3 m × detRep.
+    - On 'detailMask' layers, brAux multiplies the detail strength after the postSample hooks.
+    - `BR_L_DETTINT` applies the multiplier's deviation once more per channel:
+      `brA *= 1 + (brAm − 1)·strength·tint`.
+    - `BR_L_DETSO` folds the detail cavity into the inline environment specular after FRAG_AO_REFL:
+      `× max(0.5, mix(1, brAm, 0.5·strength·detSO))`. The SSR G-buffer specular is untouched.
+  - *Grime helpers* (`chunks/grimeLib.ts`, before the family pars; TS twins `heightBlend`, `stainFront`):
+    - `brHeightBlend(m, rel, K, E)`: mask coverage that fills low relief first.
+    - `brStainFront(s, fine, L0, out inside, out tide)`: three nested ragged fronts. The inner fronts' spacing is
+      hashed from L0's bits. Each deposit is sharp outside and 4× softer inside, with an fwidth-based width, so call
+      it only in quad-uniform control flow.
+  - No uniforms and no samplers are added. `tests/materials/samplerBudget.test.ts` pins high and ultra at shell 16,
+    props 16, decal 15 and water 13 units, and takes a census of fragment uniform vectors. High and ultra pack to
+    218-219 of the WebGL2 minimum of 224, all of the growth from MAT_COUNT 30.
+  - Cost: while a feature's const array is all zeros, the compiler drops its code. Once any row sets a value, every
+    surface program pays for it through register pressure, whether or not such pixels are on screen. At ultra
+    (2560x1440) that is about 0.1-0.3 ms per feature (TEX2.md). At high, EON, dirt, wear, tint and specular
+    occlusion on concrete and CMU together cost +0.05-0.12 ms.
 
 **Must NOT touch:** lightmap encoding (WP7) and post (WP11). All tuning constants live in `materials/chunks/*.ts`.
 

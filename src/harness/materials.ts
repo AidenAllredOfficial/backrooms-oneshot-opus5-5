@@ -2,7 +2,7 @@
 //
 // URL params:
 //   view=albedo|normal|ormh|lit   (default albedo)
-//   layer=N                       one layer (default: gallery of all 28)
+//   layer=N                       one layer (default: gallery of all MAT_COUNT, 7 x 5)
 //   size=512|1024                 generation size (default 1024)
 //   ch=rgb|r|g|b|a                channel shown in the texture views (default rgb)
 //   mip=N                         show mip level N (default: trilinear)
@@ -15,8 +15,9 @@
 //                                 (soft alpha, alpha-tested for SIGNAGE/chalk-like hard edges) instead of discarding
 //   check=0                       skip the GPU checks
 //   checks=albedo,range,seam,orient   which GPU checks run (default all): range = per-layer albedo percentile range
-//                                 (stats().albedoRange) and the texture height maximum against SURFACE_PHYS.pomTop
-//                                 (stats().heightMax, heightFails)
+//                                 (stats().albedoRange), the texture height maximum against SURFACE_PHYS.pomTop
+//                                 (stats().heightMax, heightFails) and the aux channel's range (stats().auxRange: ormh.a
+//                                 per layer with its aux kind; view=ormh&ch=a shows the channel)
 //   hud=0                         hide the text overlay
 //   packh=1                       force the packed RGBA8 height scratch (fallback without float colour buffers)
 // window.__backrooms (HarnessDebugAPI): ready once the textures are generated, the checks have run and a few frames
@@ -26,12 +27,12 @@ import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { HarnessDebugAPI, LayerAlbedoReport } from '../core/debug.ts';
 import { MAT_COUNT, Mat, type MatId } from '../core/ids.ts';
-import { LAYER_DEFS, layerRepeatY } from '../core/materials.ts';
+import { LAYER_DEFS } from '../core/materials.ts';
 import type { TextureSet } from '../core/runtime.ts';
 import { SURFACE_PHYS } from '../materials/chunks/params.ts';
 import {
   arrowOrientationCheck, layerAlbedoCheck, layerAlbedoRangeCheck, layerHeightMax, reduceAtlasSlots, reduceLayers, tileSeamCheck,
-  tileSeamCheckDetailed, type LayerRangeReport, type OrientationReport, type SeamDetail,
+  tileSeamCheckDetailed, layerAuxRange, type LayerAuxRange, type LayerRangeReport, type OrientationReport, type SeamDetail,
 } from '../textures/albedoCheck.ts';
 import { generateTextures, textureBakeStats } from '../textures/TextureBaker.ts';
 import { detailBakeStats, generateDetailTextures } from '../textures/DetailBaker.ts';
@@ -40,8 +41,10 @@ import { setForcePackedScratch } from '../textures/programs.ts';
 import { LAYER_RECIPES_FULL } from '../textures/registry.ts';
 
 const READY_FRAMES = 5;
+/** The generator frame of a layer (metres per texture repeat, u x v: RecipeBody.frame or repeat x repeatY). */
+const frameOf = (l: number): readonly [number, number] => LAYER_RECIPES_FULL[l].frame;
 const COLS = 7;
-const ROWS = 4;
+const ROWS = 5;
 
 const q = new URLSearchParams(location.search);
 const view = (q.get('view') ?? 'albedo') as 'albedo' | 'normal' | 'ormh' | 'lit';
@@ -217,6 +220,7 @@ async function main(): Promise<void> {
   let seams: SeamDetail[] | null = null;
   let orient: OrientationReport[] | null = null;
   let ormhMeans: Float64Array | null = null;
+  let auxRange: LayerAuxRange[] | null = null;
   let signSlots: Float64Array | null = null;
   let detailMeans: Float64Array | null = null;
   let set: TextureSet | null = null;
@@ -249,6 +253,12 @@ async function main(): Promise<void> {
       // per-slot mean linear albedo of the SIGNAGE atlas (SignKind order): which artwork drives the layer mean
       signSlotMeans: signSlots ? Array.from({ length: 16 }, (_, i) => Array.from(signSlots!.subarray(i * 4, i * 4 + 4), (v) => +v.toFixed(3))) : null,
       lensEmissiveMean: ormhMeans ? +ormhMeans[Mat.PANEL_LENS * 4 + 3].toFixed(3) : null,
+      // texture realism v2: per-layer mean of ormh.a (the aux channel: 0 on 'none' layers, the emissive mask on
+      // PANEL_LENS / SIGNAGE) and the layers whose ormh.a is not 0 although their aux kind is 'none'
+      ormhAlphaMeans: ormhMeans ? Array.from({ length: MAT_COUNT }, (_, l) => +ormhMeans![l * 4 + 3].toFixed(4)) : null,
+      auxNoneFails: ormhMeans ? LAYER_RECIPES_FULL.filter((r) => r.aux === 'none' && ormhMeans![r.layer * 4 + 3] !== 0).map((r) => LAYER_DEFS[r.layer].name) : null,
+      // ...and per layer its range (min, p2, p98, max of the 32x32 cell means; checks=range) next to the aux kind
+      auxRange: auxRange ? auxRange.map((r) => ({ n: r.name, kind: LAYER_RECIPES_FULL[r.layer].aux, min: +r.min.toFixed(3), p2: +r.p2.toFixed(3), p98: +r.p98.toFixed(3), max: +r.max.toFixed(3) })) : null,
       errors,
     }),
     layerAlbedoCheck: () => (set ? layerAlbedoCheck(renderer, set) : Promise.resolve([])),
@@ -280,13 +290,14 @@ async function main(): Promise<void> {
     if (single >= 0) {
       const d = LAYER_DEFS[single];
       const bd = LAYER_DEFS[Math.max(0, baseLayer)];
-      const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), litMaterial(ts, single, new THREE.Vector2(2 / d.repeat, 2 / layerRepeatY(d)),
-        baseLayer, new THREE.Vector2(2 / bd.repeat, 2 / layerRepeatY(bd))));
+      const fr = frameOf(single), bf = frameOf(Math.max(0, baseLayer));
+      const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), litMaterial(ts, single, new THREE.Vector2(2 / fr[0], 2 / fr[1]),
+        baseLayer, new THREE.Vector2(2 / bf[0], 2 / bf[1])));
       quad.rotation.x = -1.05;
       quad.position.set(0.55, -0.35, 0);
       scene.add(quad);
-      const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.42, 128, 64), litMaterial(ts, single, new THREE.Vector2(2.64 / d.repeat, 1.32 / layerRepeatY(d)),
-        baseLayer, new THREE.Vector2(2.64 / bd.repeat, 1.32 / layerRepeatY(bd))));
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.42, 128, 64), litMaterial(ts, single, new THREE.Vector2(2.64 / fr[0], 1.32 / fr[1]),
+        baseLayer, new THREE.Vector2(2.64 / bf[0], 1.32 / bf[1])));
       sphere.position.set(-0.95, 0.2, 0.1);
       scene.add(sphere);
       cam.position.set(0, 0.95, 2.6);
@@ -300,14 +311,14 @@ async function main(): Promise<void> {
     } else {
       const grid = new THREE.Group();
       for (let l = 0; l < MAT_COUNT; l++) {
-        const d = LAYER_DEFS[l];
-        const quad = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.95), litMaterial(ts, l, new THREE.Vector2(0.95 / d.repeat, 0.95 / layerRepeatY(d))));
+        const fr = frameOf(l);
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.95), litMaterial(ts, l, new THREE.Vector2(0.95 / fr[0], 0.95 / fr[1])));
         quad.position.set((l % COLS) - (COLS - 1) / 2, (ROWS - 1) / 2 - Math.floor(l / COLS), 0);
         grid.add(quad);
       }
       grid.rotation.x = -0.35;
       scene.add(grid);
-      cam.position.set(0, 0, 5.4);
+      cam.position.set(0, 0, 6.4);
       cam.lookAt(0, 0, 0);
       animate = (t) => {
         area.width = 4; area.height = 1.5;
@@ -338,13 +349,14 @@ async function main(): Promise<void> {
     } else if (single >= 0 || extra) {
       const layer = single >= 0 ? single : 0;
       const d = LAYER_DEFS[layer];
-      const fr = extra ? 1 : layerRepeatY(d) / d.repeat; // frame aspect (v / u)
+      const fm = frameOf(layer);
+      const fr = extra ? 1 : fm[1] / fm[0]; // frame aspect (v / u)
       const h = 1.9, w = h / fr;
       const sc = Math.min(1, (2 * aspect() * 0.98) / w);
       const quad = new THREE.Mesh(new THREE.PlaneGeometry(w * sc, h * sc), viewMaterial(ts, layer));
       scene.add(quad);
       const what = detailView ? `D${layer} ${DETAIL_RECIPES[Math.min(layer, DETAIL_COUNT - 1)].name} ch=${chName}, ${tile}x${tile} repeats of 0.3 m` : `extra=${extra}`;
-      label(overlay, extra ? what : `${layer} ${d.name}  view=${view} ch=${chName}${mip >= 0 ? ` mip=${mip}` : ''}  ${d.repeat}x${layerRepeatY(d)} m, ${tile}x${tile} repeats`, 8, 6, W - 16);
+      label(overlay, extra ? what : `${layer} ${d.name}  view=${view} ch=${chName}${mip >= 0 ? ` mip=${mip}` : ''}  ${fm[0]}x${fm[1]} m, ${tile}x${tile} repeats`, 8, 6, W - 16);
     } else {
       const cell = Math.min((2 * aspect()) / COLS, 2 / ROWS);
       for (let l = 0; l < MAT_COUNT; l++) {
@@ -381,6 +393,7 @@ async function main(): Promise<void> {
       if (checkList.includes('range')) {
         range = await layerAlbedoRangeCheck(renderer, ts);
         heightMax = await layerHeightMax(renderer, ts);
+        auxRange = await layerAuxRange(renderer, ts);
       }
       phase = 'seam check';
       if (checkList.includes('seam')) seams = await tileSeamCheckDetailed(renderer, ts);

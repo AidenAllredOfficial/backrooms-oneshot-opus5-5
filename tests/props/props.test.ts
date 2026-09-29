@@ -7,6 +7,7 @@ import { Mat, PROP_KIND_COUNT, PropFlag, VFlag, type PropKindId } from '../../sr
 import type { PropPlacement } from '../../src/core/layout.ts';
 import { PROP_DEFS } from '../../src/core/props.ts';
 import { GeometryWriter } from '../../src/core/writer.ts';
+import { edgeDecode } from '../../src/props/builder.ts';
 import { emitProp, emitPropInto, PROP_VARIANTS, propTris } from '../../src/props/index.ts';
 import { backfaceVisibility, bounds, mirroredAtlasTris, validate, windingMismatch } from './meshUtil.ts';
 
@@ -154,7 +155,10 @@ describe('WP6 props: every kind, variant and yaw', () => {
         // aux.z = the anchor's bits; bit 1 = clearcoat on coated parts (car paint)
         if (m.aux[i * 4 + 1] !== 0 || (m.aux[i * 4 + 2] & ~2) !== 1) bad.push(`${kind}: aux.yz`);
         if (!dyn && (m.aux[i * 4 + 3] !== 57 || m.tint[i * 4 + 3] !== 0xa7)) bad.push(`${kind}: aux.w / tint.a`);
-        if (m.lmUv[i * 2] !== 0 || m.lmUv[i * 2 + 1] !== 0) bad.push(`${kind}: lmUv`);
+        // lmUv: face-local edge coordinates (builder.ts edgeEncode), 0 on curved axes; never NaN, s within [-1, 1]
+        for (const x of [m.lmUv[i * 2], m.lmUv[i * 2 + 1]]) {
+          if (!Number.isFinite(x) || (x !== 0 && (Math.abs(x) < 4 || Math.abs(edgeDecode(x).s) > 1 + 1e-3))) bad.push(`${kind}: lmUv ${x}`);
+        }
         if (bad.length > 5) break;
       }
     }

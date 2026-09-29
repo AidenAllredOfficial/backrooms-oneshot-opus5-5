@@ -127,6 +127,22 @@ export function layerHeightMax(renderer: THREE.WebGLRenderer, set: TextureSet): 
   });
 }
 
+export interface LayerAuxRange { layer: number; name: string; min: number; p2: number; p98: number; max: number }
+
+/** Texture realism v2: the range of each layer's aux channel ormh.a (Surf.aux / lean.y / emissive by its aux kind), as
+ * the min, 2nd / 98th percentile and max of its 32x32 cell means (mip 0): a 'detailMask' or 'wear' field that spans
+ * too little of 0..1 does nothing visible; 'none' layers must read 0 throughout. */
+export function layerAuxRange(renderer: THREE.WebGLRenderer, set: TextureSet): Promise<LayerAuxRange[]> {
+  return withState(renderer, async () => {
+    const a: number[][] = Array.from({ length: MAT_COUNT }, () => []);
+    await reduceLayersImpl(renderer, set.ormh, set.size, (l, _x, _y, v) => { a[l].push(v[3]); });
+    return a.map((cells, l) => {
+      const s = cells.sort((x, y) => x - y);
+      return { layer: l, name: LAYER_DEFS[l].name, min: s[0], p2: s[Math.floor(0.02 * (s.length - 1))], p98: s[Math.ceil(0.98 * (s.length - 1))], max: s[s.length - 1] };
+    });
+  });
+}
+
 /** Per-layer mean of all four channels of an array texture at mip 0 (linear). Length MAT_COUNT * 4. */
 export function reduceLayers(renderer: THREE.WebGLRenderer, arr: THREE.Texture, size: number): Promise<Float64Array> {
   return withState(renderer, () => reduceLayersImpl(renderer, arr, size));

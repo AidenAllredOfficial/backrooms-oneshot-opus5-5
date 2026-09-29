@@ -294,6 +294,39 @@ float brOpal( BrLens F, vec2 uv, float fp ) {
 	return ( 1.0 + BR_OP_HOT * ( 1.0 - r2 ) ) * ( 1.0 + dots ) * mix( BR_OP_CAV, 1.0, smoothstep( 0.0, BR_OP_CAV_W, F.dEdge ) ) * ( 1.0 - BR_OP_ANG + BR_OP_ANG * F.vz );
 }
 
+// lens aging (texture realism v2, lane D): a troffer pan collects dead insects and dust toward its low end. Against the
+// lit lens they show as 5-15 dark silhouettes (5-20 mm, 10-60 % opacity) within the last 30 % of the length and a
+// dust gradient toward that end (up to -10 %). The factor is divided by its own lens mean (the dust ramp's integral
+// and the silhouettes' area), so the lens still emits what the bake assumed: the dirt only redistributes it. fp: the
+// pixel footprint (m) softens the silhouette edges; one thinner than about a pixel fades out (and leaves the mean)
+float brLensAge( BrLens F, float seed8, float fp ) {
+	float end = brEpRand( seed8, 1100 ) < 0.5 ? - 1.0 : 1.0;
+	float u = clamp( 0.5 + end * F.a / F.La, 0.0, 1.0 ); // 1 at the dusty end
+	float dk = 0.1 * brEpRand( seed8, 1101 );
+	float dust = 1.0 - dk * smoothstep( 0.3, 1.0, u );
+	float dustMean = 1.0 - dk * 0.35;
+	int nb = 5 + int( brEpRand( seed8, 1102 ) * 10.99 );
+	float occ = 0.0, occMean = 0.0;
+	for ( int i = 0; i < 15; i ++ ) {
+		if ( i >= nb ) break;
+		float r1 = brEpRand( seed8, 1110 + 4 * i ), r2 = brEpRand( seed8, 1111 + 4 * i );
+		float r3 = brEpRand( seed8, 1112 + 4 * i ), r4 = brEpRand( seed8, 1113 + 4 * i );
+		vec2 c = vec2( end * F.La * ( 0.5 - 0.3 * r1 * r1 ), ( r2 - 0.5 ) * 0.9 * F.Wx );
+		float len = mix( 0.005, 0.02, r3 * r3 );
+		float op = mix( 0.1, 0.6, r4 );
+		float an = 6.2831853 * fract( r1 * 7.31 + r4 * 3.17 );
+		vec2 d = vec2( F.a, F.x ) - c;
+		d = vec2( cos( an ) * d.x + sin( an ) * d.y, - sin( an ) * d.x + cos( an ) * d.y );
+		vec2 ax = vec2( 0.5 * len, 0.18 * len );
+		float e = length( d / ax );
+		float w = fp / ax.y;
+		float vis = op * ( 1.0 - smoothstep( 0.5, 1.5, w ) ); // a silhouette narrower than ~a pixel fades out
+		occ = max( occ, vis * ( 1.0 - smoothstep( 1.0 - w, 1.0 + w, e ) ) );
+		occMean += vis * 3.14159265 * ax.x * ax.y;
+	}
+	return dust * ( 1.0 - occ ) / max( dustMean - occMean / max( F.La * F.Wx, 1e-4 ), 0.5 );
+}
+
 float brTubeAlongMean( float Lm, float eb ) {
 	float h = 0.5 * Lm;
 	float run = max( h - BR_TB_CAP, 1e-3 );
@@ -321,6 +354,7 @@ vec3 brEmitterShape( int ep, int variant, int param, float seed8, vec2 uv, vec3 
 		L *= nrm;
 		endMask *= nrm;
 		if ( F.aged ) L *= mix( vec3( 1.0 ), BR_AGED_TINT, 0.5 * brEpRand( seed8, 9 ) );
+		if ( ep != BR_EP_LOUVER ) L *= brLensAge( F, seed8, fp );
 	} else if ( ep == BR_EP_TUBE ) {
 		// bare T8: limb brightening, phosphor noise, electrode caps, blackened ends (normalised per tube)
 		float Lm = max( float( param ), 10.0 ) * 0.01;

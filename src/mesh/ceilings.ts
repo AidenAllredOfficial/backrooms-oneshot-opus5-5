@@ -185,11 +185,12 @@ export function emitCeilings(plan: Plan, g: TileGrid, rec: RecessedFixture[], cc
 
 /** TileState.VENT: a square stepped-cone supply diffuser filling one 0.6 m tile (instead of a flat decal): an outer
  * metal frame flush with the tile plane (it owns the ceiling chart texels like a tile would), three louvre rings
- * stepping 12 mm up into the plenum with dark slot risers, and a dark throat. Lightmap from the ceiling chart. */
+ * stepping 12 mm up into the plenum with dark slot risers, and a dark throat (PLENUM x 0.35: the duct's dim interior,
+ * not a black hole). Lightmap from the ceiling chart. */
 function emitDiffuser(plan: Plan, spec: ChartSpec, x0: number, z0: number, yt: number, hb: number): void {
   const metal = state(Mat.METAL_PAINTED, VFlag.NO_GRIME, tintRGB(0.86, 0.86, 0.84, (hb * 65536) & 255));
   const slot = state(Mat.METAL_PAINTED, VFlag.NO_GRIME, tintRGB(0.3, 0.3, 0.29));
-  const throat = state(Mat.PLENUM, VFlag.NO_GRIME, tintRGB(0.08, 0.08, 0.08));
+  const throat = state(Mat.PLENUM, VFlag.NO_GRIME, tintRGB(0.35, 0.35, 0.35));
   const S = CEIL_TILE, STEP = 0.012;
   const ins = [0, 0.045, 0.095, 0.145, 0.195];
   for (let r = 0; r + 1 < ins.length; r++) {

@@ -158,17 +158,19 @@ export function testSceneChunk(id: TestSceneId, key: ChunkKey, seed: number): Ch
       break;
     }
     case 'materials': {
-      // 28 floor patches (7 columns x 4 rows of 4x7 cells) and 28 wall panels along the north and south walls
+      // 28 floor patches (7 columns x 4 rows of 4x7 cells) and 28 wall panels along the north and south walls: the
+      // placed layers 0..27 (the texture realism v2 reserved layers from 28 on are not placed until their lanes do)
+      const placed = Math.min(MAT_COUNT, 28);
       for (let j = 2; j < 30; j++) {
         for (let i = 2; i < 30; i++) {
-          const layer = Math.min(MAT_COUNT - 1, Math.floor((i - 2) / 4) + 7 * Math.floor((j - 2) / 7));
+          const layer = Math.min(placed - 1, Math.floor((i - 2) / 4) + 7 * Math.floor((j - 2) / 7));
           l.floorMat[cellIdx(i, j)] = layer;
         }
       }
       for (let i = 2; i < 30; i++) {
         const layer = i - 2;
         l.ez.matPos[ezIdx(i, 2)] = layer; // north wall, face inside the room (cell j = 2)
-        l.ez.matNeg[ezIdx(i, 30)] = MAT_COUNT - 1 - layer; // south wall, face in cell j = 29
+        l.ez.matNeg[ezIdx(i, 30)] = placed - 1 - layer; // south wall, face in cell j = 29
         l.ez.trim[ezIdx(i, 2)] = 0; l.ez.trim[ezIdx(i, 30)] = 0;
       }
       placePropGallery(g, 2, 30, 2, 30);

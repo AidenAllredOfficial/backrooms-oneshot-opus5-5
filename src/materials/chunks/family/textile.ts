@@ -1,0 +1,426 @@
+// src/materials/chunks/family/textile.ts — texture realism v2 family hooks: textiles (CARPET_L0, CARPET_OFFICE,
+// FABRIC_PARTITION). Owns grime profile 1 (carpet), the textile sheen (materialPost), the pile shading (postLight) and
+// the 'textile' debug view (25). Lane A's file; hook points and rules in chunks/family/index.ts.
+//
+// Pile under overhead light reads through occlusion and view dependence, not normals. The layers store the pile
+// visibility V in ormh.r (the share of a view down into the pile that meets lit tips rather than the gaps between
+// them) and, on 'lean' layers, the pile lean in ormh.b / ormh.a (textures/layers/carpet.ts). Here:
+//  - pile visibility (postLight, SurfacePhys.pile [kp, kv]): the diffuse, direct and ambient, is scaled by
+//    Dv = 1 - kp (1 - V) mu_v^kv (mu_v = n_g . v): looking down the gaps show dark, at grazing the tips hide them
+//    (the velvet look). Linear in V, so the mip chain stays unbiased (no distance brightening). Dv stands for the
+//    generic texture-cavity multiply on the ambient, which is divided back out. The Level 0 pile also keeps a fibre
+//    multiple-scattering trap on its diffuse (T = TRAP x chroma^TRAP_SAT; it was a constant 0.55 on the whole
+//    radiance, specular and sheen included);
+//  - nap (grime branch + matPost): cut pile leans. Leaning toward the camera it shows fibre ends (darker, richer),
+//    leaning away the fibre sides (lighter, shinier). The lean is the texel lean (clumps) plus, on the Level 0 floor,
+//    a world nap along each broadloom roll with reversed widths and pile-reversal patches, stronger in worn lanes;
+//    s = v_t . lean (v_t the tangent-plane direction to the camera) scales the diffuse and the sheen;
+//  - office carpet tiles: the loop rows turn with each tile (the detail map too); the view along or across the rows
+//    shades the diffuse and the sheen (k = (v_t . row)^2); 0.6 m seams are drawn analytically (they survive the mips);
+//  - sheen: fibre surfaces reflect nearly white, so the sheen colour is the sqrt albedo pulled 30 % toward grey,
+//    damp fibres keep a grazing gloss;
+//  - carpet grime: a crisp wicking front with a dried tide ring, worn lanes that close the valleys and hold soil,
+//    spills with sharp edges and a dark rim.
+// Every term is linear in the filtered texture values or explicitly filtered (fwidth), and the hooks gate on the
+// per-face layer (quad-uniform).
+
+import { NOISE_WRAP } from '../../../core/constants.ts';
+import { Mat } from '../../../core/ids.ts';
+import { LAYER_DEFS } from '../../../core/materials.ts';
+import { LAYER_RECIPES_FULL } from '../../../textures/registry.ts';
+import { f } from '../params.ts';
+import type { FamilyHooks } from './index.ts';
+
+/** Textile shading constants (GLSL #defines BR_TX_* in the pars hook). */
+export const TEXTILE = {
+  /** Level 0 pile trap on the diffuse: T = TRAP x (albedo / max channel)^TRAP_SAT. With Dv (mean V 0.62, kv 0.8) it
+   * gives 0.43 looking down, 0.58 at mu_v 0.35 (a typical 3-4 m view; the old constant trap was 0.55 on the whole
+   * radiance, sheen and specular included) and 0.64 at mu_v 0.1. Set so the gallery 11 carpet / wall ratio stays with
+   * EON sigma 0.75, which darkens rough pile seen at grazing under overhead light. */
+  TRAP: 0.69,
+  TRAP_SAT: 0.3,
+  /** The gaps between the tufts: what light comes out of them has crossed more dyed fibre, so at the same luminance it
+   * is deeper in colour than the tips (a grey visibility multiplier left them olive-grey). The pile visibility K (Dv x
+   * the detail's) becomes K + (1 - K) GAP (c / m - 1) per channel, c = (albedo / max channel)^GAP_SAT and m the
+   * luminance-weighted mean of c (pileGap): the luminance, and so every calibration above, is unchanged. */
+  GAP: 0.15,
+  GAP_SAT: 1.5,
+  /** Wet pile clumps into spiky bundles, its valleys open and darken: V_eff = V^(1 + WET_V x absorbed water). */
+  WET_V: 0.6,
+  /** Detail-map view hiding on pile layers: brAm = 1 + (brAm - 1)(HIDE + (1 - HIDE) mu_v^kv). */
+  HIDE: 0.35,
+  /** Nap shading, s = v_t . lean: diffuse x clamp(1 - NAP_DIFF s sin(theta_v), 0.6, 1.4), sheen x clamp(1 - NAP_SHEEN s,
+   * 0.2, 1.8). */
+  NAP_DIFF: 0.32,
+  NAP_SHEEN: 0.6,
+  /** World nap on the Level 0 floor: magnitude (lean units) plus this x wear, the share of broadloom widths laid
+   * reversed, the wobble (degrees) and its noise cell (m, divides NOISE_WRAP). */
+  NAP_AMP: 0.5,
+  NAP_WEAR: 0.5,
+  NAP_REV: 0.2,
+  NAP_WOBBLE: 25,
+  NAP_CELL: 0.6,
+  /** Pile-reversal patches: a value noise of REV_CELL metres (divides NOISE_WRAP) plus the outline wobble, above
+   * REV_T +- REV_W: ~15 % of the floor in 0.3-1.2 m blotches with a crisp edge (a disc loop over the 2.4 m feature
+   * lattice cost ~9 hashes per pixel). */
+  REV_CELL: 0.96,
+  REV_T: 0.69,
+  REV_W: 0.03,
+  /** Office loop rows, k = (v_t . row)^2: diffuse x (1 - ROW_DIFF / 2 + ROW_DIFF k (1 - mu_v)), sheen x (ROW_SHEEN0 +
+   * ROW_SHEEN1 k). */
+  ROW_DIFF: 0.08,
+  ROW_SHEEN0: 0.6,
+  ROW_SHEEN1: 0.8,
+  /** Damp patches (the tide-perturbed wet field): the wicking front, where the field crosses DAMP_AT, is a step to
+   * DAMP_EDGE of the full damp look, FRONT_W metres half-wide and ragged by +-FRONT_AMP metres over FRONT_CELL; the damp
+   * then deepens inward to DAMP_IN (field units). The dried tide ring lies TIDE_OUT metres outside the front, TIDE_HW
+   * metres half-wide (colour multiplier and amount). */
+  DAMP_AT: 0.25,
+  DAMP_IN: 0.62,
+  DAMP_EDGE: 0.25,
+  FRONT_W: 0.015,
+  FRONT_AMP: 0.02,
+  FRONT_CELL: 0.025,
+  TIDE: [0.78, 0.68, 0.52] as const,
+  TIDE_AMT: 0.6,
+  TIDE_OUT: 0.025,
+  TIDE_HW: 0.006,
+  /** Worn traffic lanes: V -> mix(V, 0.9, WEAR_V x wear); soil on the fibre tips (colour multiplier). */
+  WEAR_V: 0.7,
+  WEAR_SOIL: [0.9, 0.87, 0.82] as const,
+  /** Spills: probability per 2.4 m cell, radius (m), a dried rim (m wide) and colours. */
+  BLOT_P: 0.25,
+  BLOT_R: [0.05, 0.3] as const,
+  BLOT_RIM: 0.015,
+  BLOT_COL: [0.7, 0.64, 0.55] as const,
+  BLOT_RIM_COL: [0.78, 0.7, 0.58] as const,
+} as const;
+
+/** Pile visibility (twin of the postLight GLSL): V the texture visibility (ormh.r), muV = n_g . v. Linear in V. */
+export function pileVisibility(V: number, muV: number, kp: number, kv: number): number {
+  return Math.max(1 - kp * (1 - V) * Math.pow(Math.min(Math.max(muV, 0), 1), kv), 0);
+}
+
+/** Rec. 709 luminance of a linear rgb triple (brLuma). */
+const luma = (c: readonly number[]): number => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+
+/** Pile visibility per channel (twin of the matPost GLSL): K the visibility (Dv x the detail's), albedo the linear
+ * diffuse albedo. Linear in K; the albedo-weighted luminance is K's (luma(albedo x result) = K luma(albedo)); a grey
+ * albedo gives K on every channel. Clamped at 0 (only K < ~0.1 on the Level 0 mustard reaches it). */
+export function pileGap(K: number, albedo: readonly [number, number, number]): [number, number, number] {
+  const mx = Math.max(albedo[0], albedo[1], albedo[2], 1e-4);
+  const c = albedo.map((a) => Math.pow(Math.max(a, 1e-4) / mx, TEXTILE.GAP_SAT));
+  const m = luma(albedo.map((a, i) => Math.max(a, 1e-4) * c[i])) / Math.max(luma(albedo.map((a) => Math.max(a, 1e-4))), 1e-6);
+  return c.map((ci) => Math.max(K + (1 - K) * TEXTILE.GAP * (ci / m - 1), 0)) as [number, number, number];
+}
+
+/** Nap diffuse factor (twin of the postLight GLSL): s = v_t . lean (> 0 leaning toward the camera; v_t the unit
+ * tangent-plane direction to the camera), muV = n_g . v. The share of fibre ends against fibre sides in view changes
+ * with the lean times sin(theta_v), linearly in the (mip-filtered) lean. */
+export function napDiffuse(s: number, muV: number): number {
+  const sinV = Math.sqrt(Math.max(1 - muV * muV, 0));
+  return Math.min(Math.max(1 - TEXTILE.NAP_DIFF * s * sinV, 0.6), 1.4);
+}
+
+const T = TEXTILE;
+const v2 = (a: readonly number[]): string => `vec2( ${f(a[0])}, ${f(a[1])} )`;
+const v3 = (a: readonly number[]): string => `vec3( ${f(a[0])}, ${f(a[1])}, ${f(a[2])} )`;
+
+/** The pile layers (SurfacePhys.pile.x > 0) as GLSL: a gate on the layer id and its [kp, kv], compiled to compares and
+ * selects instead of the dynamically indexed const array BR_L_PILE (the same rows). */
+const PILE_ROWS = LAYER_RECIPES_FULL.filter((r) => r.phys.pile[0] > 0);
+const PILE_ON = PILE_ROWS.map((r) => `( l ) == ${r.layer}`).join(' || ');
+const PILE_OF = PILE_ROWS.map((r) => `l == ${r.layer} ? ${v2(r.phys.pile)} : `).join('') + 'vec2( 0.0 )';
+
+export const TEXTILE_HOOKS: FamilyHooks = {
+  pars: /* glsl */ `
+// ---- textiles (lane A, chunks/family/textile.ts)
+#define BR_TX_M_OFFICE ${Mat.CARPET_OFFICE}
+#define BR_TX_TRAP ${f(T.TRAP)}
+#define BR_TX_TRAP_SAT ${f(T.TRAP_SAT)}
+#define BR_TX_GAP ${f(T.GAP)}
+#define BR_TX_GAP_SAT ${f(T.GAP_SAT)}
+#define BR_TX_WET_V ${f(T.WET_V)}
+#define BR_TX_HIDE ${f(T.HIDE)}
+#define BR_TX_NAP_DIFF ${f(T.NAP_DIFF)}
+#define BR_TX_NAP_SHEEN ${f(T.NAP_SHEEN)}
+#define BR_TX_NAP_AMP ${f(T.NAP_AMP)}
+#define BR_TX_NAP_WEAR ${f(T.NAP_WEAR)}
+#define BR_TX_NAP_REV ${f(T.NAP_REV)}
+#define BR_TX_NAP_WOBBLE ${f((T.NAP_WOBBLE * Math.PI) / 180)}
+#define BR_TX_NAP_CELL ${f(T.NAP_CELL)}
+#define BR_TX_NAP_P ${Math.round(NOISE_WRAP / T.NAP_CELL)}
+#define BR_TX_OUTLINE_P ${Math.round(NOISE_WRAP / 0.3)}
+#define BR_TX_OUTLINE_P2 ${Math.round(NOISE_WRAP / 0.1)}
+#define BR_TX_FRONT_P ${Math.round(NOISE_WRAP / T.FRONT_CELL)}
+#define BR_TX_OFFICE_TILE ${f(LAYER_DEFS[Mat.CARPET_OFFICE].tileSize)}
+#define BR_TX_OFFICE_P ${Math.round(NOISE_WRAP / LAYER_DEFS[Mat.CARPET_OFFICE].tileSize)}
+#define BR_TX_REV_CELL ${f(T.REV_CELL)}
+#define BR_TX_REV_PER ${Math.round(NOISE_WRAP / T.REV_CELL)}
+#define BR_TX_REV_T ${f(T.REV_T)}
+#define BR_TX_REV_W ${f(T.REV_W)}
+#define BR_TX_ROW_DIFF ${f(T.ROW_DIFF)}
+#define BR_TX_ROW_SHEEN0 ${f(T.ROW_SHEEN0)}
+#define BR_TX_ROW_SHEEN1 ${f(T.ROW_SHEEN1)}
+#define BR_TX_DAMP_AT ${f(T.DAMP_AT)}
+#define BR_TX_DAMP_IN ${f(T.DAMP_IN)}
+#define BR_TX_DAMP_EDGE ${f(T.DAMP_EDGE)}
+#define BR_TX_FRONT_W ${f(T.FRONT_W)}
+#define BR_TX_FRONT_AMP ${f(T.FRONT_AMP)}
+#define BR_TX_FRONT_CELL ${f(T.FRONT_CELL)}
+#define BR_TX_TIDE ${v3(T.TIDE)}
+#define BR_TX_TIDE_AMT ${f(T.TIDE_AMT)}
+#define BR_TX_TIDE_OUT ${f(T.TIDE_OUT)}
+#define BR_TX_TIDE_HW ${f(T.TIDE_HW)}
+#define BR_TX_WEAR_V ${f(T.WEAR_V)}
+#define BR_TX_WEAR_SOIL ${v3(T.WEAR_SOIL)}
+#define BR_TX_BLOT_P ${f(T.BLOT_P)}
+#define BR_TX_BLOT_R ${v2(T.BLOT_R)}
+#define BR_TX_BLOT_RIM ${f(T.BLOT_RIM)}
+#define BR_TX_BLOT_COL ${v3(T.BLOT_COL)}
+#define BR_TX_BLOT_RIM_COL ${v3(T.BLOT_RIM_COL)}
+// the pile layers (BR_L_PILE rows) as compares: a dynamically indexed const array costs a local copy per use
+#define BR_TX_PILE_ON( l ) ( ${PILE_ON} )
+vec2 brTxPile( int l ) { return ${PILE_OF}; }
+// the blotchy outline wobble of stains and reversal patches (0..1): two octaves, 0.3 m and 0.1 m
+float brTxWobble( vec2 s2 ) {
+	return 0.65 * brVNoise( s2 / 0.3, ivec2( BR_TX_OUTLINE_P ), 359u ) + 0.35 * brVNoise( s2 / 0.1, ivec2( BR_TX_OUTLINE_P2 ), 361u );
+}
+// spills on the 2.4 m feature lattice: at most one per cell (probability prob), kept inside it (its centre at least
+// 0.6 m from the cell edges, the disc reaches at most 0.52 m), so a pixel reads its own cell only (a 3 x 3 neighbourhood
+// cost 0.04-0.07 ms at high on a carpeted frame). 1 inside a disc of radius rr.x..rr.y whose outline wobbles with wob
+// (brTxWobble; < 0: evaluated here, only in a spill's cell), fading over an edge ee.x..ee.y metres wide; rim = a band
+// rimW wide just inside the outline (a stain's dried edge). Both widen to the pixel footprint fp (metres) and the rim
+// keeps its coverage there, so a thin rim far away fades instead of breaking up into crawling dots
+float brTxDiscs( vec2 s2, uint salt, float prob, vec2 rr, vec2 ee, float rimW, float wob, float fp, out float rim ) {
+	rim = 0.0;
+	ivec2 c = ivec2( floor( s2 / BR_FEATURE_CELL ) );
+	uint h = brHash2u( brWrap( c, ivec2( BR_FEATURE_P ) ), salt );
+	if ( brU01( h ) > prob ) return 0.0;
+	if ( wob < 0.0 ) wob = brTxWobble( s2 );
+	vec2 ctr = ( vec2( c ) + 0.25 + 0.5 * vec2( brU01( brPcg( h ) ), brU01( brPcg( h + 1u ) ) ) ) * BR_FEATURE_CELL;
+	float r = mix( rr.x, rr.y, brU01( brPcg( h + 2u ) ) );
+	float e = max( mix( ee.x, ee.y, brU01( brPcg( h + 3u ) ) ), fp );
+	vec2 dv = ( s2 - ctr ) * vec2( 1.0, mix( 0.75, 1.25, brU01( brPcg( h + 4u ) ) ) );
+	float d = length( dv ) - r * ( 0.7 + 0.6 * wob ); // metres outside the (wobbly) outline
+	float rw = max( rimW, fp );
+	rim = rimW / rw * ( 1.0 - smoothstep( 0.0, 0.5 * rw, abs( d + 0.5 * rw ) ) );
+	return 1.0 - smoothstep( - e, 0.0, d );
+}
+`,
+  postSample: /* glsl */ `
+// textile state at main scope (lane A), both read by matPost (every pixel carries them up to there, so they stay few;
+// nothing of the textile shading is live across the lighting): the world nap (world xz, lean units; the carpet grime
+// branch sets it) and, on pile layers, the detail map's multiplier applied as visibility instead of albedo
+vec2 brTxNapW = vec2( 0.0 );
+float brTxAm = 1.0;
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+// office carpet tiles: the loop-pile detail turns with its tile (brRotM about the tile centre; the 0.3 m repeat
+// divides the 0.6 m tile, so it stays seamless inside it). postDetail turns the uv and the slope back
+if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
+	vec2 brTxC = brRotC * floor( brLB.x / BR_DETAIL_REPEAT + 0.5 );
+	brDetUv = brTxC + brRotM * ( brDetUv - brTxC );
+	brDetDx = brRotM * brDetDx;
+	brDetDy = brRotM * brDetDy;
+}
+#endif
+`,
+  postDetail: /* glsl */ `
+	if ( BR_TX_PILE_ON( brL ) ) {
+		// pile: the detail's multiplier is mostly the cracks between tufts, i.e. pile visibility at the sub-texel scale.
+		// It shows looking down and hides behind the tips at grazing (as Dv), and scales the diffuse light (matPost)
+		// rather than the albedo
+		vec3 brTxVd = normalize( ( vec4( vViewPosition, 0.0 ) * viewMatrix ).xyz );
+		brTxAm = 1.0 + ( brAm - 1.0 ) * brDetL.y * ( BR_TX_HIDE + ( 1.0 - BR_TX_HIDE ) * pow( clamp( dot( brNWg, brTxVd ), 0.0, 1.0 ), brTxPile( brL ).y ) );
+		brAm = 1.0;
+		if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
+			// back to the continuous detail frame (M orthonormal): the slope of the turned detail, and the uv the normal
+			// pass differentiates
+			mat2 brTxMt = transpose( brRotM );
+			vec2 brTxC = brRotC * floor( brLB.x / BR_DETAIL_REPEAT + 0.5 );
+			brDetSl = brTxMt * brDetSl;
+			brDetUv = brTxC + brTxMt * ( brDetUv - brTxC );
+			brDetDx = brTxMt * brDetDx;
+			brDetDy = brTxMt * brDetDy;
+		}
+	}
+`,
+  grime: /* glsl */ `
+	else if ( brGrime == BR_G_CARPET ) {
+		// carpet: damage (A) = trodden wear paths / thresholds / lanes; grime (G) = dirt near walls; wet patches (B)
+		float wear = smoothstep( 0.25, 0.75, brMask.a + ( g1.b - 0.5 ) * 0.3 );
+		brWear = wear;
+		// worn lanes: crushed pile closes its valleys (V up) and holds soil on the fibre tips (greyer, not lighter)
+		brOrmh.r = mix( brOrmh.r, 0.9, BR_TX_WEAR_V * wear );
+		brA *= mix( vec3( 1.0 ), BR_TX_WEAR_SOIL, wear );
+		brNrmScale *= 1.0 - BR_CARPET_WEAR_NORMAL * wear;
+		brA *= 1.0 - 0.35 * clamp( brMask.g * ( 0.55 + 0.9 * g1.g ), 0.0, 1.0 );
+		// the damp patch ends at a ragged wicking front a few cm wide, then deepens inward (the wide ramp alone read as a
+		// cast shadow); under water everything stays soaked. The front's width, its raggedness and the tide ring are
+		// metres: field units scaled by the field's slope per metre, so a shallow field crossing the threshold draws a
+		// contour, not a wide speckled band
+		float brTxFp = max( max( length( dFdx( brS2 ) ), length( dFdy( brS2 ) ) ), 1e-5 ); // the pixel footprint, metres
+		float brTxG = length( vec2( dFdx( wetRaw ), dFdy( wetRaw ) ) ) / brTxFp;
+		float brTxFwW = fwidth( wetRaw );
+		// the front raggedness (no derivatives inside): only within 8 cm of the front, which holds the front and the tide
+		// ring at any field slope (a window in field units cut the ring's raggedness off where the field is steep), and
+		// faded out before its 2.5 cm cells get smaller than a pixel (they would alias into a crawling band)
+		float brTxWr = wetRaw;
+		if ( abs( wetRaw - BR_TX_DAMP_AT ) < 0.08 * brTxG ) brTxWr += ( brVNoise( brS2 / BR_TX_FRONT_CELL, ivec2( BR_TX_FRONT_P ), 367u ) * 2.0 - 1.0 ) * brTxG * BR_TX_FRONT_AMP * ( 1.0 - smoothstep( 0.25, 0.75, brTxFp / BR_TX_FRONT_CELL ) );
+		if ( brSubDepth <= 0.0 ) {
+			float brTxW = max( brTxG * BR_TX_FRONT_W, brTxFwW );
+			wet = smoothstep( BR_TX_DAMP_AT - brTxW, BR_TX_DAMP_AT + brTxW, brTxWr ) * mix( BR_TX_DAMP_EDGE, 1.0, smoothstep( BR_TX_DAMP_AT, BR_TX_DAMP_IN, wetRaw ) );
+		}
+		brWet = wet;
+		if ( BR_DETAIL == 1 && brHoriz ) {
+			// spills: 5-30 cm stains with a sharp edge and a darker dried rim; the outline wobble makes stains and
+			// reversal patches blotchy, not ellipses (the Level 0 reversal patches need it everywhere, the office tiles
+			// only in a spill's cell)
+			float brTxWob = brL == BR_M_CARPET_L0 ? brTxWobble( brS2 ) : - 1.0;
+			float brTxRim;
+			float b = brTxDiscs( brS2, 301u, BR_TX_BLOT_P, BR_TX_BLOT_R, vec2( 0.008, 0.02 ), BR_TX_BLOT_RIM, brTxWob, brTxFp, brTxRim );
+			float bs = clamp( 0.35 + brMask.g + brMask.a, 0.0, 1.0 );
+			brA *= mix( vec3( 1.0 ), BR_TX_BLOT_COL, b * bs * ( 0.55 + 0.45 * g2.g ) );
+			brA *= mix( vec3( 1.0 ), BR_TX_BLOT_RIM_COL, brTxRim * bs );
+			if ( brL == BR_M_CARPET_L0 ) {
+				// broadloom: seams every 3.84 m along x (3 mm darker line) and a dye lot per width (±3 %)
+				float bx = brS2.x / BR_CARPET_BROADLOOM;
+				uint hl = brHash2u( brWrap( ivec2( int( floor( bx ) ), 0 ), ivec2( BR_CARPET_BROADLOOM_P, 1 ) ), 341u );
+				float lv = brU01( hl ) * 2.0 - 1.0, lh = brU01( brPcg( hl ) ) * 2.0 - 1.0;
+				brA *= ( 1.0 + 0.03 * lv ) * vec3( 1.0 + 0.012 * lh, 1.0, 1.0 - 0.012 * lh );
+				float dm = abs( fract( bx + 0.5 ) - 0.5 ) * BR_CARPET_BROADLOOM;
+				float fw = max( fwidth( brS2.x ), 1e-4 );
+				float seamL = clamp( 0.003 / fw, 0.0, 1.0 ) * ( 1.0 - smoothstep( 0.0015, 0.0015 + fw, dm ) );
+				brA *= 1.0 - 0.35 * seamL * ( 0.6 + 0.4 * g1.g );
+				// nap: the pile leans along the roll length (z), one way per width (some widths laid reversed), wobbling
+				// ±25° over ~0.6 m; pile-reversal patches (crisp 6-10 cm edges) flip it, and crushed traffic lanes lie
+				// flatter (a stronger nap)
+				float brTxNs = brU01( brPcg( hl ^ 0x2545f491u ) ) < BR_TX_NAP_REV ? - 1.0 : 1.0;
+				float brTxWb = ( brVNoise( brS2 / BR_TX_NAP_CELL, ivec2( BR_TX_NAP_P ), 351u ) * 2.0 - 1.0 ) * BR_TX_NAP_WOBBLE;
+				// pile-reversal patches: where a blotchy field (a 0.96 m value noise plus the outline wobble) crosses its
+				// threshold: ~15 % of the floor in 0.3-1.2 m blotches with a crisp edge, no sharper than the footprint
+				float brTxRn = 0.75 * brVNoise( brS2 / BR_TX_REV_CELL, ivec2( BR_TX_REV_PER ), 353u ) + 0.25 * brTxWob;
+				float brTxRw = max( BR_TX_REV_W, fwidth( brTxRn ) );
+				float brTxRev = smoothstep( BR_TX_REV_T - brTxRw, BR_TX_REV_T + brTxRw, brTxRn );
+				brTxNapW = vec2( sin( brTxWb ), cos( brTxWb ) ) * ( brTxNs * ( 1.0 - 2.0 * brTxRev ) * ( BR_TX_NAP_AMP + BR_TX_NAP_WEAR * wear ) );
+			}
+			if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 ) {
+				// carpet tiles in world space (0.6 m): a dye lot per tile (±3 %; 1 in 12 a replacement from another lot,
+				// ±8 %), and the seam line drawn analytically (1.5 mm, anti-aliased by the footprint) so it survives the
+				// mips; 1 in 20 tiles has a lifted edge that catches the light
+				vec2 brTxTq = brS2 / BR_TX_OFFICE_TILE;
+				uint brTxTh = brHash2u( brWrap( ivec2( floor( brTxTq ) ), ivec2( BR_TX_OFFICE_P ) ), 373u );
+				float brTxRep = brU01( brPcg( brTxTh ) ) < 1.0 / 12.0 ? 0.08 : 0.03;
+				brA *= 1.0 + brTxRep * ( 2.0 * brU01( brTxTh ) - 1.0 );
+				vec2 brTxTd = abs( fract( brTxTq + 0.5 ) - 0.5 ) * BR_TX_OFFICE_TILE; // metres to the tile edges (x, z)
+				vec2 brTxFw = max( fwidth( brS2 ), vec2( 1e-4 ) );
+				vec2 brTxSl = clamp( 0.0015 / brTxFw, 0.0, 1.0 ) * ( 1.0 - smoothstep( vec2( 0.00075 ), 0.00075 + brTxFw, brTxTd ) );
+				brA *= ( 1.0 - 0.4 * brTxSl.x ) * ( 1.0 - 0.4 * brTxSl.y );
+				if ( brU01( brPcg( brTxTh ^ 0x51ed27u ) ) < 0.05 ) {
+					vec2 brTxLf = brTxTq - floor( brTxTq ); // lifted along the tile's -x / -z edges
+					brA *= 1.0 + 0.08 * ( 1.0 - smoothstep( 0.0, 0.05, min( brTxLf.x, brTxLf.y ) ) );
+				}
+			}
+#ifdef BR_SHELL
+			// filtration soiling: a dark line on the carpet along the wall faces (air drawn under the baseboards),
+			// from the tile wall mask, broken up by the tide field
+			ivec2 wcl = ivec2( floor( vBrLocal.xz / BR_CELL ) );
+			int wbits = brWallBits( wcl );
+			if ( wbits != 0 ) {
+				vec2 wfr = vBrLocal.xz - vec2( wcl ) * BR_CELL;
+				float wd = 9.0;
+				if ( ( wbits & 1 ) != 0 ) wd = min( wd, wfr.y );
+				if ( ( wbits & 2 ) != 0 ) wd = min( wd, BR_CELL - wfr.x );
+				if ( ( wbits & 4 ) != 0 ) wd = min( wd, BR_CELL - wfr.y );
+				if ( ( wbits & 8 ) != 0 ) wd = min( wd, wfr.x );
+				float soil = 1.0 - smoothstep( 0.075, 0.095 + 0.03 * g2.r, wd );
+				brA *= mix( vec3( 1.0 ), vec3( 0.7, 0.66, 0.6 ), soil * ( 0.55 + 0.45 * g2.r ) );
+			}
+#endif
+		}
+		// damp: a dried tide ring (dirty-water brown) just outside the wicking front, anti-aliased by the field's
+		// footprint (its coverage is kept when it gets thinner than a pixel); the damp interior darkens, saturates and
+		// clumps through the porosity model, mottled by the tide field
+		float brTxHw = brTxG * BR_TX_TIDE_HW;
+		float ring = brTxHw / ( brTxHw + brTxFwW + 1e-6 ) * ( 1.0 - smoothstep( 0.0, brTxHw + brTxFwW, abs( brTxWr - BR_TX_DAMP_AT + brTxG * BR_TX_TIDE_OUT ) ) );
+		brA *= mix( vec3( 1.0 ), BR_TX_TIDE, BR_TX_TIDE_AMT * ring );
+		brA *= mix( vec3( 1.0 ), mix( 0.88, 1.0, g1.r ) * vec3( 1.02, 0.98, 0.9 ), wet );
+	}
+`,
+  postWet: /* glsl */ `
+// pile layers: standing water and a saturated film lie over the pile, so the specular above them (the environment's
+// specular occlusion and the SSR hit weight, both from the texture cavity ormh.r) sees the water surface rather than the
+// gaps between the tufts; the pile's own visibility brTxVis stays for Dv (matPost)
+float brTxVis = brOrmh.r;
+if ( BR_TX_PILE_ON( brL ) ) brOrmh.r = mix( brOrmh.r, 1.0, max( brPuddle, brFilm ) );
+`,
+  rough: '',
+  normal: '',
+  matPost: /* glsl */ `
+// textile shading (lane A): the pile visibility Dv (TS twin pileVisibility), the nap (napDiffuse) or the office rows,
+// the detail's visibility and the Level 0 trap scale the diffuse albedo the lights see (material.diffuseContribution:
+// the punctual lights, the baked light and the ambient alike), so nothing of the textile shading stays live across the
+// lighting; view=albedo keeps the fibre colour. postLight undoes the generic cavity multiply on the ambient.
+// brTxS: the pile lean seen from the camera (> 0: leaning toward it; the texel lean in the uv frame through the
+// cotangent frame, plus the world nap); brTxRow: the office rows' alignment with the view
+float brTxS = 0.0, brTxRow = 0.0;
+#ifndef BR_DECAL
+if ( BR_TX_PILE_ON( brL ) ) {
+	vec2 brTxKp = brTxPile( brL );
+	vec3 brTxV = normalize( vViewPosition );
+	float brTxMu = clamp( dot( brNg, brTxV ), 0.0, 1.0 );
+	vec3 brTxVt = brTxV - brNg * dot( brNg, brTxV );
+	float brTxVl = length( brTxVt ); // sin(theta_v)
+	brTxVt /= max( brTxVl, 1e-4 );
+	float brTxF = smoothstep( 0.0, 0.2, brTxVl ); // looking straight down the direction to the camera is undefined
+	vec3 brTxL = brTbn[ 0 ] * ( brLean.x * inversesqrt( max( dot( brTbn[ 0 ], brTbn[ 0 ] ), 1e-12 ) ) )
+		+ brTbn[ 1 ] * ( brLean.y * inversesqrt( max( dot( brTbn[ 1 ], brTbn[ 1 ] ), 1e-12 ) ) );
+	float brTxNd;
+	if ( brL == BR_TX_M_OFFICE ) {
+		// loop rows have no nap: only the angle between the rows and the view matters, along or across
+		brTxRow = brTxF * pow2( dot( brTxVt, brTxL ) ) / max( dot( brTxL, brTxL ), 1e-4 );
+		brTxNd = 1.0 - 0.5 * BR_TX_ROW_DIFF + BR_TX_ROW_DIFF * brTxRow * ( 1.0 - brTxMu );
+	} else {
+		// nap: leaning toward the camera the pile shows fibre ends (darker); their share against the fibre sides in
+		// view changes with the lean times sin(theta_v)
+		brTxS = brTxF * dot( brTxVt, brTxL + ( viewMatrix * vec4( brTxNapW.x, 0.0, brTxNapW.y, 0.0 ) ).xyz );
+		brTxNd = clamp( 1.0 - BR_TX_NAP_DIFF * brTxS * brTxVl, 0.6, 1.4 );
+	}
+	// wet pile clumps into bundles: its valleys open and darken
+	float brTxVv = pow( clamp( brTxVis, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs );
+	float brTxDv = max( 1.0 - brTxKp.x * ( 1.0 - brTxVv ) * pow( brTxMu, brTxKp.y ), 0.0 );
+	// the gaps (1 - Dv x the detail's visibility) keep their luminance but are deeper in colour than the tips: their light
+	// has crossed more dyed fibre (TS twin pileGap; linear in the visibility)
+	float brTxKv = brTxDv * brTxAm;
+	vec3 brTxA = max( diffuseColor.rgb, vec3( 1e-4 ) );
+	vec3 brTxLc = log2( brTxA / max3( brTxA ) );
+	vec3 brTxC = exp2( BR_TX_GAP_SAT * brTxLc );
+	brTxC = brTxC * ( brLuma( brTxA ) / max( brLuma( brTxA * brTxC ), 1e-6 ) ) - 1.0;
+	vec3 brTxK = max( vec3( brTxKv ) + ( 1.0 - brTxKv ) * BR_TX_GAP * brTxC, vec3( 0.0 ) ) * brTxNd;
+	// the Level 0 pile trap: what escapes the pile has crossed more dyed fibre (darker and more saturated than one
+	// fibre); the layer table albedo stays the fibre colour the bake bounces with
+	if ( brL == BR_M_CARPET_L0 ) brTxK *= BR_TX_TRAP * exp2( BR_TX_TRAP_SAT * brTxLc );
+	material.diffuseContribution *= brTxK;
+	if ( uDebugView == BR_DV_TEXTILE ) BR_DEBUG_EXIT( vec3( brTxDv, 0.5 * brTxNd, 0.5 + 0.5 * brTxS ) )
+}
+#endif
+// textile sheen (Charlie lobe): fibre surfaces reflect nearly white, so the colour is the sqrt albedo pulled toward
+// grey; the nap and the office rows modulate it, damp fibres keep a grazing gloss, a film and standing water hide it
+#ifdef USE_SHEEN
+{
+	vec4 brLD = uBrLayerD[ brL ];
+	vec3 brTxSq = sqrt( max( diffuseColor.rgb, vec3( 0.0 ) ) );
+	float brTxShK = clamp( 1.0 - BR_TX_NAP_SHEEN * brTxS, 0.2, 1.8 ) * ( brL == BR_TX_M_OFFICE ? BR_TX_ROW_SHEEN0 + BR_TX_ROW_SHEEN1 * brTxRow : 1.0 );
+	material.sheenColor = brLD.z * mix( brTxSq, vec3( brLuma( brTxSq ) ), 0.3 ) * brTxShK * ( 1.0 - 0.8 * brAbs ) * ( 1.0 - 0.7 * brFilm ) * ( 1.0 - 0.2 * brWear ) * ( 1.0 - brPuddle );
+	material.sheenRoughness = clamp( brLD.w, 0.07, 1.0 );
+}
+#endif
+`,
+  postLight: /* glsl */ `
+#ifndef BR_DECAL
+// pile layers: Dv (in the diffuse albedo, matPost) stands for the generic texture-cavity multiply on the ambient
+if ( BR_TX_PILE_ON( brL ) ) reflectedLight.indirectDiffuse /= max( brCav, 1e-3 );
+#endif
+`,
+  preFog: '',
+};

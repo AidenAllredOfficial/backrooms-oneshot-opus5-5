@@ -1,5 +1,6 @@
 // src/materials/chunks/params.ts — WP9 tuning constants and the per-layer parameter tables (uLayerA..E; C/D/E from
-// SURFACE_PHYS, package B).
+// SURFACE_PHYS, package B) and the texture realism v2 per-layer GLSL const arrays (BR_L_*, BR_AUX_KIND).
+// SURFACE_PHYS rows live with the recipes (textures/layers/*.ts RecipeBody.phys); this file only collects them.
 // Pure data (no three). Every number that shapes the look of the surface shaders lives here or in the other
 // chunks/*.ts files, so tuning never touches the material factory.
 
@@ -10,7 +11,10 @@ import { DYN_SLOT_OFFSETS } from '../../core/mesh.ts';
 import { LAYER_DEFS, layerRepeatY } from '../../core/materials.ts';
 import type { GrimeProfile } from '../../core/materials.ts';
 import { DETAIL_RECIPES, DETAIL_REPEAT, DETAIL_RIPPLE, DETAIL_SIZE } from '../../textures/detail.ts';
-import { LAYER_RECIPES } from '../../textures/registry.ts';
+import { AUX_KIND_ID, type SurfacePhys } from '../../textures/layers/types.ts';
+import { LAYER_RECIPES_FULL } from '../../textures/registry.ts';
+
+export type { SurfacePhys };
 
 /** GLSL float literal (always has a decimal point). */
 export const f = (v: number): string => {
@@ -18,9 +22,10 @@ export const f = (v: number): string => {
   return /[.eE]/.test(s) ? s : s + '.0';
 };
 
-/** Grime profile ids used by the `switch` in chunks/surface.ts. */
+/** Grime profile ids of the branches in chunks/surface.ts (each owned by a chunks/family/*.ts file: carpet textile,
+ * wallpaper and paint walls, ceilingTile ceiling, concrete concrete, tile tile, metal props, masonry masonry). */
 export const GRIME_ID: Readonly<Record<GrimeProfile, number>> = {
-  none: 0, carpet: 1, wallpaper: 2, ceilingTile: 3, concrete: 4, tile: 5, metal: 6,
+  none: 0, carpet: 1, wallpaper: 2, ceilingTile: 3, concrete: 4, tile: 5, metal: 6, paint: 7, masonry: 8,
 };
 
 /** Per-layer normal-map strength multiplier (WP8 already bakes `normalStrength`; this is a shading trim). */
@@ -37,55 +42,10 @@ const MACRO_AMOUNT: Partial<Record<MatId, number>> = {
   [Mat.RUBBER]: 0.3, [Mat.PLENUM]: 0.5, [Mat.POOL_TILE]: 0.6, [Mat.POOL_MOSAIC]: 0.6,
 };
 
-/**
- * Physical surface parameters per layer (package B; uBrLayerC/D/E):
- * - por: porosity 0..1 (Lagarde 2013 wetness: how much a wet layer darkens / saturates, and how late its water
- *   film forms; textiles 1, glazes and sealed plastics ~0);
- * - pomTop: normalised top height of the relief for parallax occlusion mapping (0 = off; never on hex-tiled or
- *   alpha-tested layers). It must cover the per-texel maximum, not only the harness heightMax (32x32 cell means): a
- *   texel above the top (a raised tilted-tile corner) casts false self-shadows on ultra;
- * - tok: weight of the Toksvig (mip-filtered normal) variance in the roughness (1 = all of it is lobe broadening;
- *   < 1 where most of the filtered variance is structural: grout bevels, tilted tiles, joints, ribs);
- * - det / detS: detail-map layer (textures/detail.ts D0..D10, -1 = none; D11 is the puddle ripple) and strength;
- * - sheen / sheenR: textile sheen amount and roughness (USE_SHEEN);
- * - glaze / roughComp: two-lobe unmixing of bimodal layers (glaze lobe roughness and rough-component roughness:
- *   the mip-filtered roughness is their coverage mixture); 0 = single lobe.
- */
-export interface SurfacePhys {
-  por: number; pomTop: number; tok: number; det: number; detS: number; sheen: number; sheenR: number; glaze: number; roughComp: number;
-}
-const phys = (por: number, o: Partial<Omit<SurfacePhys, 'por'>> = {}): SurfacePhys =>
-  ({ por, pomTop: 0, tok: 1, det: -1, detS: 0, sheen: 0, sheenR: 1, glaze: 0, roughComp: 0, ...o });
-export const SURFACE_PHYS: Readonly<Record<MatId, SurfacePhys>> = {
-  [Mat.WALLPAPER_L0]: phys(0.35, { det: 2, detS: 1 }),
-  [Mat.CARPET_L0]: phys(1, { det: 0, detS: 1, sheen: 0.55, sheenR: 0.5 }),
-  [Mat.CEILING_TILE]: phys(0.9, { tok: 0.8, det: 5, detS: 0.8 }),
-  [Mat.PANEL_LENS]: phys(0),
-  [Mat.TRIM_PAINT]: phys(0.1, { det: 3, detS: 0.5 }),
-  [Mat.WALLPAPER_MANILA]: phys(0.35, { det: 2, detS: 0.8 }),
-  [Mat.CARPET_OFFICE]: phys(1, { det: 1, detS: 0.7, sheen: 0.4, sheenR: 0.6 }),
-  [Mat.DRYWALL]: phys(0.5, { det: 3, detS: 1 }),
-  [Mat.VINYL_VCT]: phys(0.05, { tok: 0.5, det: 6, detS: 0.5, glaze: 0.34, roughComp: 0.75 }),
-  [Mat.CONCRETE_FLOOR]: phys(0.6, { det: 4, detS: 1 }),
-  [Mat.CONCRETE_WALL]: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8 }),
-  [Mat.CONCRETE_CEIL]: phys(0.6, { det: 4, detS: 0.8 }),
-  [Mat.CMU_PAINTED]: phys(0.3, { pomTop: 0.8, tok: 0.6, det: 3, detS: 0.8 }),
-  [Mat.POOL_TILE]: phys(0.08, { pomTop: 0.75, tok: 0.3, det: 6, detS: 1, glaze: 0.09, roughComp: 0.7 }),
-  [Mat.POOL_MOSAIC]: phys(0.05, { pomTop: 0.7, tok: 0.3, det: 6, detS: 0.7, glaze: 0.1, roughComp: 0.7 }),
-  [Mat.METAL_PAINTED]: phys(0.05, { det: 3, detS: 0.6 }),
-  [Mat.METAL_RUST]: phys(0.4, { det: 4, detS: 0.6 }),
-  [Mat.METAL_GRATE]: phys(0),
-  [Mat.WOOD]: phys(0.25, { det: 9, detS: 1 }),
-  [Mat.PLASTIC]: phys(0.02, { det: 10, detS: 1 }),
-  [Mat.FABRIC_PARTITION]: phys(1, { det: 7, detS: 1, sheen: 0.6, sheenR: 0.7 }),
-  [Mat.PLENUM]: phys(0.8, { det: 4, detS: 1 }),
-  [Mat.RUBBER]: phys(0.02, { det: 10, detS: 0.5 }),
-  [Mat.SIGNAGE]: phys(0),
-  [Mat.DECAL_ATLAS]: phys(0),
-  [Mat.FLOOR_PAINT]: phys(0.15),
-  [Mat.TERRAZZO]: phys(0.1, { det: 4, detS: 0.4, glaze: 0.13, roughComp: 0.5 }),
-  [Mat.METAL_DECK]: phys(0.02, { pomTop: 1, tok: 0.7, det: 8, detS: 0.6 }),
-};
+/** Physical surface parameters per layer (layers/types.ts SurfacePhys; the rows live with the recipes). */
+export const SURFACE_PHYS: Readonly<Record<MatId, SurfacePhys>> = Object.fromEntries(
+  LAYER_RECIPES_FULL.map((r) => [r.layer, r.phys]),
+) as Record<MatId, SurfacePhys>;
 
 export interface LayerTable { a: Float32Array; b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array }
 /**
@@ -113,7 +73,7 @@ export function buildLayerTable(): LayerTable {
     b[i * 4 + 2] = NORMAL_STRENGTH[d.id] ?? 1;
     b[i * 4 + 3] = MACRO_AMOUNT[d.id] ?? 1;
     const p = SURFACE_PHYS[d.id];
-    c.set([LAYER_RECIPES[i].heightScale, p.pomTop, p.por, p.tok], i * 4);
+    c.set([LAYER_RECIPES_FULL[i].heightScale, p.pomTop, p.por, p.tok], i * 4);
     d4.set([p.det, p.detS, p.sheen, p.sheenR], i * 4);
     e.set([p.glaze, p.roughComp, 0, 0], i * 4);
   }
@@ -311,6 +271,37 @@ export const TUNE = {
   DEBUG_LUX: 600, // lux shown as 1.0 in view=lightmap / flicker / lv
 } as const;
 
+/**
+ * Texture realism v2 per-layer constants (GLSL const arrays indexed by the layer: no uniform vectors), from the recipe
+ * rows (SurfacePhys and the channel conventions; see layers/types.ts):
+ *   BR_L_SIGMA (EON sigma), BR_L_PILE (kp, kv), BR_L_DETREP (detail repeat scale), BR_L_DETTINT (detail tint),
+ *   BR_L_DETSO (detail cavity into specular occlusion), BR_L_DIRT / BR_L_WEAR (rgb, amount), BR_L_RELIEF (metres of
+ *   full convexity), BR_AUX_KIND (ormh.a kind, BR_AUX_* ids), BR_L_AUX2 (albedo.a is aux2); BR_RELIEF_GRIME (1 when
+ *   some layer has a dirt or wear amount).
+ */
+export function glslLayerArrays(): string {
+  const n = MAT_COUNT;
+  const rows = LAYER_RECIPES_FULL;
+  const vec = (k: number, v: readonly number[]): string => `vec${k}(${v.map(f).join(', ')})`;
+  const arr = (type: string, name: string, items: readonly string[]): string => `const ${type} ${name}[${n}] = ${type}[${n}](${items.join(', ')});`;
+  return [
+    ...Object.entries(GRIME_ID).map(([k, v]) => `#define BR_G_${k.toUpperCase()} ${v}`),
+    ...Object.entries(AUX_KIND_ID).map(([k, v]) => `#define BR_AUX_${k.toUpperCase()} ${v}`),
+    arr('float', 'BR_L_SIGMA', rows.map((r) => f(r.phys.sigma))),
+    arr('vec2', 'BR_L_PILE', rows.map((r) => vec(2, r.phys.pile))),
+    arr('float', 'BR_L_DETREP', rows.map((r) => f(r.phys.detRep))),
+    arr('vec3', 'BR_L_DETTINT', rows.map((r) => vec(3, r.phys.detTint))),
+    arr('float', 'BR_L_DETSO', rows.map((r) => f(r.phys.detSO))),
+    arr('vec4', 'BR_L_DIRT', rows.map((r) => vec(4, r.phys.dirt))),
+    arr('vec4', 'BR_L_WEAR', rows.map((r) => vec(4, r.phys.wear))),
+    arr('float', 'BR_L_RELIEF', rows.map((r) => f(r.phys.reliefM))),
+    arr('int', 'BR_AUX_KIND', rows.map((r) => String(AUX_KIND_ID[r.aux]))),
+    arr('bool', 'BR_L_AUX2', rows.map((r) => String(r.aux2))),
+    // the relief-aware dirt / wear block compiles in only once some layer sets an amount (chunks/surface.ts)
+    `#define BR_RELIEF_GRIME ${rows.some((r) => r.phys.dirt[3] > 0 || r.phys.wear[3] > 0) ? 1 : 0}`,
+  ].join('\n') + '\n';
+}
+
 /** Derived GLSL #defines shared by every WP9 shader. */
 export function glslConstants(): string {
   const lut = slotLut();
@@ -474,7 +465,7 @@ const int BR_SLOT_LUT[9] = int[9](${lut.join(', ')});
 const float BR_LV_Y[${LV.NY}] = float[${LV.NY}](${LV.Y.map(f).join(', ')});
 const float BR_DETAIL_SLOPE[${nd}] = float[${nd}](${DETAIL_RECIPES.map((r) => f(r.slope)).join(', ')});
 const float BR_DETAIL_ROUGH_K[${nd}] = float[${nd}](${DETAIL_RECIPES.map((r) => f(r.roughK)).join(', ')});
-${waterMediaGlsl()}`;
+${glslLayerArrays()}${waterMediaGlsl()}`;
 }
 
 // ---------------------------------------------------------------- package E: water media and caustics

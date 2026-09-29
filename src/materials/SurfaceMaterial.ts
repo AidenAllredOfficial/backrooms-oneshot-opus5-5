@@ -5,7 +5,9 @@
 // no map/normalMap/lightMap/aoMap, so three's USE_* paths stay off (USE_SHEEN / USE_CLEARCOAT come only from the
 // quality defines below; their material fields are written by chunks/materialPost.ts).
 // Graphics-realism packages plug in through stub chunk files with one owner each (A.0): screenspace, gbuffer (A);
-// detail, pom, materialPost (B); emitters (C); probe (D); water (E); volumetric, bounce (F).
+// detail, pom, materialPost (B); emitters (C); probe (D); water (E); volumetric, bounce (F). Texture realism v2
+// families plug in through chunks/family/*.ts hooks (pars at the end of the common block, postLight after
+// FRAG_AO_REFL_GLSL; the other points sit inside the chunks).
 
 import * as THREE from 'three';
 import { LENS_SHIMMER_GLSL } from '../core/flicker.ts';
@@ -13,10 +15,15 @@ import type { MaterialGlobals, TileBindings } from '../core/runtime.ts';
 import { injectAt, SURFACE_INJECTIONS } from './anchors.ts';
 import { VERT_INVARIANT_GLSL } from './DepthMaterial.ts';
 import { BOUNCE_GLSL } from './chunks/bounce.ts';
+import { brdfParsGlsl } from './chunks/brdf.ts';
 import { fragmentCommon, HAZE_FUNCS_GLSL } from './chunks/common.ts';
-import { DETAIL_PARS_GLSL } from './chunks/detail.ts';
+import { DETAIL_PARS_GLSL, FRAG_DETAIL_SO_GLSL } from './chunks/detail.ts';
 import { EMITTER_GLSL } from './chunks/emitters.ts';
+import { DEBUG_PARS_GLSL } from './chunks/debug.ts';
+import { familyHook } from './chunks/family/index.ts';
+import { PROP_COAT_NORMAL_GLSL } from './chunks/family/props.ts';
 import { GBUFFER_PARS_GLSL } from './chunks/gbuffer.ts';
+import { GRIME_LIB_GLSL } from './chunks/grimeLib.ts';
 import { FRAG_FOG_GLSL } from './chunks/haze.ts';
 import { FRAG_AO_REFL_GLSL, FRAG_LIGHTS_GLSL } from './chunks/lighting.ts';
 import { FRAG_MATERIAL_POST_GLSL } from './chunks/materialPost.ts';
@@ -44,23 +51,26 @@ function injectionCode(): Record<string, string> {
     'vertex:uv_vertex': VERT_UV_GLSL,
     'vertex:begin_vertex': VERT_BEGIN_GLSL,
     'vertex:worldpos_vertex': VERT_WORLDPOS_GLSL,
-    'fragment:common': fragmentCommon() + SURFACE_PARS_GLSL + FRAG_VARYINGS_GLSL
+    'fragment:common': fragmentCommon() + SURFACE_PARS_GLSL + DEBUG_PARS_GLSL + FRAG_VARYINGS_GLSL
       + SCREENSPACE_GLSL + GBUFFER_PARS_GLSL // A
       + DETAIL_PARS_GLSL + POM_PARS_GLSL // B
       + EMITTER_GLSL // C
       + PROBE_GLSL // D
       + WATER_SURF_GLSL // E
-      + VOLUMETRIC_GLSL + BOUNCE_GLSL, // F
-    'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL + WATER_SPOT_GLSL,
+      + VOLUMETRIC_GLSL + BOUNCE_GLSL // F
+      + GRIME_LIB_GLSL + familyHook('pars'), // texture realism v2 (0b helpers, then the families)
+    // after lights_physical_pars_fragment: texture realism v2's RE_Direct override (EON rough diffuse, chunks/brdf.ts)
+    'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL + WATER_SPOT_GLSL + brdfParsGlsl(),
     'fragment:clipping_planes_fragment': FRAG_MAIN_START_GLSL,
     'fragment:map_fragment': FRAG_MAP_GLSL,
     'fragment:roughnessmap_fragment': FRAG_ROUGHNESS_GLSL,
     'fragment:metalnessmap_fragment': FRAG_METALNESS_GLSL,
     'fragment:normal_fragment_maps': FRAG_NORMAL_GLSL,
+    'fragment:clearcoat_normal_fragment_begin': PROP_COAT_NORMAL_GLSL, // lane E: the coat on the base map's normal
     'fragment:emissivemap_fragment': FRAG_EMISSIVE_GLSL,
     'fragment:lights_physical_fragment': FRAG_MATERIAL_POST_GLSL,
     'fragment:lights_fragment_maps': FRAG_LIGHTS_GLSL,
-    'fragment:aomap_fragment': FRAG_AO_REFL_GLSL,
+    'fragment:aomap_fragment': FRAG_AO_REFL_GLSL + FRAG_DETAIL_SO_GLSL + familyHook('postLight'),
     'fragment:fog_fragment': FRAG_FOG_GLSL,
   };
 }

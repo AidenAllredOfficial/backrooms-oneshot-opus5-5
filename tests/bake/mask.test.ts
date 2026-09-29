@@ -1,14 +1,17 @@
 // tests/bake/mask.test.ts — surface mask (WP7 bake/mask.ts) details that the lightmap-level tests do not isolate: the
 // pool splash zone (package B): wet deck within 1.2 m of a pool's water edge, nothing on the pool's own floor or far
-// from it, and the same value at the same world point whichever tile's bake evaluates it (seamless tiles).
+// from it, and the same value at the same world point whichever tile's bake evaluates it (seamless tiles); the
+// hard-floor traffic wear of texture realism v2 lane B (corridor wear at 0.8 x carpet, rack-aisle wheel tracks, entry
+// fans from the doors); and the seepage tongue (lane D): a smooth outline the shader's drying fronts can follow.
 
 import { describe, expect, it } from 'vitest';
 import { CELL } from '../../src/core/constants.ts';
+import { EdgeKind, Mat, PropKind } from '../../src/core/ids.ts';
 import type { TileKey } from '../../src/core/grid.ts';
 import { cellIdx } from '../../src/core/grid.ts';
 import { createJob } from '../../src/bake/job.ts';
-import { createMaskCache, maskAt, maskOut } from '../../src/bake/mask.ts';
-import { carveRoom, handNeighborhood, Q_HIGH, solidLayout } from './helpers.ts';
+import { createMaskCache, maskAt, maskOut, SEEP_R0, SEEP_TIP, seepZoneR } from '../../src/bake/mask.ts';
+import { carveRoom, handNeighborhood, Q_HIGH, setEx, solidLayout } from './helpers.ts';
 
 describe('surface mask: pool splash zone', () => {
   const l = solidLayout({ s: 0, cx: 0, cz: 0 });
@@ -49,5 +52,121 @@ describe('surface mask: pool splash zone', () => {
       }
     }
     expect(n).toBeGreaterThan(20);
+  });
+});
+
+describe('surface mask: hard-floor traffic wear (texture realism v2 lane B)', () => {
+  /** Mask A of an up-facing floor texel at chunk-local metres (x, z) of layout l (tile q0). */
+  const wearAt = (l: ReturnType<typeof solidLayout>, x: number, z: number): number => {
+    const job = createJob(handNeighborhood(l), { s: 0, cx: 0, cz: 0, q: 0 }, Q_HIGH, null);
+    const cache = createMaskCache(job);
+    const g = job.g;
+    const hx = x / CELL - g.gi0, hz = z / CELL - g.gj0;
+    const c = Math.floor(hz) * g.n + Math.floor(hx);
+    maskAt(job, cache, hx, g.floor[c], hz, 0, 1, 0, c, 1, 9);
+    return maskOut.a;
+  };
+  const corridor = (mat: number): ReturnType<typeof solidLayout> => {
+    const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+    carveRoom(l, 2, 10, 14, 12); // a 2-cell corridor along x
+    for (let c = 0; c < 1024; c++) { l.decay[c] = 128; l.humidity[c] = 0; l.floorMat[c] = mat; }
+    return l;
+  };
+
+  it('concrete, terrazzo and VCT corridors wear like carpet at 0.8 x its amplitude', () => {
+    const z = 11 * CELL, carpet = corridor(Mat.CARPET_L0);
+    let n = 0;
+    for (let x = 4.1; x < 15; x += 0.53) {
+      const ref = wearAt(carpet, x, z);
+      if (ref > 0) n++;
+      for (const m of [Mat.CONCRETE_FLOOR, Mat.TERRAZZO, Mat.VINYL_VCT]) expect(wearAt(corridor(m), x, z), `${m} x ${x}`).toBeCloseTo(0.8 * ref, 2);
+    }
+    expect(n).toBeGreaterThan(5);
+    expect(wearAt(corridor(Mat.POOL_TILE), 8, z)).toBe(0); // other floors: no traffic wear
+  });
+
+  it('rack aisles on concrete get two wheel tracks, nothing under the racks or in open floor', () => {
+    const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+    carveRoom(l, 1, 1, 30, 30);
+    for (let c = 0; c < 1024; c++) { l.decay[c] = 0; l.humidity[c] = 0; l.floorMat[c] = Mat.CONCRETE_FLOOR; }
+    // two rows of shelf racks (2.4 x 1.1 m, long axis along x) either side of a 1.9 m aisle at z = 13.5
+    for (const zr of [12.0, 15.0]) for (let x = 6.0; x < 16; x += 2.4) {
+      l.props.push({ kind: PropKind.SHELF_RACK, variant: 0, x, y: 0, z: zr, yaw: 0, scale: 1, flags: 0, seed: 1 });
+    }
+    expect(wearAt(l, 8.4, 12.0)).toBe(0); // under a rack
+    expect(wearAt(l, 25, 25)).toBe(0); // open floor, no racks
+    const track = Math.max(wearAt(l, 9.1, 13.05), wearAt(l, 9.1, 13.95));
+    expect(track).toBeGreaterThan(0.4);
+    expect(wearAt(l, 9.1, 13.5)).toBeLessThan(0.6 * track); // between the tracks
+    expect(wearAt(l, 9.1, 12.62)).toBeLessThan(0.5 * track); // next to the rack face
+    // past the end of the rack rows (x = 16.8 m) the tracks fade out over ~2 m instead of stopping at the rack end;
+    // beside a rack row (in line with its decks) no cross-aisle tracks appear
+    const past = [17.1, 17.7, 18.3, 19.2].map((x) => Math.max(wearAt(l, x, 13.05), wearAt(l, x, 13.95)));
+    expect(past[0]).toBeGreaterThan(0.3 * track);
+    for (let i = 1; i < past.length; i++) expect(past[i]).toBeLessThanOrEqual(past[i - 1] + 1e-9);
+    expect(past[3]).toBe(0);
+    expect(wearAt(l, 9.1, 11.2)).toBeLessThan(0.02);
+    // carpet keeps its own (corridor / threshold / lane) wear: no aisle tracks
+    for (let c = 0; c < 1024; c++) l.floorMat[c] = Mat.CARPET_L0;
+    expect(wearAt(l, 9.1, 13.05)).toBe(0);
+  });
+
+  it('hard floors wear in a fan from each door into the room', () => {
+    const l = solidLayout({ s: 0, cx: 0, cz: 0 });
+    carveRoom(l, 2, 2, 10, 12);
+    carveRoom(l, 10, 2, 20, 12);
+    setEx(l, 10, 6, EdgeKind.DOORWAY); // the door: line x = 12 m, z 7.2-8.4 m
+    for (let c = 0; c < 1024; c++) { l.decay[c] = 128; l.humidity[c] = 0; l.floorMat[c] = Mat.TERRAZZO; }
+    const zd = 6.5 * CELL;
+    const near = wearAt(l, 12 + 1.0, zd), mid = wearAt(l, 12 + 2.0, zd), far = wearAt(l, 12 + 4.5, zd);
+    expect(near).toBeGreaterThan(0.2);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(near);
+    expect(far).toBe(0);
+    expect(wearAt(l, 12 + 1.0, zd + 2.2)).toBe(0); // beside the fan
+    expect(wearAt(l, 12 - 1.0, zd)).toBeGreaterThan(0.2); // both rooms
+  });
+});
+
+describe('surface mask: seepage tongue', () => {
+  const len = 1.0;
+  /** Width (m) of the tongue's part at or above level v at dTop, scanning du in 5 mm steps. */
+  const widthAt = (dTop: number, v: number, hw0 = 0.22, n = 0.5, cap = false): number => {
+    let w = 0;
+    for (let du = -0.5; du <= 0.5; du += 0.005) if (seepZoneR(du, dTop, hw0, len, n, n, cap) >= v) w += 0.005;
+    return w;
+  };
+
+  it('falls smoothly to 0 at its outline (no straight texel-traced step for the fronts to follow)', () => {
+    for (let dTop = 0; dTop < len + SEEP_TIP; dTop += 0.05) {
+      for (const [nL, nR] of [[0, 1], [1, 0], [0.5, 0.5]]) {
+        let prev = seepZoneR(-0.5, dTop, 0.34, len, nL, nR, false);
+        expect(prev).toBe(0);
+        for (let du = -0.495; du <= 0.5; du += 0.005) {
+          const r = seepZoneR(du, dTop, 0.34, len, nL, nR, false);
+          expect(r).toBeGreaterThanOrEqual(0);
+          expect(r).toBeLessThanOrEqual(1);
+          expect(Math.abs(r - prev), `dTop ${dTop} du ${du}`).toBeLessThan(0.06); // <= 10 per metre: a >= 0.15 m ramp
+          prev = r;
+        }
+        expect(prev).toBe(0);
+      }
+    }
+  });
+
+  it('narrows down the wall, ends in a rounded tip and keeps a runnel core under the ceiling', () => {
+    expect(widthAt(0.9 * len, 0.44)).toBeLessThan(0.8 * widthAt(0.1 * len, 0.44));
+    // the runnel core (R >= SEEP_R0) of the narrowest tongue is still ~0.15 m wide under the ceiling (the bilinear
+    // mask keeps it above SEEP_R0) ...
+    expect(widthAt(0.02, SEEP_R0, 0.22, 0)).toBeGreaterThanOrEqual(0.15);
+    // ... and the tip past len holds a stain (R < SEEP_R0: no runnels) that closes by SEEP_TIP
+    expect(seepZoneR(0, len + 0.05, 0.22, len, 0.5, 0.5, false)).toBeGreaterThan(0.44);
+    expect(seepZoneR(0, len + 0.05, 0.22, len, 0.5, 0.5, false)).toBeLessThan(SEEP_R0);
+    expect(widthAt(len + 0.12, 0.01)).toBeLessThan(widthAt(len + 0.02, 0.01));
+    expect(seepZoneR(0, len + SEEP_TIP, 0.22, len, 0.5, 0.5, false)).toBe(0);
+    // with cap (drips from inside a leak band) the top is rounded as well; without, it starts at the ceiling
+    expect(seepZoneR(0, -0.05, 0.22, len, 0.5, 0.5, true)).toBeGreaterThan(0);
+    expect(seepZoneR(0, -SEEP_TIP, 0.22, len, 0.5, 0.5, true)).toBe(0);
+    expect(seepZoneR(0, -0.05, 0.22, len, 0.5, 0.5, false)).toBe(0);
   });
 });

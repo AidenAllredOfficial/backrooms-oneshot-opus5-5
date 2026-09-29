@@ -156,7 +156,7 @@ export const carSedan: PropBuild = (b, v) => {
       b.rotY(-ang);
       b.translate(hw, 0, -cuts[1]);
       section(b, sec, -hw, -hw + DT, 0.02);
-      b.mat(Mat.METAL_PAINTED, 0.5, 0.5, 0.48, 0, 0.25);
+      b.mat(Mat.METAL_BARE, 0.56, 0.56, 0.55, 0, 0.12); // chrome handle
       box(b, -hw - 0.015, 0.73, -0.25, -hw, 0.75, -0.13, SKIP.PX); // handle
       b.mat(Mat.METAL_PAINTED, paint[0], paint[1], paint[2], 0, 0.25, true);
       b.pop();
@@ -193,8 +193,8 @@ export const carSedan: PropBuild = (b, v) => {
     const xi = s * (hw - 0.035), xo = s * (hw - 0.005);
     box(b, Math.min(xi, xo), 0.76, -1.0, Math.max(xi, xo), 0.9, -0.9, 0);
   }
-  // door handles
-  b.mat(Mat.METAL_PAINTED, 0.5, 0.5, 0.48, 0, 0.25);
+  // door handles (chrome)
+  b.mat(Mat.METAL_BARE, 0.56, 0.56, 0.55, 0, 0.12);
   for (const s of [-1, 1]) {
     for (const z of [-0.19, 0.64]) {
       if (open && s < 0 && z < 0) continue; // on the open door (drawn above)

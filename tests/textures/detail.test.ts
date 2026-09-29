@@ -7,7 +7,7 @@ import { NOISE_WRAP, STOREY_PITCH, TILE_SIZE } from '../../src/core/constants.ts
 import { LAYER_DEFS } from '../../src/core/materials.ts';
 import { SURFACE_PHYS, TUNE } from '../../src/materials/chunks/params.ts';
 import {
-  DETAIL_COUNT, DETAIL_RECIPES, DETAIL_REPEAT, DETAIL_RIPPLE, DETAIL_SIZE, detailPackSlope, detailVariance,
+  Det, DETAIL_COUNT, DETAIL_RECIPES, DETAIL_REPEAT, DETAIL_RIPPLE, DETAIL_SIZE, detailPackSlope, detailVariance,
 } from '../../src/textures/detail.ts';
 import { buildDetailFragment, DETAIL_MAIN, NORMAL_FRAGMENT, SLOPE_GLSL } from '../../src/textures/glsl/common.ts';
 
@@ -25,10 +25,23 @@ function balanced(src: string): boolean {
 }
 
 describe('detail recipes', () => {
-  it('12 layers: D0-D10 surface detail, D11 the puddle ripple', () => {
-    expect(DETAIL_COUNT).toBe(12);
+  it('21 layers: D0-D10 surface detail, D11 the puddle ripple, D12-D20 the texture realism v2 slots; index = Det id', () => {
+    expect(DETAIL_COUNT).toBe(21);
+    expect(DETAIL_RIPPLE).toBe(11);
     expect(DETAIL_RECIPES[DETAIL_RIPPLE].name).toBe('RIPPLE');
     expect(new Set(DETAIL_RECIPES.map((r) => r.name)).size).toBe(DETAIL_COUNT);
+    for (const [name, id] of Object.entries(Det)) expect(DETAIL_RECIPES[id].name, name).toBe(name);
+  });
+
+  it('reserved slots are neutral placeholders until their lanes fill them (flat, albedo 1, no cavity)', () => {
+    // the ids each lane owns (plan: B SLAB / POLISH, C CMU_FACE / CMU_RAW, D ROLLER_STIPPLE / LINEN, E ENAMEL /
+    // RUST_GRAIN / KRAFT); a filled slot must keep its name and index
+    expect([Det.SLAB, Det.POLISH, Det.CMU_FACE, Det.CMU_RAW, Det.ROLLER_STIPPLE, Det.LINEN, Det.ENAMEL, Det.RUST_GRAIN, Det.KRAFT])
+      .toEqual([12, 13, 14, 15, 16, 17, 18, 19, 20]);
+    for (const r of DETAIL_RECIPES.slice(12)) {
+      if (!/void\s+gen\s*\(\s*vec2\s+uv\s*,\s*inout\s+Surf\s+s\s*\)\s*\{\s*\}/.test(stripComments(r.glsl))) continue; // filled
+      expect([r.heightScale, r.slope, r.roughK, r.cavity], r.name).toEqual([1e-4, 0.05, 0, 0]);
+    }
   });
 
   it('every recipe declares gen(vec2 uv, inout Surf s), is balanced and deterministic, with sane parameters', () => {
@@ -80,7 +93,8 @@ describe('detail recipes', () => {
     for (const d of LAYER_DEFS) {
       const p = SURFACE_PHYS[d.id];
       if (p.det < 0) continue;
-      expect(p.det, d.name).toBeLessThan(DETAIL_RIPPLE); // the ripple layer is not a surface detail
+      expect(p.det, d.name).not.toBe(DETAIL_RIPPLE); // the ripple layer is not a surface detail
+      expect(p.det, d.name).toBeLessThan(DETAIL_COUNT);
       expect(integral(d.repeat / DETAIL_REPEAT), d.name).toBe(true);
     }
   });

@@ -16,7 +16,7 @@ export const poolLadder: PropBuild = (b, v) => {
   const steps = v === 1 ? 2 : v === 3 ? 4 : 3;
   const sides = v === 3 ? 6 : 8;
   if (v === 2) b.mat(Mat.METAL_PAINTED, 0.42, 0.4, 0.36, 0, 0.35);
-  else b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.12);
+  else b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.15); // polished stainless
   const r = 0.019;
   for (const sx of [-1, 1]) {
     const x = sx * 0.24;
@@ -64,7 +64,7 @@ export const loungeChair: PropBuild = (b, v) => {
     cylinder(b, 0.016, 0.016, 0, 0.225, 6, 0);
     b.pop();
   }
-  b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.3);
+  b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.3); // brushed stainless
   b.push();
   b.translate(0, 0.08, 0.72);
   b.rotZ(Math.PI / 2);
@@ -143,7 +143,7 @@ export const benchTiled: PropBuild = (b, v) => {
 // ---------------------------------------------------------------------------------------- FLOAT_ROPE
 // Lane rope along local x at water level: floats centred at local y = 0.06 (WP4: p.y = waterY - 0.06).
 export const floatRope: PropBuild = (b, v) => {
-  b.mat(Mat.RUBBER, 0.3, 0.3, 0.28);
+  b.mat(Mat.PLASTIC, 0.3, 0.3, 0.28, 0, 0.7); // braided polypropylene rope
   b.push();
   b.translate(0, 0.06, 0);
   b.rotZ(-Math.PI / 2); // +Y -> +X

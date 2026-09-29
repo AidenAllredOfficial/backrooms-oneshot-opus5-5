@@ -14,7 +14,7 @@
 // (256 * aspect) x 256 virtual box squeezed into the square slot, so it looks right on a face of that aspect.
 
 import { Mat, SignKind } from '../core/ids.ts';
-import type { RecipeTable } from './layers/types.ts';
+import { phys, type RecipeTable } from './layers/types.ts';
 
 /** Face aspect (width / height) each sign slot is authored for (index = SignKind). */
 export const SIGN_ASPECT: readonly number[] = [
@@ -340,6 +340,9 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+// No trim (a multiplier would tint the white/yellow artwork). The atlas palette itself (colour-coded P1/P2 stencils,
+// aged whites, amber B1/B2 and caution plates, blue stair plate) is chosen to hit the table; slot margins are the
+// dilated slot edges (no hidden calibration colour).
 export const SIGNAGE_RECIPES: RecipeTable = {
-  [Mat.SIGNAGE]: { glsl: SIGNAGE_GLSL, normalStrength: 1.0, heightScale: 0.001 },
+  [Mat.SIGNAGE]: { glsl: SIGNAGE_GLSL, normalStrength: 1.0, heightScale: 0.001, phys: phys(0), aux: 'emissive' },
 };

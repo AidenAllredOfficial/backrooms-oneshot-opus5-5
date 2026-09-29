@@ -8,14 +8,18 @@
 //   RECIPE_MAIN    evaluates gen at the texel (or 4 sub-samples) and writes HEIGHT / ALBEDO / ORMH per `uOut`
 //
 // Conventions for recipe authors:
-//   - uv in [0,1) spans FRAME metres (repeat x layerRepeatY). `m = uv * FRAME` gives metres.
+//   - uv in [0,1) spans FRAME metres (the generator frame: RecipeBody.frame, default repeat x layerRepeatY).
+//     `m = uv * FRAME` gives metres.
 //   - Surf.albedo is LINEAR; write sRGB byte constants through srgb8(r, g, b) / srgbToLinear().
 //   - Surf.height is unitless 0..1 (0.5 rest); heightScale (metres per unit) turns it into relief for the normal
 //     pass and the cavity AO. Surf.ao is the recipe's own occlusion (the generator multiplies in cavity AO).
 //   - Everything must be periodic in uv with period 1: use the periodic noise with integer periods (PM(perMetre)
 //     rounds FRAME * density to integers) and geometry whose pitch divides FRAME.
 //   - `uOut` tells which output is being produced (OUT_HEIGHT / OUT_ALBEDO / OUT_ORMH); recipes may skip work.
+//   - ormh.a follows the layer's aux kind (AUX_KIND; layers/types.ts AuxKind): 0, Surf.emissive, Surf.aux, or with
+//     'lean' Surf.lean in ormh.b / ormh.a (no metalness). albedo.a is Surf.alpha (a second aux channel on aux2 layers).
 
+import { AUX_KIND_ID } from '../layers/types.ts';
 import { NOISE_GLSL } from './noise.ts';
 
 export const OUT_HEIGHT = 0;
@@ -34,12 +38,14 @@ const float PI = 3.14159265359;
 
 struct Surf {
   vec3 albedo;   // linear
-  float alpha;   // decal / sign / grate alpha
+  float alpha;   // decal / sign / grate alpha; the aux2 channel on aux2 layers
   float height;  // 0..1, 0.5 rest; relief = height * heightScale metres
   float rough;
   float metal;
   float ao;      // recipe occlusion (multiplied by the generator's cavity AO)
-  float emissive;// emissive mask (ormh.a)
+  float emissive;// emissive mask (ormh.a on 'emissive' layers)
+  float aux;     // ormh.a on 'detailMask' (default 1), 'wear' and 'mask' layers
+  vec2 lean;     // pile / fibre lean in the uv frame, [-1, 1] (ormh.b / ormh.a on 'lean' layers)
 };
 
 float sat(float x) { return clamp(x, 0.0, 1.0); }
@@ -125,11 +131,11 @@ const RECIPE_SUPPORT = /* glsl */ `
 // ---------------------------------------------------------------- RECIPE_MAIN (WP8)
 void br_init(out Surf s) {
   s.albedo = TABLE_ALBEDO; s.alpha = 1.0; s.height = 0.5; s.rough = TABLE_ROUGH; s.metal = TABLE_METAL;
-  s.ao = 1.0; s.emissive = 0.0;
+  s.ao = 1.0; s.emissive = 0.0; s.aux = AUX_DEFAULT; s.lean = vec2(0.0);
 }
 void br_add(inout Surf a, Surf b) {
   a.albedo += b.albedo; a.alpha += b.alpha; a.height += b.height; a.rough += b.rough; a.metal += b.metal;
-  a.ao += b.ao; a.emissive += b.emissive;
+  a.ao += b.ao; a.emissive += b.emissive; a.aux += b.aux; a.lean += b.lean;
 }
 float br_h(vec2 p) { vec4 t = texelFetch(uScratch, ivec2(mod(p, vec2(uRes))), 0); return uHPackIn == 1 ? br_unpackH(t) : t.r; }
 // cavity AO from the scratch height: the cosine-weighted visibility of the horizon (horizon-based AO). Along 8
@@ -164,6 +170,7 @@ export const RECIPE_MAIN = RECIPE_SUPPORT + /* glsl */ `void main() {
   br_texel = vec2(0.5 / uRes);
   br_init(s);
   s.albedo = vec3(0.0); s.alpha = 0.0; s.height = 0.0; s.rough = 0.0; s.metal = 0.0; s.ao = 0.0; s.emissive = 0.0;
+  s.aux = 0.0; s.lean = vec2(0.0);
   for (int i = 0; i < 4; i++) {
     vec2 o = i == 0 ? vec2(0.125, 0.375) : i == 1 ? vec2(0.375, -0.125) : i == 2 ? vec2(-0.125, -0.375) : vec2(-0.375, 0.125);
     Surf t; br_init(t);
@@ -171,6 +178,7 @@ export const RECIPE_MAIN = RECIPE_SUPPORT + /* glsl */ `void main() {
     br_add(s, t);
   }
   s.albedo *= 0.25; s.alpha *= 0.25; s.height *= 0.25; s.rough *= 0.25; s.metal *= 0.25; s.ao *= 0.25; s.emissive *= 0.25;
+  s.aux *= 0.25; s.lean *= 0.25;
 #else
   br_texel = vec2(1.0 / uRes);
   br_init(s);
@@ -181,7 +189,17 @@ export const RECIPE_MAIN = RECIPE_SUPPORT + /* glsl */ `void main() {
   } else if (uOut == OUT_ALBEDO) {
     fragColor = vec4(max(s.albedo * ALBEDO_TRIM, vec3(0.0)), sat(s.alpha));
   } else {
+    // ormh.a (and ormh.b on 'lean' layers) by the layer's aux kind
+#if AUX_KIND == AUX_LEAN
+    vec2 ln = clamp(s.lean, -1.0, 1.0) * 0.5 + 0.5;
+    fragColor = vec4(sat(s.ao * br_cavity(floor(px) + 0.5)), clamp(s.rough, 0.03, 1.0), ln.x, ln.y);
+#elif AUX_KIND == AUX_NONE
+    fragColor = vec4(sat(s.ao * br_cavity(floor(px) + 0.5)), clamp(s.rough, 0.03, 1.0), sat(s.metal), 0.0);
+#elif AUX_KIND == AUX_EMISSIVE
     fragColor = vec4(sat(s.ao * br_cavity(floor(px) + 0.5)), clamp(s.rough, 0.03, 1.0), sat(s.metal), sat(s.emissive));
+#else
+    fragColor = vec4(sat(s.ao * br_cavity(floor(px) + 0.5)), clamp(s.rough, 0.03, 1.0), sat(s.metal), sat(s.aux));
+#endif
   }
 }
 `;
@@ -245,16 +263,21 @@ const v3 = (a: readonly number[]): string => `vec3(${f(a[0])}, ${f(a[1])}, ${f(a
 
 export interface RecipeHeaderParams {
   layer: number;
-  frame: [number, number]; // metres (repeat, layerRepeatY)
+  frame: readonly [number, number]; // metres (the recipe's generator frame: RecipeBody.frame or repeat x layerRepeatY)
   albedo: readonly [number, number, number];
   rough: number;
   metal: number;
   trim?: readonly [number, number, number]; // albedo calibration multiplier (default 1)
+  aux?: number; // aux kind id (AUX_KIND_ID; default 'none')
 }
+
+/** The aux kind ids as GLSL defines (AUX_NONE, AUX_EMISSIVE, AUX_DETAILMASK, AUX_LEAN, AUX_WEAR, AUX_MASK). */
+export const AUX_DEFINES = Object.entries(AUX_KIND_ID).map(([k, v]) => `#define AUX_${k.toUpperCase()} ${v}`).join('\n');
 
 /** Full fragment source of one layer recipe program. */
 export function buildRecipeFragment(p: RecipeHeaderParams, recipeGlsl: string): string {
   const trim = p.trim ?? [1, 1, 1];
+  const aux = p.aux ?? AUX_KIND_ID.none;
   return /* glsl */ `precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -265,6 +288,9 @@ precision highp sampler2D;
 #define TABLE_ROUGH ${f(p.rough)}
 #define TABLE_METAL ${f(p.metal)}
 #define ALBEDO_TRIM ${v3(trim)}
+${AUX_DEFINES}
+#define AUX_KIND ${aux}
+#define AUX_DEFAULT ${aux === AUX_KIND_ID.detailMask ? '1.0' : '0.0'}
 #define OUT_HEIGHT ${OUT_HEIGHT}
 #define OUT_ALBEDO ${OUT_ALBEDO}
 #define OUT_ORMH ${OUT_ORMH}
@@ -341,6 +367,7 @@ precision highp sampler2D;
 #define TABLE_METAL 0.0
 #define DETAIL_S ${f(p.slope)}
 #define DETAIL_CAVITY ${f(p.cavity)}
+#define AUX_DEFAULT 0.0
 #define OUT_HEIGHT ${OUT_HEIGHT}
 #define OUT_ALBEDO ${OUT_ALBEDO}
 #define OUT_ORMH ${OUT_ORMH}

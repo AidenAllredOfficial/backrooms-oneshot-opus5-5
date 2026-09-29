@@ -1,144 +1,133 @@
 // src/textures/layers/wallpaper.ts — wall coverings: WALLPAPER_L0, WALLPAPER_MANILA, DRYWALL, TRIM_PAINT (WP8).
 
 import { Mat } from '../../core/ids.ts';
-import type { RecipeTable } from './types.ts';
+import { phys, type RecipeTable } from './types.ts';
 
-/** Level 0 wallpaper: mustard vinyl-coated paper in two 0.6 m rolls (+-2 % shade offset). Print: vertical stripe
- * system on a 0.15 m pitch (a slightly darker ink band carrying a column of stacked up-pointing chevrons, flanked by
- * pinlines) and, in the light band between, a faint damask fleur on a 0.3 m diamond lattice (+-4 % value, 0.2 mm
- * emboss, ink a touch glossier than the paper). Paper: satin vinyl coat (roughness ~0.7), fine vertical strie,
- * supersampled 1 mm fibre, cloudy formation, a slight cockle (~0.25 mm over 7 cm, seen only in grazing sheen);
- * vertical roll-seam ridge. Lifted edges, fading and stains come from the WP7 mask. */
+/** Level 0 wallpaper: mustard paper-backed vinyl (Type I, satin) in two 0.6 m rolls. Print (the Level 0 photo's
+ * identity): vertical stripe system on a 0.15 m pitch, a slightly darker ink band carrying a column of stacked
+ * up-pointing chevrons, flanked by pinlines. The print is surface-printed flat ink over the emboss (5-10 um film, a
+ * 0.02 mm step with rounded shoulders, not a stamped relief), -22 % in value and a touch glossier (0.48), with gravure
+ * density streaks along the roll and the band fill misregistered 0.2 mm against the strokes. The ground is a
+ * fabric-look print in register with its emboss: a strie of 2.5-17 mm streaks (+-5 %) and raised slub dashes (+4 %,
+ * vertical 3 x 25 mm and horizontal 25 x 3 mm), which carry the field's texture at room distance (the emboss alone
+ * shaded < 1 % under the baked light), and a 0.05 mm cockle over 3-5 cm that only the sheen shows; the finer thread
+ * emboss is D2 (VINYL_FABRIC). Satin roughness: ground 0.52 (emboss peaks -0.05, valleys +0.04), glue squeeze-out
+ * along the roll seam 0.46 (all above the SSR cut-off at high, 0.45: below it the lamps glinted off single texels). At
+ * 0.62 the sheen under the lamps was 0.4 % over the old 0.7 build (yawDeg=60, 20-40 cm below the ceiling), at 0.52
+ * +2.8 %, and at grazing views it shows the strie and linen emboss.
+ * ormh.a is the detail mask: 0.6 on ink (the emboss under the ink film is shallower). Lifted edges, fading and stains
+ * come from the WP7 mask and the walls family (chunks/family/walls.ts). */
 const WALLPAPER_L0 = /* glsl */ `
 #define SS 4
-// damask fleur, q in metres from the motif centre (+y up); returns ink coverage 0..1
-float wpFleur(vec2 q) {
-  vec2 a = vec2(abs(q.x), q.y);
-  // central petal: pointed teardrop
-  float petal = sdEllipse(q - vec2(0.0, 0.006), vec2(0.0055, 0.019));
-  petal = max(petal, -sdCircle(a - vec2(0.0125, 0.016), 0.009)); // pinched tip
-  // curled side petals, mirrored
-  float side = sdEllipse(rot2(a - vec2(0.0125, 0.0), -0.75), vec2(0.0042, 0.0135));
-  float curl = abs(sdCircle(a - vec2(0.021, 0.011), 0.0045)) - 0.0012;
-  // collar and tail
-  float collar = sdRoundBox(q - vec2(0.0, -0.0105), vec2(0.0115, 0.0016), 0.001);
-  float tail = sdEllipse(rot2(a - vec2(0.0045, -0.02), 0.5), vec2(0.0022, 0.007));
-  float crown = sdCircle(q - vec2(0.0, 0.0305), 0.0022);
-  float d = min(min(min(petal, side), min(curl, collar)), min(tail, crown));
-  // outline ring (engraved look): solid fill slightly weaker than the contour
-  float fill = fillM(d);
-  float edge = lineM(d, 0.00055);
-  // faint lozenge frame around the fleur
-  float rh = (a.x * 0.052 + abs(q.y) * 0.034 - 0.052 * 0.034) / length(vec2(0.052, 0.034));
-  float frame = 0.55 * lineM(rh, 0.0005);
-  return max(max(0.85 * fill, edge), frame);
-}
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
   // rolls (0.6 m): per-roll shade and pattern offset come from WP9 (world-anchored hash); hairline seam here
   float dSeam = distLines(m.x, 0.6);
-  // stripe system, pitch 0.15 m: dark ink band centred on x = 0.075 + k 0.15
+  // stripe system, pitch 0.15 m: dark ink band centred on x = 0.075 + k 0.15; the band fill is printed by its own
+  // cylinder, 0.2 mm right and 0.15 mm up of the stroke cylinder (misregistration)
   float xs = m.x - (floor(m.x / 0.15) + 0.5) * 0.15;
   float ax = abs(xs);
-  float band = fillM(ax - 0.021);
+  float band = softM(abs(xs - 0.0002) - 0.021, 0.00025);
+  float bandH = softM(abs(xs - 0.0002) - 0.021, 0.0005);
   float pins = lineM(ax - 0.0275, 0.0012) + 0.6 * lineM(ax - 0.0325, 0.0008);
-  // chevrons, 30 mm pitch, pointing +v, 2.4 mm stroke, 24 mm wide
+  // chevrons, 30 mm pitch, pointing +v, 2.4 mm stroke, 24 mm wide (clipped by the band fill)
   float cy = m.y - (floor(m.y / 0.03) + 0.5) * 0.03;
-  float chev = lineM(sdSeg(vec2(ax, cy), vec2(0.0, 0.0055), vec2(0.0115, -0.0055)), 0.0018);
-  chev *= band;
-  // fleur on the light band (x = k 0.15), diamond lattice: odd columns offset by 0.15 m
-  float col = floor(m.x / 0.15 + 0.5);
-  float yOff = mod(col, 2.0) * 0.15;
-  vec2 q = vec2(m.x - col * 0.15, m.y - yOff - (floor((m.y - yOff) / 0.3) + 0.5) * 0.3);
-  float fleur = wpFleur(q);
-  // small dot between fleurs (half-drop)
-  vec2 qd = vec2(q.x, abs(q.y) - 0.15);
-  float dotI = fillM(sdCircle(qd, 0.0022));
-  float ink = sat(max(max(chev, fleur), max(pins * 0.8, dotI)));
-  // paper structure
-  float fibre = fbm(uv, PM(420.0), 3, 11);            // ~1-2 mm fibre (supersampled)
-  float strie = gnoise(uv, PMxy(380.0, 3.0), 14) * 0.6
-              + gnoise(uv, PMxy(760.0, 5.0), 15) * 0.4; // vertical strie (gnoise is band limited)
-  float formation = fbm(uv, PM(24.0), 3, 13);         // cloudy sheet formation
-  float age = fbm(uv, PM(2.5), 3, 16);                // broad ageing
+  float dChev = sdSeg(vec2(ax, cy), vec2(0.0, 0.0055), vec2(0.0115, -0.0055)) - 0.0018;
+  float chev = softM(dChev, 0.00025) * band;
+  float ink = sat(max(chev, pins * 0.8));
+  float inkH = sat(max(softM(dChev, 0.0005) * bandH, pins * 0.8));
+  // gravure ink density streaks (along the roll, ~12 cm wide)
+  float den = 0.88 + 0.12 * (0.5 + 0.5 * gnoise(uv, PMxy(8.0, 2.0), 21));
+  // vinyl ground: vertical strie, slub dashes (vertical 3 x 25 mm, horizontal 25 x 3 mm), cockle, formation
+  float strie = gnoise(uv, PMxy(60.0, 1.5), 14) * 0.4 + gnoise(uv, PMxy(160.0, 2.0), 15) * 0.35 + gnoise(uv, PMxy(400.0, 4.0), 18) * 0.35;
+  Cell sv = worley(uv, PMxy(300.0, 40.0), 0.9, 31);
+  float slubV = step(hashf(sv.id, 32), 0.3) * (1.0 - smoothstep(0.15, 0.55, sv.f1));
+  Cell sh = worley(uv, PMxy(40.0, 300.0), 0.9, 33);
+  float slubH = step(hashf(sh.id, 34), 0.2) * (1.0 - smoothstep(0.15, 0.55, sh.f1));
+  float slub = max(slubV, slubH);
+  float cockle = fbm(uv, PM(18.0), 3, 17);
+  float formation = fbm(uv, PM(24.0), 3, 13);
+  float age = fbm(uv, PM(2.5), 3, 16);
   float bandTone = 0.5 + 0.5 * cos(6.2831853 * xs / 0.15); // 1 at the ink band centre
   vec3 c = TABLE_ALBEDO;
-  c *= 1.0 + 0.012 * fibre + 0.016 * strie + 0.02 * formation;
+  c *= 1.0 + 0.04 * slub + 0.05 * strie + 0.02 * formation;
   // ground print: the band is a slightly deeper mustard, the gap between a paler cream-yellow
   c *= mix(vec3(1.035, 1.03, 1.05), vec3(0.93, 0.915, 0.85), band * 0.85 + 0.15 * bandTone);
   // ageing: slightly browner, deeper patches
   c *= mix(vec3(1.0), vec3(0.965, 0.95, 0.9), sat(age * 1.6));
-  // ink: about -15 % value, browner (more saturated): the print must read at room distance
-  c *= mix(vec3(1.0), vec3(0.86, 0.83, 0.72), ink);
-  // roll seam: hairline gap, dirt line, glue sheen
+  // ink: about -22 % value, browner (more saturated): the chevrons must read at room distance
+  c *= mix(vec3(1.0), vec3(0.8, 0.76, 0.62), ink * den);
+  // roll seam: hairline gap, dirt line
   float gap = lineM(dSeam, 0.00025);
   float seamDirt = gauss(dSeam / 0.004);
   c *= 1.0 - 0.3 * gap - 0.04 * seamDirt;
   s.albedo = c;
-  s.height = 0.45 + 0.25 * ink + 0.05 * fibre + 0.035 * strie + 0.28 * gauss(dSeam / 0.0018) - 0.2 * gap
-           + 0.3 * fbm(uv, PM(7.0), 2, 17);
-  s.rough = 0.70 - 0.07 * ink - 0.06 * gauss(dSeam / 0.006) + 0.015 * fibre + 0.01 * strie;
+  s.height = 0.5 + 0.04 * inkH + 0.06 * strie + 0.16 * slub + 0.12 * cockle + 0.2 * gauss(dSeam / 0.0018) - 0.2 * gap;
+  float glue = gauss(dSeam / 0.004);
+  s.rough = mix(0.52 + 0.04 * sat(-strie) - 0.05 * slub - 0.03 * sat(strie), 0.48, ink);
+  s.rough = mix(s.rough, 0.46, glue);
+  s.aux = 1.0 - 0.4 * ink;
 }
 `;
 
-/** Manila: beige paper-backed vinyl (satin, ~0.72) with a linen emboss, a slight cockle and vertical double
- * pinstripes at 0.15 m pitch. */
+/** Manila: beige paper-backed vinyl, satin (~0.72), a fine linen emboss and vertical double pinstripes at 0.15 m
+ * pitch. The pinstripes are two flat 1 mm ink lines at +-1.75 mm (11-18 % darker ink, a dip under 10 % once the texel
+ * averages it, a slight hand-screen wobble of +-0.2 mm, a touch glossier), with no relief and no light line between
+ * them: printed, not routed. The base holds what its texel can resolve: a linen ground printed and embossed in
+ * register (warp and weft thread bundles as 4 mm streaks, +-3.5 %, and 2.5 x 50 mm slub dashes along both thread
+ * directions: at room distance the ground's texture is this print, since the emboss alone shades < 1 % under the
+ * baked light) and the paper's formation; the single linen threads are D17 (at a 0.15 m detail repeat, 0.29 mm
+ * texels). */
 const WALLPAPER_MANILA = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
-  // linen weave emboss: threads at 1.6 mm (750 per 1.2 m) with slubs
-  float tx = 0.5 + 0.5 * cos(6.2831853 * uv.x * 750.0);
-  float ty = 0.5 + 0.5 * cos(6.2831853 * uv.y * 750.0);
-  float slubX = vnoise(uv, ivec2(750, 24), 3);
-  float slubY = vnoise(uv, ivec2(24, 750), 4);
-  float linen = 0.5 * (tx * (0.6 + 0.8 * slubX) + ty * (0.6 + 0.8 * slubY));
-  linen = mix(0.5, linen, bandLimitPx(750.0)); // 1.6 mm threads exceed the texel Nyquist limit: keep only the mean
-  // pinstripes: two dark lines 4 mm apart with a light hairline between, every 0.15 m
-  float d = distLines(m.x, 0.15);
-  float dark = lineM(d - 0.0022, 0.0012);
-  float light = lineM(d, 0.00035);
-  float ground = gauss(d / 0.012);
-  float gband = fillM(d - 0.005); // 10 mm lighter ground band carrying the pinstripes
-  // paper and ageing
+  // pinstripes: two flat ink lines every 0.15 m, wobbling +-0.2 mm
+  float wob = 0.0002 * gnoise(uv, PMxy(4.0, 1.0), 9);
+  float d = distLines(m.x + wob, 0.15);
+  float ink = sat(lineM(d - 0.00175, 0.0005) + lineM(d + 0.00175, 0.0005));
+  // linen ground, printed and embossed in register: warp and weft thread bundles (4 mm streaks, 17 cm long) and
+  // slubs (2.5 mm dashes along both thread directions), then the paper
+  float linen = 0.6 * gnoise(uv, PMxy(250.0, 6.0), 21) + 0.4 * gnoise(uv, PMxy(6.0, 250.0), 22);
+  float slub = max(smoothstep(0.62, 0.9, vnoise(uv, PMxy(400.0, 20.0), 3)), smoothstep(0.66, 0.92, vnoise(uv, PMxy(20.0, 400.0), 4)));
   float formation = fbm(uv, PM(25.0), 3, 5);
   float age = fbm(uv, PM(2.5), 3, 6);
   float dSeam = distLines(m.x, 0.6);
   vec3 c = TABLE_ALBEDO;
-  c *= 1.0 + 0.02 * formation + 0.03 * (linen - 0.5);
+  c *= 1.0 + 0.02 * formation + 0.035 * linen + 0.025 * (slub - 0.3);
   c *= mix(vec3(1.0), vec3(0.975, 0.965, 0.935), sat(age * 1.5));
-  c *= 1.0 - 0.025 * ground + 0.04 * gband;
-  c = mix(c, c * vec3(0.74, 0.7, 0.64), dark);
-  c = mix(c, c * 1.07, light);
+  c *= mix(vec3(1.0), vec3(0.89, 0.87, 0.82), ink);
   float gap = lineM(dSeam, 0.0002);
   c *= 1.0 - 0.3 * gap - 0.03 * gauss(dSeam / 0.003);
   s.albedo = c;
-  s.height = 0.45 + 0.18 * linen + 0.05 * (dark + light) + 0.25 * gauss(dSeam / 0.0015) - 0.2 * gap
-           + 0.3 * fbm(uv, PM(7.0), 2, 17);
-  s.rough = 0.72 + 0.03 * (linen - 0.5) - 0.04 * (dark + light);
+  s.height = 0.5 + 0.08 * slub + 0.06 * linen + 0.25 * gauss(dSeam / 0.0015) - 0.2 * gap + 0.3 * fbm(uv, PM(7.0), 2, 17);
+  s.rough = 0.72 - 0.03 * slub - 0.03 * ink;
 }
 `;
 
-/** Painted drywall: roller stipple (orange-peel nap), eggshell sheen, flatter "flashing" bands over taped joints. */
+/** Painted gypsum board, latex eggshell from a 3/8" nap roller. The base texel (2.34 mm) cannot hold the orange peel
+ * (0.5-2 mm stipple, 20-60 um high: D16 ROLLER_STIPPLE), so the base holds only what is larger: the roller's mottle
+ * (~4 cm), the 0.24 m roller laps (a faint ridge and sheen change between passes), and the taped joints every 1.2 m,
+ * feathered ~0.25 m wide and crowned 0.075 mm, where the compound takes the primer differently: smoother, glossier
+ * (roughness 0.55 against the field's 0.62) and 1 % lighter. ormh.a is the detail mask: 0.6 over the joint bands (the
+ * stipple is shallower over compound). Screw spots, pops, patches, scuffs and damp come from the paint profile
+ * (chunks/family/walls.ts). */
 const DRYWALL = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
-  Cell c = worley(uv, PM(150.0), 1.0, 3);
-  float blob = 1.0 - smoothstep(0.05, 0.75, c.f1);
-  float bh = hashf(c.id, 4);
-  float nap = fbm(uv, PM(80.0), 3, 5);
-  float micro = fbm(uv, PM(400.0), 2, 6);
-  // taped joints every 1.2 m: smoother, slightly glossier bands ~15 cm wide
-  float joint = 1.0 - smoothstep(0.05, 0.09, distLines(m.x, 1.2));
-  float lap = gnoise(uv, PMxy(0.9, 0.5), 7); // roller lap marks, very faint and broad
-  float stip = blob * (0.45 + 0.55 * bh) + 0.35 * nap;
-  float amp = mix(1.0, 0.55, joint);
-  vec3 col = TABLE_ALBEDO * (1.0 + 0.012 * fbm(uv, PM(5.0), 3, 8) + 0.006 * lap);
-  col *= 1.0 - 0.012 * (1.0 - blob) * amp + 0.004 * micro;
+  float mottle = fbm(uv, PM(25.0), 3, 5);
+  // roller laps: vertical passes 0.24 m wide, their edge ridges fading in and out along the wall
+  float lapN = vnoise(uv, PMxy(1.0, 1.0), 7);
+  float lap = cos(6.2831853 * m.x / 0.24) * (0.3 + 0.7 * lapN);
+  // taped joints every 1.2 m (feathered ~0.25 m): crowned, smoother and glossier
+  float dj = distLines(m.x, 1.2);
+  float joint = gauss(dj / 0.12);
+  vec3 col = TABLE_ALBEDO * (1.0 + 0.008 * fbm(uv, PM(5.0), 3, 8) + 0.01 * joint);
   s.albedo = col;
-  s.height = 0.5 + amp * (0.32 * stip + 0.04 * micro);
-  s.rough = 0.87 - 0.06 * blob * amp - 0.03 * joint + 0.02 * micro;
+  s.height = 0.5 + 0.05 * mottle + 0.02 * lap + 0.15 * joint;
+  s.rough = 0.62 - 0.07 * joint + 0.015 * lap + 0.01 * mottle;
+  s.aux = 1.0 - 0.4 * smoothstep(0.3, 0.8, joint);
 }
 `;
 
@@ -161,16 +150,29 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-// normalStrength: these heightScales keep the relief at its real depth (a few tenths of a millimetre: POM, cavity AO and
-// the grime masks read it), but the authored height fields are smoother than the real surfaces, whose emboss, knockdown
-// and orange peel reach 3-10 degree micro-slopes over 1-5 mm. At 1x the normals stayed under 1 degree (mip-0 tan mean
-// 0.007-0.015) and the walls shaded flat under any light; the strengths bring the Level 0 wallpaper and the drywall to
-// ~0.07-0.08 (manila and trim stay near 0.015: the linen is finer than a texel, and semi-gloss enamel is smooth). They
-// act before the mips (Toksvig and LEAN see the same slopes). Props that need a plain matte surface do not borrow these
-// layers (kraft boxes on DRYWALL read as stucco).
+// normalStrength (texture realism v2): the base texel (1.17-2.34 mm) holds only the relief it can resolve (slubs,
+// strie, laps, joints, cockle), at a mild 1.5-2.5x over its real depth; the grain the eye reads up close is in the
+// detail maps (D2, D16, D17: rms slopes 0.05-0.07), which become LEAN roughness with distance. The old 6-10x made
+// the wallpaper's print a rubber stamp and the drywall stucco. Props that need a plain matte surface do not borrow
+// these layers (kraft boxes on DRYWALL read as stucco).
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). The wall layers keep Lambert
+// diffuse: EON at paint and paper's sigma ~0.2 moves a few percent at grazing angles, and (with the ceiling's fissure
+// dust, also dropped) it cost 0.02-0.04 ms at high on gallery 03, 11 and the LOBBY ceiling
 export const WALL_RECIPES: RecipeTable = {
-  [Mat.WALLPAPER_L0]: { glsl: WALLPAPER_L0, normalStrength: 6.0, heightScale: 0.0008 },
-  [Mat.WALLPAPER_MANILA]: { glsl: WALLPAPER_MANILA, normalStrength: 6.0, heightScale: 0.0006 },
-  [Mat.DRYWALL]: { glsl: DRYWALL, normalStrength: 10.0, heightScale: 0.0005 },
-  [Mat.TRIM_PAINT]: { glsl: TRIM_PAINT, normalStrength: 4.0, heightScale: 0.0003 },
+  [Mat.WALLPAPER_L0]: {
+    glsl: WALLPAPER_L0, normalStrength: 2.5, heightScale: 0.0004, trim: [1.007, 1.018, 1.037],
+    phys: phys(0.35, { det: 2, detS: 1, detRep: 0.5 }), aux: 'detailMask',
+  },
+  [Mat.WALLPAPER_MANILA]: {
+    glsl: WALLPAPER_MANILA, normalStrength: 2.0, heightScale: 0.0006, trim: [1.009, 1.011, 1.014],
+    phys: phys(0.35, { det: 17, detS: 1, detRep: 0.5 }),
+  },
+  [Mat.DRYWALL]: {
+    glsl: DRYWALL, normalStrength: 2.0, heightScale: 0.0005, trim: [0.998, 0.995, 1.001],
+    phys: phys(0.5, { det: 16, detS: 1 }), aux: 'detailMask',
+  },
+  [Mat.TRIM_PAINT]: {
+    glsl: TRIM_PAINT, normalStrength: 4.0, heightScale: 0.0003, trim: [1.007, 1.01, 1.005],
+    phys: phys(0.1, { det: 3, detS: 0.5 }),
+  },
 };
