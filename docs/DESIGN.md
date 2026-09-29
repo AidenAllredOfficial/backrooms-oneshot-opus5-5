@@ -1675,8 +1675,8 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 25, name: 'FLOOR_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.65, 0.6, 0.2], roughness: 0.5, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: false },
   { id: 26, name: 'TERRAZZO', repeat: 2.4, tileSize: 0, albedoMean: [0.5, 0.48, 0.44], roughness: 0.25, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 27, name: 'METAL_DECK', repeat: 1.2, tileSize: 0, albedoMean: [0.3, 0.3, 0.29], roughness: 0.5, metal: 0.6, grime: 'metal', sound: S.METAL, absorption: 0.05, reflective: false },
-  // texture realism v2 reserved layers (placeholder recipes, not placed in the world yet)
-  { id: 28, name: 'CMU_RAW', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.22, 0.215, 0.2], roughness: 0.9, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.07, reflective: false },
+  // texture realism v2 layers: CMU_RAW (lane C: PIPEWORKS walls, service corridors), METAL_BARE (reserved for lane E)
+  { id: 28, name: 'CMU_RAW', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.38, 0.372, 0.346], roughness: 0.9, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.07, reflective: false },
   { id: 29, name: 'METAL_BARE', repeat: 0.6, tileSize: 0, albedoMean: [0.56, 0.56, 0.56], roughness: 0.3, metal: 1, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
 ];
 export const layerRepeatY = (d: MaterialLayerDef): number => d.repeatY ?? d.repeat;
@@ -4181,10 +4181,11 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
   as a family-defined mask, `lean` Surf.lean in [-1, 1]: ormh.b = x · 0.5 + 0.5, ormh.a = y · 0.5 + 0.5 (the shader
   forces metalness to 0 on such layers). albedo.a = Surf.alpha is a second aux channel on layers with `aux2`, allowed
   on every layer but the alpha-tested METAL_GRATE, SIGNAGE, DECAL_ATLAS and FLOOR_PAINT.
-- **Reserved layers.** `Mat.CMU_RAW` = 28 (repeat 2.4 × 1.0, albedo 0.22 / 0.215 / 0.20, roughness 0.9, grime
-  `masonry`; placeholder: the CMU_PAINTED body at raw grey) and `Mat.METAL_BARE` = 29 (repeat 0.6, albedo 0.56, roughness
-  0.3, metal 1; placeholder: flat metal). `MAT_COUNT` 30; nothing places them in the world yet (the `materials` test
-  scene keeps its 28 layers). The harness gallery is 7 × 5.
+- **Reserved layers.** `Mat.CMU_RAW` = 28 (repeat 2.4 × 1.0, roughness 0.9, grime `masonry`; reserved as the
+  CMU_PAINTED body at raw grey 0.22, now lane C's raw block at albedo 0.38 / 0.372 / 0.346 on PIPEWORKS walls, service
+  corridors and loading bays) and `Mat.METAL_BARE` = 29 (repeat 0.6, albedo 0.56, roughness 0.3, metal 1; placeholder:
+  flat metal, not placed in the world yet). `MAT_COUNT` 30 (the `materials` test scene keeps its 28 layers). The
+  harness gallery is 7 × 5.
 - **Grime profiles** 7 `paint` (DRYWALL, TRIM_PAINT) and 8 `masonry` (CMU_PAINTED, CMU_RAW) start as verbatim copies of
   the wallpaper and concrete branches (WP9 below).
 - **Detail slots.** `DETAIL_COUNT` 21; the recipes live in `textures/detailRecipes/{textile, mineral, walls, masonry,
