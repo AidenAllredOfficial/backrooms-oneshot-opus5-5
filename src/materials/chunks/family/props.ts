@@ -277,7 +277,20 @@ if ( brWpOn ) {
 #endif
 }
 `,
-  normal: '',
+  normal: /* glsl */ `
+// ---- lane E: the chip step. The paint film ends in a ~0.1 mm step at a chip's edge: a surface-gradient bump from the
+// screen derivatives of h = -0.1 mm x exposed (Mikkelsen 2010), a 1-2 px lit / shadowed rim at 0.5-2 m that fades as
+// the chip gets smaller than a pixel (per-face layer: quad-uniform)
+if ( brWpOn && brL == BR_M_METAL_PAINTED && uBrReflPass < 0.5 ) {
+	float brWpH = - 0.0001 * brWpExp;
+	vec3 brWpPx = dFdx( - vViewPosition ), brWpPy = dFdy( - vViewPosition );
+	vec3 brWpR1 = cross( brWpPy, normal ), brWpR2 = cross( normal, brWpPx );
+	float brWpDt = dot( brWpPx, brWpR1 );
+	vec3 brWpGr = sign( brWpDt ) * ( dFdx( brWpH ) * brWpR1 + dFdy( brWpH ) * brWpR2 );
+	vec3 brWpN = abs( brWpDt ) * normal - brWpGr;
+	if ( dot( brWpN, brWpN ) > 1e-30 ) normal = normalize( brWpN ); // (edge-on pixels: keep the normal)
+}
+`,
   matPost: /* glsl */ `
 // clearcoat (props with the coat bit: car paint): a lacquer lobe over the topcoat that dust dulls, at the part's
 // override-scaled roughness

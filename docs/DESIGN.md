@@ -4141,12 +4141,13 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 | CMU_RAW | The same blocks unpainted: light natural grey, salt-and-pepper, sRGB (166, 164, 159), ±4 % per block (the shader adds ±6 %) and 20 % batch casts, voids × 0.5, fresh chips × 0.8, a lighter sandy mortar (the block colour × 1.16 / 1.15 / 1.12, sRGB (177, 175, 167)) with a faint efflorescence haze, roughness 0.9 / 0.92, detail D15 CMU_RAW. PIPEWORKS walls, service corridors and loading bays. |
 | POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.76. Hand-set joints: each face is inset 1.2–1.9 mm per side with a ±0.25 mm wobble. A fat-edge glaze ridge on the cushion; batch shade ±4 %, 5 % cream and 3 % blue-white tiles; crazing (a 0.8 mm net plus hairlines) on 12 %; conchoidal chips showing the buff bisque on 6 %; a hazy glaze rim at the joint. Sanded grout sRGB (176, 178, 170), concave, roughness 0.8. `ormh.a` is the grout coverage: the shader colours the grout along its lines in world space. |
 | POOL_MOSAIC | 2.5 cm glass mosaic on 0.3 m sheets, with wider joints at the sheet edges. Chips with 2 mm rounded corners (grout diamonds), a 1 mm edge round, a 0.15 mm dome, lippage ±0.25 mm and tilt ±0.5°. Five related hues (±6°, value 0.83–1.19) plus 5 % accents. The colour sits inside the glass: cloud (±8 %), streaks, bubbles in 5 % of the chips, a darker, more saturated edge band. Chip roughness 0.05–0.08, grout 0.8; `ormh.a` is the grout coverage. |
-| METAL_PAINTED, METAL_RUST, METAL_GRATE | Chipped paint; rust mask (fbm threshold plus downward streaks); grate with dark holes (albedo plus height). |
-| WOOD, PLASTIC, FABRIC_PARTITION, PLENUM, RUBBER | Standard recipes. |
+| METAL_PAINTED, METAL_RUST, METAL_GRATE | Lane E (below): a neutral wear-ready topcoat with oil-canning, a wear field (ormh.a) and a scratch field (albedo.a); the corrosion order and its stages (paint remnants at runtime); galvanised 19-W-4 grating with dark holes. |
+| WOOD, PLASTIC, RUBBER | Lane E (below): boards cut from their own logs (cathedral arches, butt joints, finish-wear field); moulded plastic with flow lines, sink marks and a scuff field; black rubber with bloom and crazing. |
+| FABRIC_PARTITION, PLENUM | Standard recipes. |
 | FLOOR_PAINT | A 0.25 mm film (yellow or white by tint). On stripes u runs across and v along (mesh/decals.ts): wheel-track bands with tyre dirt, wear that takes the slab's high points first (a pore stipple, not blobs), roughness 0.4 fresh to 0.6 worn. Edge flakes, joints, the slab's detail and wetness come from the shader. |
 | TERRAZZO | 0.6 m precast tiles (repeat 1.2, tileSize 0.6): polygonal crushed-marble chips (Voronoi cells shrunk by a per-chip gap at 15, 6 and 3 mm lattices, ~70–75 % coverage) in a restrained palette (white, light grey, buff, charcoal, rare muted accents) with per-chip value, a tone gradient and veins; chips 0.07–0.1, matrix 0.16–0.22 (and ~20 µm lower), pits 0.4, 1.5 mm grout 0.7; per-tile tilt ±0.15° and lippage, so reflections step at the joints. Detail D13 POLISH. |
-| METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms. Frame 1.2 m. |
-| METAL_PAINTED | Frame 1.2 × 1.0 m. |
+| METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms, white-rust blooms and drip lines in the rib bottoms (lane E). Frame 1.2 m. |
+| METAL_PAINTED | Frame 1.2 × 1.0 m (props map v by the 1.0 m repeatY too). |
 
 **Acceptance**
 - `tests/textures`: `LAYER_RECIPES` covers every `MatId`; every GLSL snippet declares `gen`.
@@ -4326,6 +4327,80 @@ Block walls read as concrete block at every distance, and the tile layers as fir
 #### Lane D: walls and ceilings
 
 #### Lane E: props
+Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those materials because wear follows exposure
+(edges, kick zones, hands) and each layer keeps its own colours under the part tint. The shading is in
+`chunks/family/props.ts`, the recipes in `layers/metal.ts` and `layers/misc.ts`, the details in
+`detailRecipes/props.ts` and the geometry side in `props/builder.ts` and `props/primitives.ts`.
+- **Tint headroom and topcoat mask.** Non-emissive prop parts store `byte(tint / 2)` (at least 1) and postWet decodes
+  x2, so a part can be up to twice its layer mean: chrome, white enamel, pale woods and the rack orange no longer clamp
+  to the layer colour. The tint colours only the topcoat: diffuse = recipe x mix(1, tint, brWpTop), so primer, steel
+  and rust keep their own colours (the old tint turned locker chips and scratches into black ink strokes). METAL_RUST
+  tints are relative to a neutral 0.3 paint (`RUST_PAINT_REF`), so a rusty part keeps its paint colour on the remnants.
+- **Edge coordinates.** Props light from the light volume, so their lmUv stream is free. The primitives write
+  `4 round(half mm) + (1 + s)` per face axis (half the face's extent, s in [-1, 1] across it; affine over a planar face,
+  so the interpolation is exact; within 0.5 mm at 1 m in float32). The distance to the nearer edge is half (1 - |s|).
+  bevelBox faces are measured over the outer extents (their rims lie one chamfer in), chamfers and corners are on the
+  edge, curved sides carry none around and the distance to their ends along (pipe joints, tube ends), extrusion caps
+  and hexahedra use their bounding box. The x sign marks end grain (faces across a part's clearly longest axis), the y
+  sign part kind 1 (kraft board on PLASTIC; a painted shadow stand-in on METAL_PAINTED that never wears).
+- **Grain axis and part offsets.** On WOOD, METAL_PAINTED and METAL_BARE the primitives turn u along each face's longer
+  side (door leaves get vertical grain, rails and slats run lengthwise; curved sides run u along). Every part of the prop
+  layers gets a hashed uv offset of up to one repeat, so sibling doors, slats and boards never share a texture region
+  (the lockers' manual offset is gone). Prop v now uses the layer's repeatY (METAL_PAINTED's 1.0 m frame was stretched
+  1.2x on props).
+- **Wear.** The 'wear' layers store a rank-normalised threshold field W in ormh.a (P(W < x) = x). The level is the
+  expected exposed share: base 0.3-2 % by prop hash and age, + age x (0.24 e^(-d / 2.5 mm) + 0.05 e^(-d / 12 mm) at
+  distance d from a face edge, + 0.14 in the kick zone below 0.35 m on vertical faces, + 0.015 in the hand band at
+  1.15 m); age = 0.6 + 0.5 decay (the anchor cell's dust bits) +- 0.25 per prop. A texel is exposed where W is below
+  the level, over a linear ramp of half-width a = fwidth(W) + 0.01, widened to 0.5 once the footprint hides the 8 mm
+  flakes (4-16 texels). For uniform W the ramp's mean is the level only while level >= a, so a lower level moves to
+  2 sqrt(a l) - a: the exposed share equals the level at every distance (tests/props/wear.test.ts).
+- **METAL_PAINTED** is a neutral topcoat: +-2 % coat thickness, oil-canning (+-0.45 mm over 0.15-0.4 m, which bends
+  lamp reflections), roughness 0.4 +- 0.035; W from 17 cm clusters, 2.5 cm chip groups and angular 8 mm flakes that
+  break first along their borders; albedo.a (aux2) a scratch field (0-2 segments of 8-80 mm per 60 mm cell, 60 %
+  within 15 degrees of u, depth class 0.3-1). Runtime: topcoat, then a primer ring (grey, or red oxide on 40 % of the
+  props, roughness 0.7), then the steel core 0.06 further down W (F0 0.56, roughness 0.3; on old props oxidised
+  (0.10, 0.07, 0.05) with a rust-bloom halo in the paint around it). Scratches are stress-whitened after the tint
+  (luma x 1.3 + 0.04, roughness + 0.15), the deepest cut to steel; the kick zone is chalkier (+0.12 roughness) and the
+  hand band greasier (roughness x 0.75 in the grime tide field). A chip-step bump (the screen derivatives of
+  -0.1 mm x exposure, Mikkelsen 2010) gives chips a 1-2 px lit and shadowed rim. D18 ENAMEL is 2-4 mm orange peel at
+  +-6 um with faint buffing swirls. The part's roughness override scales the topcoat (ormh.g x override / 0.4), so
+  the recipe's variation survives (locker doors 0.26). Only car paint keeps the clearcoat: its weight is the topcoat x
+  (1 - dust), its roughness max(0.05, 0.35 x override), and its normal the base map's (a new
+  `clearcoat_normal_fragment_begin` anchor; the geometric normal made ruler-straight tube reflections).
+- **METAL_BARE** (layer 29, repeat 0.6): the albedo is F0 (+-2 %), brushing along u in F0 and roughness, water-spot
+  rings (a limescale film, dielectric), sparse pits, D8 BRUSHED at full strength; W is a smudge field that the hand
+  band fills (rougher, 10 % darker). Chrome (locker handles, chair frames, pulls; override 0.08-0.12), polished and
+  brushed stainless (pool ladder, door pull plates, coin panels; 0.15-0.3), anodised aluminium plates and a brass
+  padlock (tints up to 1.6 x the 0.56 mean) moved to it from METAL_PAINTED.
+- **METAL_RUST** stores the corrosion order C in ormh.a (warped clusters, rust spots of 5-25 mm, blister discs) and
+  the rust it would show everywhere: blister halos, lifted flake plates (8-30 mm, tilted and lifted 0.2-1 mm, a fresh
+  orange gap along their borders), deep scale with tubercles and log-normally sized pits that crowd where C is lowest;
+  relief 3 mm per unit, normal strength 1.5, D19 RUST_GRAIN (1-2 mm tubercles, micro-flake edges). The paint remnants
+  are runtime: paint where C passes 0.62 +- 0.05 by age, + 0.25 on pipe undersides and + 0.3 near joints and tube ends,
+  chalked and stained brown near the rust. Run-off streaks hang below rusty areas: two coarse C taps 3 and 8 cm up the
+  surface (the uv step of a world rise from the screen derivatives) times the drip field, blended from two world
+  projections (no 45-degree seam on tanks and pipes). Rust is dielectric at 0.88-0.95 with EON sigma 0.5.
+- **WOOD** cuts each board (90-300 mm, packed across v) from its own log: the pith 2-25 cm under the face and to one
+  side, rings R = sqrt(d^2 + z^2) + t x with a per-board taper t (4-15 mm per m, either way) from the board's butt
+  joint, ring width 2-5 mm +-40 %, gradual earlywood into an abruptly ending latewood, hue +-3 %, value +-10 %, rings
+  finer than ~3 samples faded to their mean. The runtime wears the finish off (W: edges, the hand band, tops): lighter,
+  greyer, roughness 0.6; end-grain faces are 30 % darker and 0.2 rougher. Crates and pallets are sawn (override 0.85).
+- **PLASTIC**: flow-line gloss bands, sink marks, a scuff field (stress-whitened scuffs at edges and the kick zone,
+  UV chalking of old up-facing parts); parts with an override below 0.12 (glass, screens) skip the haircell and scuffs.
+  D10 HAIRCELL is a 1.4 mm EDM texture. Kraft board is PLASTIC part kind 1: D20 KRAFT (C-flute ribs every 7.9 mm,
+  +-18 um, fibre floc, specks) replaces the haircell, the liner is matte (0.85, EON sigma 0.5), crushed and darker within
+  ~6 mm of the edges, with a dark lid seam; rack loads carry packing tape.
+- **RUBBER** (0.04): antiozonant bloom on up-facing and old parts, ozone crazing, rubbed glossier patches, roughness
+  0.62 +- 0.08, EON sigma 0.3. The light-well panes and the copier platen and panel are PLASTIC now, the children's
+  playroom floor VINYL_VCT, the pool lane rope polypropylene.
+- **METAL_GRATE** is hot-dip galvanised 19-W-4 bar grating (5 mm bars at 30 x 100 mm, zinc 0.36 at roughness 0.6,
+  white-rust flecks, dirt at the junctions, holes at 0.02; table 0.095); the server rack fronts that 0b's visibility
+  term had lightened are dark behind the bars again. METAL_DECK gets white-rust blooms and drip lines in the rib bottoms.
+- **Grime profile 6** (metal): rust run-off on painted and grating steel from the drips and the smooth tide field (not
+  the speckle channel, which made leopard spots), none on bare metal; METAL_RUST uses its own run-off. Up-facing shell
+  steel gathers dust (props get the anchor cell's).
+- **Costs:** see TEX2.md, lane E.
 
 **Must NOT touch:** material shaders (WP9), except that you own the albedo *numbers* via contract-changes.
 
