@@ -15,8 +15,9 @@
 //                                 (soft alpha, alpha-tested for SIGNAGE/chalk-like hard edges) instead of discarding
 //   check=0                       skip the GPU checks
 //   checks=albedo,range,seam,orient   which GPU checks run (default all): range = per-layer albedo percentile range
-//                                 (stats().albedoRange) and the texture height maximum against SURFACE_PHYS.pomTop
-//                                 (stats().heightMax, heightFails)
+//                                 (stats().albedoRange), the texture height maximum against SURFACE_PHYS.pomTop
+//                                 (stats().heightMax, heightFails) and the aux channel's range (stats().auxRange: ormh.a
+//                                 per layer with its aux kind; view=ormh&ch=a shows the channel)
 //   hud=0                         hide the text overlay
 //   packh=1                       force the packed RGBA8 height scratch (fallback without float colour buffers)
 // window.__backrooms (HarnessDebugAPI): ready once the textures are generated, the checks have run and a few frames
@@ -31,7 +32,7 @@ import type { TextureSet } from '../core/runtime.ts';
 import { SURFACE_PHYS } from '../materials/chunks/params.ts';
 import {
   arrowOrientationCheck, layerAlbedoCheck, layerAlbedoRangeCheck, layerHeightMax, reduceAtlasSlots, reduceLayers, tileSeamCheck,
-  tileSeamCheckDetailed, type LayerRangeReport, type OrientationReport, type SeamDetail,
+  tileSeamCheckDetailed, layerAuxRange, type LayerAuxRange, type LayerRangeReport, type OrientationReport, type SeamDetail,
 } from '../textures/albedoCheck.ts';
 import { generateTextures, textureBakeStats } from '../textures/TextureBaker.ts';
 import { detailBakeStats, generateDetailTextures } from '../textures/DetailBaker.ts';
@@ -219,6 +220,7 @@ async function main(): Promise<void> {
   let seams: SeamDetail[] | null = null;
   let orient: OrientationReport[] | null = null;
   let ormhMeans: Float64Array | null = null;
+  let auxRange: LayerAuxRange[] | null = null;
   let signSlots: Float64Array | null = null;
   let detailMeans: Float64Array | null = null;
   let set: TextureSet | null = null;
@@ -255,6 +257,8 @@ async function main(): Promise<void> {
       // PANEL_LENS / SIGNAGE) and the layers whose ormh.a is not 0 although their aux kind is 'none'
       ormhAlphaMeans: ormhMeans ? Array.from({ length: MAT_COUNT }, (_, l) => +ormhMeans![l * 4 + 3].toFixed(4)) : null,
       auxNoneFails: ormhMeans ? LAYER_RECIPES_FULL.filter((r) => r.aux === 'none' && ormhMeans![r.layer * 4 + 3] !== 0).map((r) => LAYER_DEFS[r.layer].name) : null,
+      // ...and per layer its range (min, p2, p98, max of the 32x32 cell means; checks=range) next to the aux kind
+      auxRange: auxRange ? auxRange.map((r) => ({ n: r.name, kind: LAYER_RECIPES_FULL[r.layer].aux, min: +r.min.toFixed(3), p2: +r.p2.toFixed(3), p98: +r.p98.toFixed(3), max: +r.max.toFixed(3) })) : null,
       errors,
     }),
     layerAlbedoCheck: () => (set ? layerAlbedoCheck(renderer, set) : Promise.resolve([])),
@@ -389,6 +393,7 @@ async function main(): Promise<void> {
       if (checkList.includes('range')) {
         range = await layerAlbedoRangeCheck(renderer, ts);
         heightMax = await layerHeightMax(renderer, ts);
+        auxRange = await layerAuxRange(renderer, ts);
       }
       phase = 'seam check';
       if (checkList.includes('seam')) seams = await tileSeamCheckDetailed(renderer, ts);

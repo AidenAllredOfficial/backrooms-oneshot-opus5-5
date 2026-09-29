@@ -276,7 +276,8 @@ export const TUNE = {
  * rows (SurfacePhys and the channel conventions; see layers/types.ts):
  *   BR_L_SIGMA (EON sigma), BR_L_PILE (kp, kv), BR_L_DETREP (detail repeat scale), BR_L_DETTINT (detail tint),
  *   BR_L_DETSO (detail cavity into specular occlusion), BR_L_DIRT / BR_L_WEAR (rgb, amount), BR_L_RELIEF (metres of
- *   full convexity), BR_AUX_KIND (ormh.a kind, BR_AUX_* ids), BR_L_AUX2 (albedo.a is aux2).
+ *   full convexity), BR_AUX_KIND (ormh.a kind, BR_AUX_* ids), BR_L_AUX2 (albedo.a is aux2); BR_RELIEF_GRIME (1 when
+ *   some layer has a dirt or wear amount).
  */
 export function glslLayerArrays(): string {
   const n = MAT_COUNT;
@@ -296,6 +297,8 @@ export function glslLayerArrays(): string {
     arr('float', 'BR_L_RELIEF', rows.map((r) => f(r.phys.reliefM))),
     arr('int', 'BR_AUX_KIND', rows.map((r) => String(AUX_KIND_ID[r.aux]))),
     arr('bool', 'BR_L_AUX2', rows.map((r) => String(r.aux2))),
+    // the relief-aware dirt / wear block compiles in only once some layer sets an amount (chunks/surface.ts)
+    `#define BR_RELIEF_GRIME ${rows.some((r) => r.phys.dirt[3] > 0 || r.phys.wear[3] > 0) ? 1 : 0}`,
   ].join('\n') + '\n';
 }
 
