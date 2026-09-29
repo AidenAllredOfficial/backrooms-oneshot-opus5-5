@@ -11,7 +11,8 @@
 //   against the layer's rank-normalised wear field W (ormh.a, P(W < x) = x). The threshold widens with the texel
 //   footprint to a linear ramp of half-width 0.5, so far away the exposed share stays the level (mip-linear);
 // - the per-part roughness override is a scale on the topcoat (brR = mix(exposed, ormh.g x override / refR, topcoat));
-// - the clearcoat (car paint only) covers the topcoat, on the base map's normal (orange peel and oil-canning).
+// - the clearcoat (car paint only) covers the topcoat, on the shading normal (D18's orange peel; car panels are not
+//   oil-canned).
 
 import { Mat } from '../../../core/ids.ts';
 import { RUST_PAINT_REF } from '../../../props/builder.ts';
@@ -148,8 +149,10 @@ if ( brWpOn ) {
 		brOrmh.g = brWpTr * brWpTop + 0.7 * brWpPrim + mix( 0.3, 0.75, 1.0 - brWpStM ) * brWpCore;
 		brOrmh.b = brWpStM * brWpCore;
 		brWpScr *= brWpTop;
-		// oil-canning is a flat sheet's waviness: tubes and rails (curved sides: no edge across) are drawn smooth
-		if ( brWpProp && ( abs( vBrLmUv.x ) < 0.5 || abs( vBrLmUv.y ) < 0.5 ) ) brNrm.xy *= 0.15;
+		// oil-canning is a flat sheet's waviness: tubes and rails (curved sides: no edge across) are drawn smooth, and
+		// so are coated parts (car bodies: stiff stamped panels, whose clearcoat mirrors the lamps; the waviness broke
+		// those reflections into jagged SSR blocks)
+		if ( brWpProp && ( abs( vBrLmUv.x ) < 0.5 || abs( vBrLmUv.y ) < 0.5 || ( int( brAuxB.z ) & 2 ) != 0 ) ) brNrm.xy *= 0.15;
 	} else if ( brL == BR_M_METAL_RUST ) {
 		// corrosion: paint remnants where C is above a threshold that rises with age, on pipe undersides (condensation)
 		// and at joints and flanges (crevices); below it the recipe's rust shows. The paint takes the part's colour
@@ -331,10 +334,10 @@ if ( brL == BR_M_PLASTIC && ( brF & BR_F_PROP_AUX ) != 0 && vBrEmit <= 0.0 && vB
   preFog: '',
 };
 
-/** After three's clearcoat_normal_fragment_begin (anchors.ts): the coat follows the base map's normal (orange peel and
- * oil-canning), not the unperturbed geometric normal. */
+/** After three's clearcoat_normal_fragment_begin (anchors.ts): the coat follows the shading normal (the base map plus
+ * the detail slope: D18's orange peel is the lacquer's own surface), not the unperturbed geometric normal. */
 export const PROP_COAT_NORMAL_GLSL = /* glsl */ `
 #ifdef USE_CLEARCOAT
-clearcoatNormal = normalize( brTbn * vec3( brNrm.xy * brNrmScale, max( brNrm.z, 1e-3 ) ) );
+clearcoatNormal = normal;
 #endif
 `;

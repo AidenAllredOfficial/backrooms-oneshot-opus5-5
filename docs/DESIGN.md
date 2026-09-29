@@ -4431,8 +4431,10 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   exposure was tried and dropped: under overhead light it was barely visible for 0.03-0.05 ms.) D18 ENAMEL is 2-4 mm orange peel at
   +-6 um with faint buffing swirls. The part's roughness override scales the topcoat (ormh.g x override / 0.4), so
   the recipe's variation survives (locker doors 0.26). Only car paint keeps the clearcoat: its weight is the topcoat x
-  (1 - dust), its roughness max(0.05, 0.35 x override), and its normal the base map's (a new
-  `clearcoat_normal_fragment_begin` anchor; the geometric normal made ruler-straight tube reflections).
+  (1 - dust), its roughness max(0.05, 0.35 x override), and its normal the shading normal, so D18's orange peel is on
+  the lacquer (a new `clearcoat_normal_fragment_begin` anchor; the geometric normal made ruler-straight reflections).
+  Coated parts, like tubes, get no oil-canning: car bodies are stiff stamped panels, and the waviness broke their lamp
+  reflections into jagged SSR blocks.
 - **METAL_BARE** (layer 29, repeat 0.6): the albedo is F0 (+-2 %), brushing along u in F0 and roughness, water-spot
   rings (a limescale film, dielectric), sparse pits, D8 BRUSHED at full strength; W is a smudge field that the hand
   band fills (rougher, 10 % darker). Chrome (locker handles, chair frames, pulls; override 0.08-0.12), polished and

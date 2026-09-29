@@ -270,7 +270,7 @@ v2 conventions").
 - **Detail slots:** D18 ENAMEL (orange peel, heightScale 1.2e-5, S 0.02), D19 RUST_GRAIN (3e-4, S 0.4, roughK 0.1,
   cavity 0.5), D20 KRAFT (8e-5, S 0.05); D10 HAIRCELL 2.5 -> 1.4 mm.
 - **Anchor:** `clearcoat_normal_fragment_begin` ('after'; anchors.ts, SurfaceMaterial injectionCode ->
-  `PROP_COAT_NORMAL_GLSL`): the props clearcoat uses the base map's normal.
+  `PROP_COAT_NORMAL_GLSL`): the props clearcoat uses the shading normal (base map and detail slope).
 - **Hooks (chunks/family/props.ts):** one main-scope name, `brWpTop` (postSample; read by grime and matPost); the rest
   of the wear state is scoped inside postSample, which measurably lowered the programs' cost; pars
   `brPropEdgeD`, `brPropEdgeHS`, `brWpExpose` and `BR_M_*` for the prop layers. The rough hook replaces the override
