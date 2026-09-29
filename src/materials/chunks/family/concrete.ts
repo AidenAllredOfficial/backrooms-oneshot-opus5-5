@@ -5,9 +5,9 @@
 //
 // The slab's structure above the 2.4 m texture is world-space (lane B):
 // - pours (19.2 x 9.6 m) and 4.8 m panels with their own tone, hue and sheen;
-// - saw-cut control joints on the 4.8 m grid: a 4 mm kerf with 1 mm arrises, filled 4 mm down with dark polyurea or
-//   open (debris); inside it the view ray sees the far wall (analytic parallax) or the bottom; 30 % of the 0.24 m
-//   joint segments are spalled (a fresh, paler fracture sloping into the kerf);
+// - saw-cut control joints on the 4.8 m grid: a 4.4 mm kerf with 1.5 mm arrises, filled 4 mm down with dark polyurea
+//   or open (debris); inside it the view ray sees the far wall (analytic parallax) or the bottom; 30 % of the 0.24 m
+//   joint segments are spalled (a fresh, paler fracture sloping into the kerf); dirt collects beside the cut;
 // - one shrinkage crack in some panels, edge to edge (so every crack ends at a joint), warped, 0.2-1.2 mm wide, 35 %
 //   branched, with a dirty halo;
 // - traffic lanes (WP7 mask A, bake/mask.ts): burnished darker and glossier on concrete, dulled on terrazzo;
@@ -25,8 +25,8 @@ export const CONCRETE_HOOKS: FamilyHooks = {
 #define BRC_M_CONCRETE_CEIL ${Mat.CONCRETE_CEIL}
 #define BRC_M_TERRAZZO ${Mat.TERRAZZO}
 #define BRC_DET_SLAB ${Det.SLAB}.0
-#define BRC_KERF_HW 0.002 // m, saw-cut kerf half-width
-#define BRC_ARRIS 0.001 // m, arris bevel width
+#define BRC_KERF_HW 0.0022 // m, saw-cut kerf half-width
+#define BRC_ARRIS 0.0015 // m, arris bevel width (the saw's bevel, ravelled by traffic)
 #define BRC_FILL_D 0.004 // m, joint filler depth below the surface
 #define BRC_OPEN_D 0.03 // m, depth of an open (unfilled) kerf
 #define BRC_SPALL_CELL 0.24 // m, joint segments that may spall (5120 per NOISE_WRAP)
@@ -66,7 +66,7 @@ void brcKerfTap( float x, float t, vec2 sw, bool filled, inout float a, inout ve
 	} else if ( ax < BRC_KERF_HW + spw ) {
 		// spall: a fresh, paler fracture sloping down into the kerf (25-40 degrees), dirt collected at its bottom
 		float f = 1.0 - ( ax - BRC_KERF_HW ) / max( spw, 1e-5 );
-		a *= 1.08 * mix( 1.0, 0.8, f * f );
+		a *= 1.15 * mix( 1.0, 0.75, f * f );
 		n += normalize( vec3( - sd * mix( 0.47, 0.84, fract( spw * 997.0 ) ), 0.0, 1.0 ) );
 		r += 0.85;
 		cav *= mix( 1.0, 0.7, f );
@@ -81,7 +81,7 @@ void brcKerfTap( float x, float t, vec2 sw, bool filled, inout float a, inout ve
 	}
 }
 // Spall half-widths (m) at along-joint position al (m) of joint line li on the side x > 0 (x) and x < 0 (y):
-// 30 % of the 0.24 m segments carry a chip 5-25 mm long and 2-8 mm wide, on one side or (15 %) both
+// 30 % of the 0.24 m segments carry a chip 5-25 mm long and 3-10 mm wide, on one side or (15 %) both
 vec2 brcSpall( float al, int li, uint salt ) {
 	vec2 sw = vec2( 0.0 );
 	float q = al / BRC_SPALL_CELL;
@@ -97,7 +97,7 @@ vec2 brcSpall( float al, int li, uint salt ) {
 		float hl = mix( 0.0025, 0.0125, brU01( h2 ) );
 		float u = ( al - ac ) / hl;
 		if ( abs( u ) >= 1.0 ) continue;
-		float wm = mix( 0.002, 0.008, brU01( brPcg( h2 ) ) );
+		float wm = mix( 0.003, 0.01, brU01( brPcg( h2 ) ) );
 		// a ragged chip outline: two harmonics of the along coordinate
 		float rag = 0.85 + 0.15 * sin( u * 7.0 + brU01( h ) * 40.0 ) + 0.08 * sin( u * 17.0 + brU01( h1 ) * 50.0 );
 		float w = wm * pow( 1.0 - u * u, 0.6 ) * rag;
@@ -236,7 +236,7 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 	vec3 kn;
 	float cov = brcJoint( x, al, li, t, fx, filled, ka, kn, kr, kc );
 	// dirt collected beside the cut
-	am *= ka * ( 1.0 - 0.08 * ( 1.0 - smoothstep( 0.0, 0.03, abs( x ) ) ) );
+	am *= ka * ( 1.0 - 0.12 * ( 1.0 - smoothstep( 0.0, 0.025, abs( x ) ) ) );
 	cav *= kc;
 	if ( cov > 0.0 ) {
 		nj = zl ? vec3( 0.0, kn.x, kn.z ) : kn; // the across axis is the tangent y (world z) for z-lines

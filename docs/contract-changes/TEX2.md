@@ -44,6 +44,35 @@ v2 conventions").
 
 ## Lane B: concrete, terrazzo, floor paint
 
+### 2026-09-28 — lane B: layer rows, stripe decal uv, hard-floor traffic wear, D12 / D13 — APPLIED
+- **Status:** APPLIED by lane B on its branch (for the integrator).
+- **`src/core/materials.ts` LAYER_DEFS** (lane B rows only):
+  - CONCRETE_FLOOR (9): `repeat` 4.8 → 2.4 (`repeatY` 3.0 kept for the tower risers), `hexTile` 2.4 → 1.2. The recipe
+    row declares `frame: [2.4, 2.4]`.
+  - CONCRETE_WALL (10): `roughness` 0.85 → 0.78 (the satin plywood-formed skin; torn skin and streaks stay matte).
+  - CONCRETE_CEIL (11): `repeat` 4.8 → 2.4 (`repeatY` 3.0 kept), `frame: [2.4, 2.4]`.
+  - TERRAZZO (26): `repeat` 2.4 → 1.2, `tileSize` 0 → 0.6 (precast tiles: the shader rotates / flips whole tiles).
+  - `albedoMean` unchanged on every row (the bake still bounces the same colours); the trims are re-measured.
+- **Mesh output (`src/mesh/decals.ts`, DECAL_PAINT_STRIPE only):** stripe uv is stripe-local metres / repeat: u runs
+  across the stripe from 0 at one painted edge to width / repeat, v along it from a per-stripe hashed offset (tile
+  independent: hashed from the placement). `aux.x` = the stripe width in mm (1-255; 255 = 255 mm or wider, no edge
+  flakes). Other decals are unchanged. Consumer: `chunks/family/concrete.ts` (edge flakes); tests/mesh/decals.test.ts.
+- **WP7 mask A (`src/bake/mask.ts`, the floor damage block):** the carpet traffic wear (corridors, thresholds, lanes
+  between openings) also runs on CONCRETE_FLOOR, TERRAZZO and VINYL_VCT at 0.8 x the carpet amplitude; on those hard
+  floors, texels in a rack aisle (1.0-4.2 m between occluder boxes reaching 1-2.5 m above the floor and at least
+  0.9 m long along the aisle, near occluders over 1.8 m) get two wheel tracks 0.45 m either side of the aisle centre
+  (one in aisles under 1.6 m), at (0.7 + 0.3 decay) amplitude. Under a rack: 0. Consumers: the concrete (burnished
+  lanes) and terrazzo (polish loss) responses in `chunks/family/concrete.ts`; VINYL_VCT's response is lane C's.
+- **Detail maps:** D12 SLAB (heightScale 0.6 mm, S 0.3, roughK 0.3, cavity 1) and D13 POLISH (20 µm, S 0.05) replace
+  their neutral placeholders; D4 CONCRETE_FINE gets stronger grains (±15 %) and more, larger pinholes (4 %, r × 1.3),
+  which also reaches its other users (PLENUM, METAL_RUST and the CMU_RAW placeholder).
+- **Samplers:** the decal variant references `uBrDetail` (FLOOR_PAINT stripes fetch D12, world-anchored, under
+  BR_DETAIL_MAPS): 15 → 16 units at high / ultra. The shell, props and water variants are unchanged.
+- **SurfacePhys v2 fields set** (neutral until the 0b shading block reads them): `sigma` CONCRETE_FLOOR 0.25,
+  CONCRETE_WALL and CONCRETE_CEIL 0.35, TERRAZZO 0; `dirt` on CONCRETE_FLOOR, CONCRETE_WALL, CONCRETE_CEIL, TERRAZZO.
+- **Hook-local names:** the concrete family's pars declares `BRC_*` defines and `brc*` functions (`brcSlab`,
+  `brcJoint`, `brcKerfTap`, `brcSpall`, `brcSlabCrack`); main-scope hook locals are `brc`-prefixed.
+
 ## Lane C: masonry and tile
 
 ## Lane D: walls and ceilings

@@ -136,12 +136,12 @@ void gen(vec2 uv, inout Surf s) {
 /** A plywood-formed concrete face over form panels of `panel` metres (dividing FRAME), shared by CONCRETE_WALL and
  * CONCRETE_CEIL. Returns the albedo multiplier over TABLE_ALBEDO, the relief in METRES above the face plane (< 0 into
  * the concrete; the recipe scales it by its heightScale) and the roughness:
- * - panels: each sheet's own tone (+-7 %) and hue (form reuse, release oil), darker bleed toward the bottom of the
+ * - panels: each sheet's own tone (+-10 %) and hue (form reuse, release oil), darker bleed toward the bottom of the
  *   lift, lippage (+-0.8 mm between sheets) and pillowing between the 0.3 m studs;
- * - bug holes: 0.6-7 mm (log-normal around 1.8 mm), clustered and denser toward the top of each lift, taller than
+ * - bug holes: 0.6-7 mm (log-normal around 2 mm), clustered and denser toward the top of each lift, taller than
  *   wide with a steep top wall, 30 % half-skinned; bugK scales their number (walls 1, soffits 0.1);
  * - seams: 1.5 mm fins intact on 65 % of the 10 cm seam segments and broken into jagged scars elsewhere, a grout-leak
- *   line on half the seams and sandy streaks where paste leaked out;
+ *   line on half the seams and sandy streaks along one side where paste leaked out;
  * - the plywood's rotary-cut grain (vertical, ~9 mm) imprinted, with 0-2 boat-shaped patches per sheet;
  * - faint aggregate shadows, hydration mottle, torn-skin patches (matte) and form-oil blotches (satin); satin skin
  *   0.72 otherwise. */
@@ -153,7 +153,7 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   TileInfo pn = tiles(m, panel);
   vec4 pr = tileRand4(pn.id, seed);
   float vL = pn.local.y / panel.y + 0.5;
-  vec3 am = vec3(1.0 + 0.18 * (pr.x - 0.5)) * mix(vec3(0.985, 1.0, 1.015), vec3(1.015, 1.0, 0.985), pr.y);
+  vec3 am = vec3(1.0 + 0.2 * (pr.x - 0.5)) * mix(vec3(0.985, 1.0, 1.015), vec3(1.015, 1.0, 0.985), pr.y);
   am *= 1.0 - 0.05 * (1.0 - vL);
   float hM = 0.0016 * (pr.z - 0.5) + 0.0004 * pow(sin(3.14159265 * m.x / 0.3), 2.0);
   float rough = 0.72;
@@ -186,7 +186,7 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   am *= 1.0 - 0.03 * step(agh.x, 0.35) * (1.0 - smoothstep(agR - 0.1, agR, ag.f1 + 0.15 * fbm(uv, PM(160.0), 2, seed + 20)));
   // soft 0.3-1 m clouds (water gain, uneven vibration) and a faint 3-15 cm hydration mottle
   float mot = smoothstep(-0.3, 0.4, fbm(warp(uv, PM(4.0), 2, seed + 21, 0.02), PM(8.0), 4, seed + 6)) - 0.5;
-  am *= 1.0 + 0.05 * mot + 0.1 * fbm(uv, PM(1.2), 4, seed + 7);
+  am *= 1.0 + 0.05 * mot + 0.2 * fbm(uv, PM(1.2), 4, seed + 7);
   // ---- skin: torn patches (matte, a little paler and coarser), form-oil blotches (satin, darker)
   float torn = smoothstep(0.38, 0.5, fbm(uv, PM(3.0), 4, seed + 8));
   float oilF = smoothstep(0.3, 0.45, fbm(uv + 0.5, PM(2.5), 3, seed + 9)) * (1.0 - torn);
@@ -198,7 +198,9 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   float along = vert ? m.y : m.x;
   vec2 nLines = floor(FRAME / panel + 0.5);
   vec2 lineId = vert ? vec2(mod(floor(m.x / panel.x + 0.5), nLines.x), 0.0) : vec2(mod(floor(m.y / panel.y + 0.5), nLines.y), 1.0);
-  vec2 segId = vec2(lineId.x * 2.0 + lineId.y, floor(along / 0.1));
+  // seam segments are centred on the frame edge (the wrap falls inside one, so the texture tiles)
+  float alongF = vert ? FRAME.y : FRAME.x;
+  vec2 segId = vec2(lineId.x * 2.0 + lineId.y, mod(floor(along / 0.1 + 0.5), floor(alongF / 0.1 + 0.5)));
   vec4 sh = hash4f(segId, seed + 12);
   float lh = hashf(lineId, seed + 13);
   float e = pn.edge;
@@ -210,10 +212,14 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   rough = mix(rough, 0.95, fin * (1.0 - intact));
   float leak = step(lh, 0.5) * (1.0 - smoothstep(0.002, 0.006, e));
   am *= 1.0 - 0.1 * leak;
-  // sand streak: a ragged wedge of washed-out paste beside the seam, widest mid-segment
-  float fa = fract(along / 0.1);
-  float streakW = mix(0.02, 0.05, sh.y) * sin(3.14159265 * fa) * (0.6 + 0.8 * vnoise(uv, PM(60.0), seed + 22));
-  float streak = step(sh.z, 0.35) * (1.0 - smoothstep(streakW * 0.5, streakW, e));
+  // sand streak: where paste leaked out through the joint, a 20-50 mm band of exposed sand along one side of the seam
+  // over 35 % of its 0.3 m segments, tapering at the ends, with a ragged edge
+  vec4 st = hash4f(vec2(segId.x, mod(floor(along / 0.3 + 0.5), floor(alongF / 0.3 + 0.5))), seed + 23);
+  float fa = fract(along / 0.3 + 0.5);
+  float sideS = vert ? m.x - floor(m.x / panel.x + 0.5) * panel.x : m.y - floor(m.y / panel.y + 0.5) * panel.y;
+  float streakW = mix(0.02, 0.05, st.y) * smoothstep(0.0, 0.3, fa) * (1.0 - smoothstep(0.7, 1.0, fa))
+                * (0.7 + 0.6 * vnoise(uv, PM(40.0), seed + 22)) * (0.85 + 0.3 * vnoise(uv, PM(400.0), seed + 24));
+  float streak = step(st.z, 0.35) * step(0.0, sideS * (st.w - 0.5)) * (1.0 - smoothstep(streakW * 0.6, streakW + 1e-4, e));
   am *= mix(1.0, 0.9 * (0.85 + 0.3 * vnoise(uv, PM(500.0), seed + 15)), streak);
   hM -= 0.0003 * streak;
   rough = mix(rough, 0.95, streak);
@@ -225,10 +231,10 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   vec4 bh2 = hash4f(bh.id, seed + 18);
   float vLc = fract(mc.y / panel.y);
   float clus = smoothstep(0.05, 0.25, fbm(mc / FRAME, PM(4.0), 3, seed + 19));
-  float pHole = bugK * 0.09 * (0.4 + 1.4 * vLc * vLc) * mix(0.4, 2.5, clus);
+  float pHole = bugK * 0.12 * (0.4 + 1.4 * vLc * vLc) * mix(0.4, 2.5, clus);
   if (bhh.x < pHole) {
     float n = (bhh.y + bhh.z + bhh.w + bh2.x - 2.0) * 1.7;
-    float r = clamp(exp(log(0.0018) + 0.55 * n), 0.0006, 0.007);
+    float r = clamp(exp(log(0.002) + 0.55 * n), 0.0006, 0.007);
     vec2 q = -bh.rel * cellM;
     q.y /= 1.3;
     float qy = q.y - 0.2 * r;
@@ -396,7 +402,7 @@ void gen(vec2 uv, inout Surf s) {
   vec3 matrixCol = srgb8(160.0, 158.0, 151.0) * (0.92 + 0.16 * vnoise(tuv, PM(420.0), 4)) * (1.0 + 0.03 * fbm(tuv, PM(8.0), 3, 5));
   vec4 h1, h2, h3;
   vec2 r1, r2, r3;
-  float c1 = tzChips(tuv, PM(60.0), 0.14, 0.42, 0.9, 10, h1, r1);
+  float c1 = tzChips(tuv, PM(60.0), 0.18, 0.46, 0.88, 10, h1, r1);
   float c2 = tzChips(tuv + 0.37, PM(140.0), 0.16, 0.4, 0.8, 20, h2, r2) * (1.0 - c1);
   float c3 = tzChips(tuv + 0.71, PM(300.0), 0.18, 0.42, 0.6, 30, h3, r3) * (1.0 - c1) * (1.0 - c2);
   vec3 col = matrixCol;
@@ -422,28 +428,30 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts); sigma and dirt take effect with
+// the v2 shading block (EON diffuse, relief-aware dirt)
 export const CONCRETE_RECIPES: RecipeTable = {
-  // normalStrength (as the wall coverings, textures/layers/wallpaper.ts): the trowelled slab, the formwork face and the
-  // board-formed soffit had mip-0 slopes of 0.006 / 0.015 / 0.024 (0.3-1.4 degrees) and shaded flat
+  // normalStrength: the recipes use physical amplitudes (a troweled slab is flat, pinholes, fins and bug holes carry
+  // the relief), so only a mild 1.5-2x makes up for the 2.3 mm texels smoothing the small features (it was 3-6x on the
+  // former smooth fields, which turned the slab's raised pebbles into beads)
   [Mat.CONCRETE_FLOOR]: {
-    glsl: CONCRETE_FLOOR, normalStrength: 1.75, heightScale: 0.004, trim: [1.023, 1.02, 1.016],
-    phys: phys(0.6, { det: 12, detS: 1 }), aux: 'mask', frame: [2.4, 2.4],
+    glsl: CONCRETE_FLOOR, normalStrength: 1.75, heightScale: 0.004, trim: [1.058, 1.065, 1.074],
+    phys: phys(0.6, { det: 12, detS: 1, sigma: 0.25, dirt: [0.6, 0.56, 0.5, 0.6] }), aux: 'mask', frame: [2.4, 2.4],
   },
   [Mat.CONCRETE_WALL]: {
-    glsl: CONCRETE_WALL, normalStrength: 2.0, heightScale: CONCRETE_WALL_HS, trim: [1.005, 1.014, 1.028],
-    phys: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8 }),
+    glsl: CONCRETE_WALL, normalStrength: 2.0, heightScale: CONCRETE_WALL_HS, trim: [1.03, 1.027, 1.024],
+    phys: phys(0.6, { pomTop: 0.92, det: 4, detS: 0.8, sigma: 0.35, dirt: [0.7, 0.66, 0.6, 0.5] }),
   },
   [Mat.CONCRETE_CEIL]: {
-    glsl: CONCRETE_CEIL, normalStrength: 1.5, heightScale: 0.005, trim: [1.017, 1.017, 1.017],
-    phys: phys(0.6, { det: 4, detS: 0.8 }), frame: [2.4, 2.4],
+    glsl: CONCRETE_CEIL, normalStrength: 1.5, heightScale: 0.005, trim: [0.995, 1.001, 1.007],
+    phys: phys(0.6, { det: 4, detS: 0.8, sigma: 0.35, dirt: [0.75, 0.72, 0.66, 0.4] }), frame: [2.4, 2.4],
   },
   [Mat.FLOOR_PAINT]: {
-    glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0005, trim: [1.052, 1.052, 1.052],
+    glsl: FLOOR_PAINT, normalStrength: 1.0, heightScale: 0.0005, trim: [1.11, 1.119, 1.131],
     phys: phys(0.15),
   },
   [Mat.TERRAZZO]: {
-    glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.002, trim: [1.043, 1.064, 1.088],
-    phys: phys(0.1, { det: 13, detS: 0.6, glaze: 0.09, roughComp: 0.45, tok: 0.5 }),
+    glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.002, trim: [1.088, 1.089, 1.117],
+    phys: phys(0.1, { det: 13, detS: 0.6, glaze: 0.09, roughComp: 0.45, tok: 0.5, dirt: [0.6, 0.58, 0.52, 0.5] }),
   },
 };

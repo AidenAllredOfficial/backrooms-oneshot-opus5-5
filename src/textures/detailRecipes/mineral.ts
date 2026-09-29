@@ -74,10 +74,11 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 /** D13 polished terrazzo: the grinding and buffing scratches of the polish (random directions, 5-40 mm, sub-texel
- * wide, 20 micron deep) and faint buffing-pad swirls; albedo nearly neutral. Up close a faint scratch sheen, farther
- * away LEAN micro-roughness, which the traffic lanes scale up (chunks/family/concrete.ts). */
+ * wide) and faint buffing-pad swirls; albedo nearly neutral. The scratches are far narrower than a texel, so their
+ * slope variance is carried by an exaggerated heightScale (the texel-scale rms slope ~0.01 stands for the unresolved
+ * micro-scratches): a faint sheen up close, LEAN micro-roughness farther away (r 0.09 -> ~0.1), which the traffic
+ * lanes scale up (chunks/family/concrete.ts). */
 const POLISH = /* glsl */ `
-#define SS 4
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
   float scr = 0.0;
@@ -106,6 +107,8 @@ void gen(vec2 uv, inout Surf s) {
 
 export const MINERAL_DETAILS: DetailTable = {
   [Det.CONCRETE_FINE]: { name: 'CONCRETE_FINE', glsl: CONCRETE_FINE, heightScale: 0.0008, slope: 0.35, roughK: 0.25, cavity: 1 },
-  [Det.SLAB]: { name: 'SLAB', glsl: SLAB, heightScale: 0.0006, slope: 0.3, roughK: 0.3, cavity: 1 },
-  [Det.POLISH]: { name: 'POLISH', glsl: POLISH, heightScale: 0.00002, slope: 0.05, roughK: 0, cavity: 0 },
+  // slope S (harness extra=detail stats().detailMoments): POLISH ~3 x its rms slope (0.015); SLAB's slopes are heavy
+  // tailed (flat paste, steep pinhole walls: rms 0.015 unclipped), so S keeps the pinhole walls up to ~8 degrees
+  [Det.SLAB]: { name: 'SLAB', glsl: SLAB, heightScale: 0.0006, slope: 0.15, roughK: 0.3, cavity: 1 },
+  [Det.POLISH]: { name: 'POLISH', glsl: POLISH, heightScale: 0.0008, slope: 0.045, roughK: 0, cavity: 0 },
 };
