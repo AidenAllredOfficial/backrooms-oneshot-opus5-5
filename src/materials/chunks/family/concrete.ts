@@ -278,11 +278,13 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 			brAlpha *= smoothstep( - brcFw, brcFw, min( brcAc - brcDep.x, brcWd - brcAc - brcDep.y ) );
 		}
 		// the slab's saw-cut joints run through the stripe: the filler and the kerf stay unpainted (the slab shows)
-		vec3 brcAm, brcN;
-		float brcRm, brcNw, brcRt, brcRtw, brcCav;
-		vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
-		brcSlab( brS2, brcV, true, brcAm, brcRm, brcN, brcNw, brcRt, brcRtw, brcCav );
-		brAlpha *= 1.0 - brcNw;
+		if ( BR_DETAIL == 1 ) {
+			vec3 brcAm, brcN;
+			float brcRm, brcNw, brcRt, brcRtw, brcCav;
+			vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
+			brcSlab( brS2, brcV, true, brcAm, brcRm, brcN, brcNw, brcRt, brcRtw, brcCav );
+			brAlpha *= 1.0 - brcNw;
+		}
 #ifdef BR_DETAIL_MAPS
 		// the slab's detail (D12, world-anchored) through the thin film: speckle and pinholes continue under the paint
 		vec2 brcDu = brSurf2D( vBrLocal, brNWg ) / BR_DETAIL_REPEAT;
@@ -355,15 +357,23 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 			brDetSl *= brcDk;
 			brDetVar *= ( 1.0 + 1.5 * brcW ) * mix( 1.0, 0.5, brcDust );
 #endif
-			vec3 brcAm, brcN;
-			float brcRm, brcNw, brcRt, brcRtw, brcCav;
-			vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
-			brcSlab( brS2, brcV, false, brcAm, brcRm, brcN, brcNw, brcRt, brcRtw, brcCav );
-			brA *= brcAm;
-			brRoughMul *= brcRm;
-			brOrmh.g = mix( brOrmh.g, brcRt, brcRtw );
-			brOrmh.r *= brcCav;
-			if ( brcNw > 0.0 ) brNrm.xyz = mix( brNrm.xyz, normalize( brcN ) * brNLen, brcNw );
+			if ( BR_DETAIL == 1 && uBrReflPass < 0.5 ) {
+				vec3 brcAm, brcN;
+				float brcRm, brcNw, brcRt, brcRtw, brcCav;
+				vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
+				brcSlab( brS2, brcV, false, brcAm, brcRm, brcN, brcNw, brcRt, brcRtw, brcCav );
+				brA *= brcAm;
+				brRoughMul *= brcRm;
+				brOrmh.g = mix( brOrmh.g, brcRt, brcRtw );
+				brOrmh.r *= brcCav;
+				if ( brcNw > 0.0 ) brNrm.xyz = mix( brNrm.xyz, normalize( brcN ) * brNLen, brcNw );
+			} else {
+				// low quality and the planar mirror pass: the joints as their mean darkening only
+				vec2 brcJd = abs( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT;
+				vec2 brcFw = max( fwidth( brS2 ), vec2( 1e-4 ) );
+				vec2 brcLn = clamp( 2.0 * BRC_KERF_HW / brcFw, 0.0, 1.0 ) * ( 1.0 - smoothstep( vec2( BRC_KERF_HW ), BRC_KERF_HW + brcFw, brcJd ) );
+				brA *= 1.0 - 0.7 * max( brcLn.x, brcLn.y );
+			}
 		} else if ( brL == BR_M_CONCRETE_FLOOR ) {
 			// risers and tower faces: no power trowel ever ran there (ormh.a holds the swirl)
 			brOrmh.g += 0.08 * brAux;

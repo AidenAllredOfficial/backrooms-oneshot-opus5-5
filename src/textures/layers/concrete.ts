@@ -74,7 +74,7 @@ void gen(vec2 uv, inout Surf s) {
   float aggr = step(agh.x, 0.35) * (1.0 - smoothstep(mix(0.25, 0.4, agh.y) - 0.08, mix(0.25, 0.4, agh.y), ag.f1 + 0.06 * vnoise(uv, PM(400.0), 8)));
   Cell sp = worley(uv, PM(160.0), 0.9, 9);
   vec2 sph = hash2f(sp.id, 10);
-  float speck = step(sph.x, 0.05) * (1.0 - smoothstep(mix(0.2, 0.35, sph.y) * 0.6, mix(0.2, 0.35, sph.y), sp.f1));
+  float speck = step(sph.x, 0.07) * (1.0 - smoothstep(mix(0.2, 0.35, sph.y) * 0.6, mix(0.2, 0.35, sph.y), sp.f1));
   // coarse aggregate fines showing through the paste: light and dark 3-6 mm flecks, and a sandy 1-4 cm paste tone
   Cell fl = worley(uv, PM(90.0), 0.9, 15);
   vec2 flh = hash2f(fl.id, 16);
@@ -119,7 +119,7 @@ void gen(vec2 uv, inout Surf s) {
   col *= 1.0 - 0.07 * burn - (0.04 + 0.06 * burn) * mottle;
   col *= 1.0 - 0.05 * aggr;
   col *= 1.0 - 0.45 * speck;
-  col *= (1.0 + 0.15 * fleck) * (1.0 + 0.06 * sand);
+  col *= (1.0 + 0.18 * fleck) * (1.0 + 0.09 * sand);
   col *= (1.0 - 0.55 * pin) * (1.0 + 0.04 * lip);
   col *= 1.0 - 0.03 * swirl;
   col *= 1.0 + 0.07 * lait;
@@ -154,7 +154,7 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   vec4 pr = tileRand4(pn.id, seed);
   float vL = pn.local.y / panel.y + 0.5;
   vec3 am = vec3(1.0 + 0.2 * (pr.x - 0.5)) * mix(vec3(0.985, 1.0, 1.015), vec3(1.015, 1.0, 0.985), pr.y);
-  am *= 1.0 - 0.05 * (1.0 - vL);
+  am *= 1.0 - 0.08 * (1.0 - vL);
   float hM = 0.0016 * (pr.z - 0.5) + 0.0004 * pow(sin(3.14159265 * m.x / 0.3), 2.0);
   float rough = 0.72;
   // ---- plywood grain (vertical rotary-cut figure, ~9 mm) and boat-shaped patches
@@ -190,7 +190,7 @@ FormOut formFace(vec2 uv, vec2 panel, float bugK, int seed) {
   // ---- skin: torn patches (matte, a little paler and coarser), form-oil blotches (satin, darker)
   float torn = smoothstep(0.38, 0.5, fbm(uv, PM(3.0), 4, seed + 8));
   float oilF = smoothstep(0.3, 0.45, fbm(uv + 0.5, PM(2.5), 3, seed + 9)) * (1.0 - torn);
-  am *= (1.0 + 0.04 * torn) * (1.0 - 0.04 * oilF);
+  am *= (1.0 + 0.06 * torn) * (1.0 - 0.08 * oilF);
   rough = mix(mix(rough, 0.9, torn), 0.64, oilF);
   hM += 0.00012 * torn * vnoise(uv, PM(300.0), seed + 11);
   // ---- seams: fins, broken scars, grout-leak lines, sand streaks
