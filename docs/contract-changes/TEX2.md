@@ -50,6 +50,8 @@ v2 conventions").
   - CONCRETE_FLOOR (9): `repeat` 4.8 → 2.4 (`repeatY` 3.0 kept for the tower risers), `hexTile` 2.4 → 1.2. The recipe
     row declares `frame: [2.4, 2.4]`.
   - CONCRETE_WALL (10): `roughness` 0.85 → 0.78 (the satin plywood-formed skin; torn skin and streaks stay matte).
+    Its recipe row moves the face to height 0.84 and `pomTop` 0.92 → 0.96, so the relief top covers the new fins,
+    lippage and stud pillowing (no false POM self-shadows).
   - CONCRETE_CEIL (11): `repeat` 4.8 → 2.4 (`repeatY` 3.0 kept), `frame: [2.4, 2.4]`.
   - TERRAZZO (26): `repeat` 2.4 → 1.2, `tileSize` 0 → 0.6 (precast tiles: the shader rotates / flips whole tiles).
   - `albedoMean` unchanged on every row (the bake still bounces the same colours); the trims are re-measured.
