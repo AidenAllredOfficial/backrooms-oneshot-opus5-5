@@ -4427,7 +4427,8 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   props, roughness 0.7), then the steel core 0.06 further down W (F0 0.56, roughness 0.3; on old props oxidised
   (0.10, 0.07, 0.05)). Scratches are stress-whitened after the tint
   (luma x 1.3 + 0.04, roughness + 0.15), the deepest cut to steel; the kick zone is chalkier (+0.12 roughness) and the
-  hand band greasier (roughness x 0.75 in the grime tide field). (A chip-step bump from the screen derivatives of the
+  hand band of props greasier (roughness x 0.65 in the grime tide field; not on shell walls and roll-up doors, where
+  its blobs read as wet clouds in the lamp reflections). (A chip-step bump from the screen derivatives of the
   exposure was tried and dropped: under overhead light it was barely visible for 0.03-0.05 ms.) D18 ENAMEL is 2-4 mm orange peel at
   +-6 um with faint buffing swirls. The part's roughness override scales the topcoat (ormh.g x override / 0.4), so
   the recipe's variation survives (locker doors 0.26). Only car paint keeps the clearcoat: its weight is the topcoat x

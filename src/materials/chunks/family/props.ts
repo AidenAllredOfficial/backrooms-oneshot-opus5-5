@@ -299,7 +299,9 @@ if ( brWpProp || brWpOn ) {
 		brA = mix( brA, BR_DUST_COLOR, 0.55 * brWpDu );
 		brMetal *= 1.0 - brWpDu;
 		brRoughMul *= mix( 1.0, 1.5, brWpDu );
-		if ( brL == BR_M_METAL_PAINTED ) {
+		if ( brL == BR_M_METAL_PAINTED && ( brF & BR_F_PROP_AUX ) != 0 ) {
+			// (props only: hands touch doors, lockers and cabinets; on shell walls and roll-up doors the tide field's
+			// blobs read as wet clouds in the lamp reflections)
 			float brWpGr = exp( - ( vBrLocal.y - 1.2 ) * ( vBrLocal.y - 1.2 ) * 11.0 ) * smoothstep( 0.35, 0.7, g2.r ) * ( 1.0 - abs( brNWg.y ) );
 			brRoughMul *= 1.0 - 0.35 * brWpGr * brWpTop;
 		}
