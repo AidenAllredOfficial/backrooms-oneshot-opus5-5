@@ -59,7 +59,8 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 25, name: 'FLOOR_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.65, 0.6, 0.2], roughness: 0.5, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: false },
   { id: 26, name: 'TERRAZZO', repeat: 1.2, tileSize: 0.6, albedoMean: [0.5, 0.48, 0.44], roughness: 0.16, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 27, name: 'METAL_DECK', repeat: 1.2, tileSize: 0, albedoMean: [0.3, 0.3, 0.29], roughness: 0.5, metal: 0.6, grime: 'metal', sound: S.METAL, absorption: 0.05, reflective: false },
-  // texture realism v2 layers: CMU_RAW (lane C: PIPEWORKS walls, service corridors), METAL_BARE (reserved for lane E)
+  // texture realism v2 layers: CMU_RAW (lane C: PIPEWORKS walls, service corridors), METAL_BARE (lane E: chrome and
+  // stainless prop hardware)
   { id: 28, name: 'CMU_RAW', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.38, 0.372, 0.346], roughness: 0.9, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.07, reflective: false },
   { id: 29, name: 'METAL_BARE', repeat: 0.6, tileSize: 0, albedoMean: [0.56, 0.56, 0.56], roughness: 0.3, metal: 1, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
 ];
