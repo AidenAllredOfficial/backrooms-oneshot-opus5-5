@@ -37,8 +37,8 @@ export const TILE_HOOKS: FamilyHooks = {
 `,
   postSample: /* glsl */ `
 float brTlWear = 0.0; // VCT lane wear (grime 'tile'), read by the rough hook
-if ( BR_DETAIL == 1 && ( brL == BR_M_POOL_TILE || brL == BR_M_POOL_MOSAIC ) ) {
-	// grout colour along the lines, world-anchored (brAux: grout coverage)
+if ( BR_DETAIL == 1 && uBrReflPass < 0.5 && ( brL == BR_M_POOL_TILE || brL == BR_M_POOL_MOSAIC ) && brAux > 0.004 ) {
+	// grout colour along the lines, world-anchored (brAux: grout coverage; grout pixels only, not in the mirror pass)
 	float n = 0.6 * brSurfNoise( brS2, brHoriz, ${f(G.cells[0])}, ${wrap(G.cells[0])}, ${f(G.cells[0])}, ${wrapY(G.cells[0])}, 1401u )
 		+ 0.4 * brSurfNoise( brS2, brHoriz, ${f(G.cells[1])}, ${wrap(G.cells[1])}, ${f(G.cells[1])}, ${wrapY(G.cells[1])}, 1402u );
 	brA *= mix( 1.0, ${f(1 - G.amp / 2)} + ${f(G.amp)} * n, brAux );

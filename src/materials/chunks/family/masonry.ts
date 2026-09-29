@@ -152,12 +152,11 @@ if ( brMsOn ) {
 				brOrmh.rg = mix( brOrmh.rg, ro.rg, fl );
 			}
 			// the film edge lifts toward the flake: it tilts away from it and catches the light
-			mat2 brJ = mat2( brDx.x, brDy.x, brDx.y, brDy.y ); // brJ * grad_uv = screen derivatives
-			vec2 gu = abs( determinant( brJ ) ) > 1e-14 ? inverse( brJ ) * fd : vec2( 0.0 );
-			vec2 gm = gu / brLB.xy; // per metre
-			float gl = length( gm );
-			if ( gl > 1e-6 && rim > 0.0 ) {
-				brNrm.xy -= gm / gl * ( 0.9 * rim * brNrm.z );
+			if ( rim > 0.0 ) {
+				mat2 brJ = mat2( brDx.x, brDy.x, brDx.y, brDy.y ); // brJ * grad_uv = screen derivatives
+				vec2 gm = ( abs( determinant( brJ ) ) > 1e-14 ? inverse( brJ ) * fd : vec2( 0.0 ) ) / brLB.xy; // per metre
+				float gl = length( gm );
+				if ( gl > 1e-6 ) brNrm.xy -= gm / gl * ( 0.9 * rim * brNrm.z );
 				brA *= 1.0 + 0.06 * rim;
 			}
 			// blisters: 2-8 mm domes of film lifted by the damp where it still holds
