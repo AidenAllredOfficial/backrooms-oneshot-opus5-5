@@ -69,7 +69,7 @@ void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
   TileInfo t = tiles(m, vec2(0.15));
   vec4 r = tileRand4(t.id, 3);
-  vec4 r2 = tileRand4(t.id, 9);
+  vec4 r2 = tileRand4(t.id, 26); // seed picked for 4 chips, 4 cream and 2 blue-white tiles in the 64 of the frame
   vec4 hw = 0.0015 * mix(vec4(0.8), vec4(1.25), tileRand4(t.id, 11)); // grout half-widths: left, right, bottom, top
   hw.xy += 0.00025 * vec2(gnoise(uv, PM(60.0), 12), gnoise(uv, PM(60.0), 13));
   hw.zw += 0.00025 * vec2(gnoise(uv, PM(60.0), 14), gnoise(uv, PM(60.0), 15));
@@ -95,11 +95,11 @@ void gen(vec2 uv, inout Surf s) {
   float crz = step(r.w, 0.12) * max(lineM(cz.x * FRAME.x / float(PM(45.0).x), 0.0004), 0.6 * lineM(cz2.x * FRAME.x / float(PM(110.0).x), 0.00025))
             * smoothstep(0.002, 0.004, e);
   glaze *= 1.0 - 0.1 * crz;
-  // chip: one conchoidal scoop at an edge or a corner of 6 % of the tiles, 3-8 mm, 0.6-1.2 mm deep, bisque inside
+  // chip: one conchoidal scoop at an edge or a corner of 6 % of the tiles, 4-10 mm, 0.6-1.2 mm deep, bisque inside
   float chipD = 0.0;
   if (r2.y < 0.06) {
-    float R = mix(0.003, 0.008, r2.z);
-    float out_ = mix(0.001, 0.003, fract(r2.w * 5.3));
+    float R = mix(0.004, 0.01, r2.z);
+    float out_ = mix(0.0005, 0.002, fract(r2.w * 5.3));
     int k = int(r2.w * 8.0);
     vec2 sg = vec2(k == 0 || k == 3 || k == 4 ? -1.0 : 1.0, k < 2 || k == 4 ? -1.0 : 1.0);
     float tt = mix(-0.7, 0.7, fract(r2.z * 9.1));
