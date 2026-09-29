@@ -15,12 +15,14 @@ import type { MaterialGlobals, TileBindings } from '../core/runtime.ts';
 import { injectAt, SURFACE_INJECTIONS } from './anchors.ts';
 import { VERT_INVARIANT_GLSL } from './DepthMaterial.ts';
 import { BOUNCE_GLSL } from './chunks/bounce.ts';
+import { brdfParsGlsl } from './chunks/brdf.ts';
 import { fragmentCommon, HAZE_FUNCS_GLSL } from './chunks/common.ts';
-import { DETAIL_PARS_GLSL } from './chunks/detail.ts';
+import { DETAIL_PARS_GLSL, FRAG_DETAIL_SO_GLSL } from './chunks/detail.ts';
 import { EMITTER_GLSL } from './chunks/emitters.ts';
 import { DEBUG_PARS_GLSL } from './chunks/debug.ts';
 import { familyHook } from './chunks/family/index.ts';
 import { GBUFFER_PARS_GLSL } from './chunks/gbuffer.ts';
+import { GRIME_LIB_GLSL } from './chunks/grimeLib.ts';
 import { FRAG_FOG_GLSL } from './chunks/haze.ts';
 import { FRAG_AO_REFL_GLSL, FRAG_LIGHTS_GLSL } from './chunks/lighting.ts';
 import { FRAG_MATERIAL_POST_GLSL } from './chunks/materialPost.ts';
@@ -55,8 +57,9 @@ function injectionCode(): Record<string, string> {
       + PROBE_GLSL // D
       + WATER_SURF_GLSL // E
       + VOLUMETRIC_GLSL + BOUNCE_GLSL // F
-      + familyHook('pars'), // texture realism v2 families
-    'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL + WATER_SPOT_GLSL,
+      + GRIME_LIB_GLSL + familyHook('pars'), // texture realism v2 (0b helpers, then the families)
+    // after lights_physical_pars_fragment: texture realism v2's RE_Direct override (EON rough diffuse, chunks/brdf.ts)
+    'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL + WATER_SPOT_GLSL + brdfParsGlsl(),
     'fragment:clipping_planes_fragment': FRAG_MAIN_START_GLSL,
     'fragment:map_fragment': FRAG_MAP_GLSL,
     'fragment:roughnessmap_fragment': FRAG_ROUGHNESS_GLSL,
@@ -65,7 +68,7 @@ function injectionCode(): Record<string, string> {
     'fragment:emissivemap_fragment': FRAG_EMISSIVE_GLSL,
     'fragment:lights_physical_fragment': FRAG_MATERIAL_POST_GLSL,
     'fragment:lights_fragment_maps': FRAG_LIGHTS_GLSL,
-    'fragment:aomap_fragment': FRAG_AO_REFL_GLSL + familyHook('postLight'),
+    'fragment:aomap_fragment': FRAG_AO_REFL_GLSL + FRAG_DETAIL_SO_GLSL + familyHook('postLight'),
     'fragment:fog_fragment': FRAG_FOG_GLSL,
   };
 }
