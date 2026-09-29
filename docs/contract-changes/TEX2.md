@@ -130,8 +130,9 @@ v2 conventions").
   which also reaches its other users (PLENUM, METAL_RUST and the CMU_RAW placeholder).
 - **Samplers:** the decal variant references `uBrDetail` (FLOOR_PAINT stripes fetch D12, world-anchored, under
   BR_DETAIL_MAPS): 15 → 16 units at high / ultra. The shell, props and water variants are unchanged.
-- **SurfacePhys v2 fields set** (neutral until the 0b shading block reads them): `sigma` CONCRETE_FLOOR 0.25,
-  CONCRETE_WALL and CONCRETE_CEIL 0.35, TERRAZZO 0; `dirt` on CONCRETE_FLOOR, CONCRETE_WALL, CONCRETE_CEIL, TERRAZZO.
+- **SurfacePhys v2 fields set** (read by the 0b shading block): `sigma` CONCRETE_FLOOR 0.25 (scaled by 1 − the
+  traffic-lane burnish in the family matPost hook), CONCRETE_WALL and CONCRETE_CEIL 0.35, TERRAZZO 0; `dirt` on
+  CONCRETE_FLOOR, CONCRETE_WALL, CONCRETE_CEIL, TERRAZZO.
 - **Hook-local names:** the concrete family's pars declares `BRC_*` defines and `brc*` functions (`brcSlab`,
   `brcJoint`, `brcKerfTap`, `brcSpall`, `brcSlabCrack`); main-scope hook locals are `brc`-prefixed.
 

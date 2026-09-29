@@ -254,6 +254,7 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 }
 `,
   postSample: /* glsl */ `
+float brcLaneW = 0.0; // the slab's traffic-lane burnish 0..1 (grime branch), for the rough diffuse in matPost
 #ifdef BR_DECAL
 	if ( brL == BR_M_FLOOR_PAINT && brNWg.y > 0.5 ) {
 		// floor-paint stripes (mesh/decals.ts: u across the stripe from one edge, v along it, aux.x = width mm)
@@ -348,6 +349,7 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 			// traffic lanes (mask A): rubber and fines burnish the paste into darker, glossier lanes that expose the sand
 			// and carry micro-scratches; dust gathers along their edges
 			float brcW = smoothstep( 0.25, 0.75, brMask.a + 0.3 * ( g1.b - 0.5 ) );
+			brcLaneW = brcW;
 			brRoughMul *= mix( 1.0, 0.62, brcW );
 			brA *= mix( vec3( 1.0 ), 0.88 * vec3( 1.0, 0.97, 0.93 ), brcW );
 			float brcEdge = smoothstep( 0.1, 0.18, brcW ) * ( 1.0 - smoothstep( 0.28, 0.38, brcW ) );
@@ -452,7 +454,12 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 #endif
 `,
   normal: '',
-  matPost: '',
+  matPost: /* glsl */ `
+#ifndef BR_DECAL
+	// burnished lanes are polished paste, no longer the porous slab's rough (retroreflective) diffuse: sigma x (1 - lane)
+	if ( brL == BR_M_CONCRETE_FLOOR ) brDiffSigma *= 1.0 - brcLaneW;
+#endif
+`,
   postLight: '',
   preFog: '',
 };
