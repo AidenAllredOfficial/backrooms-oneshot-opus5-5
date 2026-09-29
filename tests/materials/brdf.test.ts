@@ -20,7 +20,7 @@ describe('EON rough diffuse (chunks/brdf.ts)', () => {
       for (const mu of [0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 1]) {
         for (const rho of [1, 0.3]) {
           const a = eonAlbedo(rho, s, mu, 96, 48);
-          if (!(Math.abs(a / rho - 1) <= 0.03)) expect(a / rho, `sigma ${s} mu ${mu} rho ${rho}`).toBeCloseTo(1, 1);
+          if (!(Math.abs(a / rho - 1) <= 0.03)) expect(Math.abs(a / rho - 1), `sigma ${s} mu ${mu} rho ${rho}`).toBeLessThanOrEqual(0.03);
         }
       }
     }
