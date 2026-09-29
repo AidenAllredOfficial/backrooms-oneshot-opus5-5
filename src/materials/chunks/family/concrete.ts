@@ -149,11 +149,13 @@ float brcSegD( vec2 p, vec2 a, vec2 b, out float h ) {
 	h = clamp( dot( pa, ba ) / dot( ba, ba ), 0.0, 1.0 );
 	return length( pa - ba * h );
 }
-// 10-bit fields of a hash (fewer PCG rounds per floor pixel)
+// a one-round lattice hash and its 10-bit fields (the per-floor-pixel hashes: fewer PCG rounds)
+uint brcHash( ivec2 c, uint salt ) { return brPcg( uint( c.x ) * 1597334677u ^ uint( c.y ) * 3812015801u ^ salt * 2654435761u ); }
 float brcBits( uint h, uint shift ) { return float( ( h >> shift ) & 1023u ) * ( 1.0 / 1023.0 ); }
-float brcSlabCrack( vec2 s2, ivec2 pid, float p, float pf, out float hal ) {
+// pid: the panel (unwrapped, for its position); pw: the same wrapped over NOISE_WRAP (for its hashes)
+float brcSlabCrack( vec2 s2, ivec2 pid, ivec2 pw, float p, float pf, out float hal ) {
 	hal = 0.0;
-	uint h = brHash2u( brWrap( pid, ivec2( BR_CONCRETE_JOINT_P ) ), 1741u );
+	uint h = brcHash( pw, 1741u );
 	if ( brU01( h ) >= p ) return 0.0;
 	uint h1 = brPcg( h ), h2 = brPcg( h1 );
 	int e0 = int( h1 & 3u );
@@ -206,13 +208,14 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 	if ( ! paint ) {
 		// pours (4 x 2 panels) and panels: tone, hue and sheen
 		ivec2 pour = ivec2( floor( vec2( pid ) / vec2( 4.0, 2.0 ) ) );
-		uint hp = brHash2u( brWrap( pour, ivec2( BR_CONCRETE_JOINT_P / 4, BR_CONCRETE_JOINT_P / 2 ) ), 1613u );
-		uint hq = brHash2u( brWrap( pid, ivec2( BR_CONCRETE_JOINT_P ) ), 1619u );
+		ivec2 pw = brWrap( pid, ivec2( BR_CONCRETE_JOINT_P ) );
+		uint hp = brcHash( brWrap( pour, ivec2( BR_CONCRETE_JOINT_P / 4, BR_CONCRETE_JOINT_P / 2 ) ), 1613u );
+		uint hq = brcHash( pw, 1619u );
 		float hue = brcBits( hp, 10u ) * 2.0 - 1.0;
 		a *= ( 1.0 + 0.06 * ( brcBits( hp, 0u ) * 2.0 - 1.0 ) + 0.03 * ( brcBits( hq, 0u ) * 2.0 - 1.0 ) ) * vec3( 1.0 + 0.012 * hue, 1.0, 1.0 - 0.012 * hue );
 		rm *= mix( 0.85, 1.15, brcBits( hp, 20u ) ) * mix( 0.95, 1.05, brcBits( hq, 10u ) );
 		float hal;
-		float cr = brcSlabCrack( s2, pid, 0.6, max( fw.x, fw.y ), hal );
+		float cr = brcSlabCrack( s2, pid, pw, 0.6, max( fw.x, fw.y ), hal );
 		if ( hal > 0.0 ) {
 			a *= ( 1.0 - 0.65 * cr ) * ( 1.0 - 0.07 * hal );
 			rm *= 1.0 + 0.12 * hal;
