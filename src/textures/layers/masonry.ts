@@ -21,9 +21,10 @@ export const CMU_BOND = [0, 1 / 3, 2 / 3, 1 / 3, 2 / 3] as const;
  *   block to block, with arrises wavy by +-0.6 mm and rounded over 2 mm; the mortar is tooled concave (a 7 mm radius
  *   jointer, 4.5 mm deep at the centre; head and bed grooves cut into each other) with squeezed burrs on ~12 % of
  *   the joint length in the outer 2 mm;
- * - faces: lippage +-1 mm, tilt +-0.3 deg, a 0.3 mm warp at 6 cm, an open-texture field per block (denser toward
- *   one bed face, the top as cast) that controls the >= 3 mm voids (irregular, 1.6-4.5 mm radius, 2.5-4 mm deep;
- *   painted: 55 % of that with rounded rims);
+ * - faces: lippage +-0.8 mm, tilt +-0.25 deg, a 0.3 mm warp at 6 cm, coarse aggregate crowns of 6-10 mm (the face
+ *   texture on medium / low, which bind no detail maps), an open-texture field per block (denser toward one bed face,
+ *   the top as cast) that controls the >= 3 mm voids (irregular, 1.6-4.5 mm radius, 2.5-4 mm deep; painted: 55 % of
+ *   that with rounded rims);
  * - chips on 10 % of the edges and 25 % of the corners (conchoidal scoops of <= 8 mm radius, 1.2-3 mm deep: the
  *   2.4 m frame repeats, so nothing larger); painted over (65 %) or fresh (block grey, a lifted paint edge);
  * - painted: roller lap bands (0.24 m, +-1.2 % value, +-0.04 roughness, lap lines on 30 % of the band edges), the
@@ -108,6 +109,11 @@ void gen(vec2 uv, inout Surf s) {
   float open = sat(0.35 + 0.5 * fbm(uv, PM(8.0), 2, 62) + 0.4 * (r.z - 0.5) + 0.3 * bSgn * lp.y / 0.1);
   vec2 tilt = (r.xy - 0.5) * 2.0 * 0.0044;
   float face = rest + (r.w - 0.5) * 1.6 * MM + dot(lp - fc, tilt) / CMU_HS + 0.3 * MM * fbm(uv, PM(16.0), 2, 63);
+  // coarse aggregate the texels resolve (6-10 mm crowns and pits, rougher in open blocks): the whole face texture
+  // where no detail map is bound, the 'open' modulation under it where one is
+  Cell ag = worley(uv, PM(120.0), 0.9, 69);
+  float agH = (0.4 + 0.6 * hashf(ag.id, 70)) * (1.0 - smoothstep(0.1, 0.55, ag.f1));
+  face += MM * ((0.4 + 0.3 * open) * agH + 0.25 * fbm(uv, PM(150.0), 2, 71));
   face -= 0.5 * MM * (1.0 - smoothstep(0.0, 0.002, e)) * (1.0 - smoothstep(0.0, 0.002, e));
   // ---- chips: one candidate per edge (10 %) and per corner (25 %), <= 8 mm, conchoidal
   float chip = 0.0, chipFresh = 0.0;
@@ -177,14 +183,16 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
 }
 `;
 
-// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). sigma: rough (EON) diffuse of the
+// porous face; dirt: the relief-aware dirt of package 0b (cavity^1.5, stronger near the floor): dust in the joints and
+// voids of the bottom courses
 export const MASONRY_RECIPES: RecipeTable = {
   [Mat.CMU_PAINTED]: {
     glsl: cmuBlock(true), normalStrength: 1.0, heightScale: CMU_HS, trim: [1.007, 1.007, 1.008], aux: 'detailMask',
-    phys: phys(0.3, { pomTop: 0.86, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.3 }),
+    phys: phys(0.3, { pomTop: 0.9, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.3, dirt: [0.62, 0.57, 0.5, 2.5] }),
   },
   [Mat.CMU_RAW]: {
     glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.96, 0.965, 0.98], aux: 'detailMask',
-    phys: phys(0.6, { pomTop: 0.86, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.45 }),
+    phys: phys(0.6, { pomTop: 0.9, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.45, dirt: [0.7, 0.66, 0.6, 2.0] }),
   },
 };
