@@ -119,9 +119,10 @@ float brWlEdgeDist( float pfS, vec2 dp, vec2 sx, vec2 sy, float ragM, float T, o
 	return ( pfS - T ) / max( gl, 0.05 ) + ragM;
 }
 // the shared wall stain block: fronts, halo, mould, efflorescence and runnels on the albedo a and the roughness
-// multiplier; fine: the texture part of the fine field, w: the front footprint and gs the smooth field's metric
-// gradient (1/m) from the caller, fp the metric pixel footprint, yLoc the storey-relative height
-void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2, float fine, float w, float gs, vec2 s2, float fp, float yLoc ) {
+// multiplier; fine: the texture part of the fine field, w: the front footprint and gm the smooth field's metric
+// gradient (1/m, along and up the wall) from the caller, fp the metric pixel footprint, yLoc the storey-relative height
+void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2, float fine, float w, vec2 gm, vec2 s2, float fp, float yLoc ) {
+	float gs = length( gm );
 	// the fine field's world octaves, faded out as they shrink below ~2 pixels (the texture terms are mip-filtered)
 	float n12 = ( brWlNoise( s2, 0.012, 811u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, fp / 0.012 ) );
 	float n40 = ( brWlNoise( s2, 0.04, 823u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, fp / 0.04 ) );
@@ -142,10 +143,11 @@ void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2,
 	// mould specks inside the innermost front where the wall stays damp
 	float mould = smoothstep( 0.62, 0.85, g1.g ) * smoothstep( L1, L2, sp ) * clamp( 0.4 + mask.b * 1.5, 0.0, 1.0 );
 	a *= mix( vec3( 1.0 ), vec3( 0.3, 0.33, 0.25 ), 0.5 * mould );
-	// efflorescence: salts crystallise just above a rising-damp front (5-20 mm on the dry side), in patches
+	// efflorescence: salts crystallise just above a rising-damp front (5-20 mm on the dry side), in patches: only where
+	// the wet side is below (the field grows downward), not around the tip of a seepage tongue that reaches low
 	if ( yLoc < 1.3 ) {
 		float eb = smoothstep( BR_WL_L0 - 0.1, BR_WL_L0 - 0.06, sp ) * ( 1.0 - smoothstep( BR_WL_L0 - 0.025, BR_WL_L0 - 0.005, sp ) );
-		float ef = eb * smoothstep( 0.35, 0.65, g1.r + 0.4 * n40 ) * ( 1.0 - zone );
+		float ef = eb * smoothstep( 0.35, 0.65, g1.r + 0.4 * n40 ) * ( 1.0 - zone ) * clamp( - 2.0 * gm.y / max( gs, 1e-6 ), 0.0, 1.0 );
 		a = mix( a, BR_WL_SALT, 0.4 * ef );
 		roughMul *= 1.0 + 0.15 * ef;
 	}
@@ -194,7 +196,7 @@ const WALL_STAIN_CALL = /* glsl */ `
 			float wlS0 = min( brMask.r, BR_WL_STAIN_MAX ) + 0.12 * ( g2.r - 0.5 );
 			vec2 wlDs = vec2( dFdx( wlS0 ), dFdy( wlS0 ) );
 			float wlW = ${f(STAIN_FRONT.W_PX)} * ( abs( wlDs.x ) + abs( wlDs.y ) );
-			if ( brMask.r > 0.02 ) brWlStain( brA, brRoughMul, brMask, g1, g2, wlFine, wlW, length( brWlGrad2( wlDs, wlSx, wlSy ) ), brS2, wlFp, vBrLocal.y );
+			if ( brMask.r > 0.02 ) brWlStain( brA, brRoughMul, brMask, g1, g2, wlFine, wlW, brWlGrad2( wlDs, wlSx, wlSy ), brS2, wlFp, vBrLocal.y );
 		}
 `;
 
