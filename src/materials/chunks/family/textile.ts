@@ -27,6 +27,7 @@
 import { NOISE_WRAP } from '../../../core/constants.ts';
 import { Mat } from '../../../core/ids.ts';
 import { LAYER_DEFS } from '../../../core/materials.ts';
+import { LAYER_RECIPES_FULL } from '../../../textures/registry.ts';
 import { f } from '../params.ts';
 import type { FamilyHooks } from './index.ts';
 
@@ -43,7 +44,7 @@ export const TEXTILE = {
   HIDE: 0.35,
   /** Nap shading, s = v_t . lean: diffuse x clamp(1 - NAP_DIFF s sin(theta_v), 0.6, 1.4), sheen x clamp(1 - NAP_SHEEN s,
    * 0.2, 1.8). */
-  NAP_DIFF: 0.25,
+  NAP_DIFF: 0.28,
   NAP_SHEEN: 0.6,
   /** World nap on the Level 0 floor: magnitude (lean units) plus this x wear, the share of broadloom widths laid
    * reversed, the wobble (degrees) and its noise cell (m, divides NOISE_WRAP). */
@@ -52,10 +53,12 @@ export const TEXTILE = {
   NAP_REV: 0.2,
   NAP_WOBBLE: 25,
   NAP_CELL: 0.6,
-  /** Pile-reversal patches (2.4 m feature lattice): probability per cell, radius and edge width (m). */
-  REV_P: 0.15,
-  REV_R: [0.3, 1.2] as const,
-  REV_EDGE: [0.06, 0.1] as const,
+  /** Pile-reversal patches: a value noise of REV_CELL metres (divides NOISE_WRAP) plus the outline wobble, above
+   * REV_T +- REV_W: ~15 % of the floor in 0.3-1.2 m blotches with a crisp edge (a disc loop over the 2.4 m feature
+   * lattice cost ~9 hashes per pixel). */
+  REV_CELL: 0.96,
+  REV_T: 0.69,
+  REV_W: 0.03,
   /** Office loop rows, k = (v_t . row)^2: diffuse x (1 - ROW_DIFF / 2 + ROW_DIFF k (1 - mu_v)), sheen x (ROW_SHEEN0 +
    * ROW_SHEEN1 k). */
   ROW_DIFF: 0.08,
@@ -103,6 +106,12 @@ const T = TEXTILE;
 const v2 = (a: readonly number[]): string => `vec2( ${f(a[0])}, ${f(a[1])} )`;
 const v3 = (a: readonly number[]): string => `vec3( ${f(a[0])}, ${f(a[1])}, ${f(a[2])} )`;
 
+/** The pile layers (SurfacePhys.pile.x > 0) as GLSL: a gate on the layer id and its [kp, kv], compiled to compares and
+ * selects instead of the dynamically indexed const array BR_L_PILE (the same rows). */
+const PILE_ROWS = LAYER_RECIPES_FULL.filter((r) => r.phys.pile[0] > 0);
+const PILE_ON = PILE_ROWS.map((r) => `( l ) == ${r.layer}`).join(' || ');
+const PILE_OF = PILE_ROWS.map((r) => `l == ${r.layer} ? ${v2(r.phys.pile)} : `).join('') + 'vec2( 0.0 )';
+
 export const TEXTILE_HOOKS: FamilyHooks = {
   pars: /* glsl */ `
 // ---- textiles (lane A, chunks/family/textile.ts)
@@ -124,9 +133,10 @@ export const TEXTILE_HOOKS: FamilyHooks = {
 #define BR_TX_FRONT_P ${Math.round(NOISE_WRAP / T.FRONT_CELL)}
 #define BR_TX_OFFICE_TILE ${f(LAYER_DEFS[Mat.CARPET_OFFICE].tileSize)}
 #define BR_TX_OFFICE_P ${Math.round(NOISE_WRAP / LAYER_DEFS[Mat.CARPET_OFFICE].tileSize)}
-#define BR_TX_REV_P ${f(T.REV_P)}
-#define BR_TX_REV_R ${v2(T.REV_R)}
-#define BR_TX_REV_EDGE ${v2(T.REV_EDGE)}
+#define BR_TX_REV_CELL ${f(T.REV_CELL)}
+#define BR_TX_REV_PER ${Math.round(NOISE_WRAP / T.REV_CELL)}
+#define BR_TX_REV_T ${f(T.REV_T)}
+#define BR_TX_REV_W ${f(T.REV_W)}
 #define BR_TX_ROW_DIFF ${f(T.ROW_DIFF)}
 #define BR_TX_ROW_SHEEN0 ${f(T.ROW_SHEEN0)}
 #define BR_TX_ROW_SHEEN1 ${f(T.ROW_SHEEN1)}
@@ -147,6 +157,9 @@ export const TEXTILE_HOOKS: FamilyHooks = {
 #define BR_TX_BLOT_RIM ${f(T.BLOT_RIM)}
 #define BR_TX_BLOT_COL ${v3(T.BLOT_COL)}
 #define BR_TX_BLOT_RIM_COL ${v3(T.BLOT_RIM_COL)}
+// the pile layers (BR_L_PILE rows) as compares: a dynamically indexed const array costs a local copy per use
+#define BR_TX_PILE_ON( l ) ( ${PILE_ON} )
+vec2 brTxPile( int l ) { return ${PILE_OF}; }
 // hashed discs on the 2.4 m feature lattice (pile-reversal patches, spills): 1 inside a disc of radius rr.x..rr.y whose
 // outline wobbles with wob (0..1, a smooth world noise), fading over an edge ee.x..ee.y metres wide; rim = a band rimW
 // wide just inside the outline (a stain's dried edge). Fixed widths in metres (no derivatives in the loop)
@@ -172,16 +185,14 @@ float brTxDiscs( vec2 s2, uint salt, float prob, vec2 rr, vec2 ee, float rimW, f
 }
 `,
   postSample: /* glsl */ `
-// textile state at main scope (lane A): the world nap (world xz, lean units; the carpet grime branch sets it), the
-// pile lean seen from the camera (> 0: leaning toward it), the geometric n.v and the office rows' alignment with the
-// view (matPost sets those three)
+// textile state at main scope (lane A), both read by matPost (every pixel carries them up to there, so they stay few;
+// nothing of the textile shading is live across the lighting): the world nap (world xz, lean units; the carpet grime
+// branch sets it) and, on pile layers, the detail map's multiplier applied as visibility instead of albedo
 vec2 brTxNapW = vec2( 0.0 );
-float brTxS = 0.0, brTxSd = 0.0, brTxMu = 1.0, brTxRow = 0.0;
-float brTxAm = 1.0; // pile layers: the detail map's multiplier, applied as visibility (postLight) instead of albedo
+float brTxAm = 1.0;
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 // office carpet tiles: the loop-pile detail turns with its tile (brRotM about the tile centre; the 0.3 m repeat
-// divides the 0.6 m tile, so it stays seamless inside it). postDetail restores the uv and turns the slope back
-vec2 brTxDetUv = brDetUv;
+// divides the 0.6 m tile, so it stays seamless inside it). postDetail turns the uv and the slope back
 if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 	vec2 brTxC = brRotC * floor( brLB.x / BR_DETAIL_REPEAT + 0.5 );
 	brDetUv = brTxC + brRotM * ( brDetUv - brTxC );
@@ -191,16 +202,22 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 #endif
 `,
   postDetail: /* glsl */ `
-	if ( BR_L_PILE[ brL ].x > 0.0 ) {
+	if ( BR_TX_PILE_ON( brL ) ) {
 		// pile: the detail's multiplier is mostly the cracks between tufts, i.e. pile visibility at the sub-texel scale.
-		// It shows looking down and hides behind the tips at grazing (as Dv), and scales the diffuse light (postLight)
+		// It shows looking down and hides behind the tips at grazing (as Dv), and scales the diffuse light (matPost)
 		// rather than the albedo
 		vec3 brTxVd = normalize( ( vec4( vViewPosition, 0.0 ) * viewMatrix ).xyz );
-		brTxAm = 1.0 + ( brAm - 1.0 ) * brDetL.y * ( BR_TX_HIDE + ( 1.0 - BR_TX_HIDE ) * pow( clamp( dot( brNWg, brTxVd ), 0.0, 1.0 ), BR_L_PILE[ brL ].y ) );
+		brTxAm = 1.0 + ( brAm - 1.0 ) * brDetL.y * ( BR_TX_HIDE + ( 1.0 - BR_TX_HIDE ) * pow( clamp( dot( brNWg, brTxVd ), 0.0, 1.0 ), brTxPile( brL ).y ) );
 		brAm = 1.0;
 		if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
-			brDetSl = transpose( brRotM ) * brDetSl; // the slope of the turned detail, in the continuous detail frame
-			brDetUv = brTxDetUv;
+			// back to the continuous detail frame (M orthonormal): the slope of the turned detail, and the uv the normal
+			// pass differentiates
+			mat2 brTxMt = transpose( brRotM );
+			vec2 brTxC = brRotC * floor( brLB.x / BR_DETAIL_REPEAT + 0.5 );
+			brDetSl = brTxMt * brDetSl;
+			brDetUv = brTxC + brTxMt * ( brDetUv - brTxC );
+			brDetDx = brTxMt * brDetDx;
+			brDetDy = brTxMt * brDetDy;
 		}
 	}
 `,
@@ -220,7 +237,8 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 		// contour, not a wide speckled band
 		float brTxG = length( vec2( dFdx( wetRaw ), dFdy( wetRaw ) ) ) / max( max( length( dFdx( brS2 ) ), length( dFdy( brS2 ) ) ), 1e-5 );
 		float brTxFwW = fwidth( wetRaw );
-		float brTxWr = wetRaw + ( brVNoise( brS2 / BR_TX_FRONT_CELL, ivec2( BR_TX_FRONT_P ), 367u ) * 2.0 - 1.0 ) * brTxG * BR_TX_FRONT_AMP;
+		float brTxWr = wetRaw; // the front raggedness, only near the front (no derivatives inside)
+		if ( abs( wetRaw - BR_TX_DAMP_AT ) < 0.15 ) brTxWr += ( brVNoise( brS2 / BR_TX_FRONT_CELL, ivec2( BR_TX_FRONT_P ), 367u ) * 2.0 - 1.0 ) * brTxG * BR_TX_FRONT_AMP;
 		if ( brSubDepth <= 0.0 ) {
 			float brTxW = max( brTxG * BR_TX_FRONT_W, brTxFwW );
 			wet = smoothstep( BR_TX_DAMP_AT - brTxW, BR_TX_DAMP_AT + brTxW, brTxWr ) * mix( BR_TX_DAMP_EDGE, 1.0, smoothstep( BR_TX_DAMP_AT, BR_TX_DAMP_IN, wetRaw ) );
@@ -250,8 +268,10 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 				// flatter (a stronger nap)
 				float brTxNs = brU01( brPcg( hl ^ 0x2545f491u ) ) < BR_TX_NAP_REV ? - 1.0 : 1.0;
 				float brTxWb = ( brVNoise( brS2 / BR_TX_NAP_CELL, ivec2( BR_TX_NAP_P ), 351u ) * 2.0 - 1.0 ) * BR_TX_NAP_WOBBLE;
-				float brTxRr;
-				float brTxRev = brTxDiscs( brS2, 353u, BR_TX_REV_P, BR_TX_REV_R, BR_TX_REV_EDGE, 0.0, brTxWob, brTxRr );
+				// pile-reversal patches: where a blotchy field (a 0.96 m value noise plus the outline wobble) crosses its
+				// threshold: ~15 % of the floor in 0.3-1.2 m blotches with a crisp edge
+				float brTxRn = 0.75 * brVNoise( brS2 / BR_TX_REV_CELL, ivec2( BR_TX_REV_PER ), 353u ) + 0.25 * brTxWob;
+				float brTxRev = smoothstep( BR_TX_REV_T - BR_TX_REV_W, BR_TX_REV_T + BR_TX_REV_W, brTxRn );
 				brTxNapW = vec2( sin( brTxWb ), cos( brTxWb ) ) * ( brTxNs * ( 1.0 - 2.0 * brTxRev ) * ( BR_TX_NAP_AMP + BR_TX_NAP_WEAR * wear ) );
 			}
 			if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 ) {
@@ -301,26 +321,49 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
   rough: '',
   normal: '',
   matPost: /* glsl */ `
-// textile shading state (lane A): the geometric n.v, the pile lean seen from the camera (the texel lean in the uv
-// frame through the cotangent frame, plus the world nap) and the office rows' alignment with the view
-if ( BR_L_PILE[ brL ].x > 0.0 ) {
+// textile shading (lane A): the pile visibility Dv (TS twin pileVisibility), the nap (napDiffuse) or the office rows,
+// the detail's visibility and the Level 0 trap scale the diffuse albedo the lights see (material.diffuseContribution:
+// the punctual lights, the baked light and the ambient alike), so nothing of the textile shading stays live across the
+// lighting; view=albedo keeps the fibre colour. postLight undoes the generic cavity multiply on the ambient.
+// brTxS: the pile lean seen from the camera (> 0: leaning toward it; the texel lean in the uv frame through the
+// cotangent frame, plus the world nap); brTxRow: the office rows' alignment with the view
+float brTxS = 0.0, brTxRow = 0.0;
+#ifndef BR_DECAL
+if ( BR_TX_PILE_ON( brL ) ) {
+	vec2 brTxKp = brTxPile( brL );
 	vec3 brTxV = normalize( vViewPosition );
-	brTxMu = clamp( dot( brNg, brTxV ), 0.0, 1.0 );
+	float brTxMu = clamp( dot( brNg, brTxV ), 0.0, 1.0 );
 	vec3 brTxVt = brTxV - brNg * dot( brNg, brTxV );
-	float brTxVl = length( brTxVt );
+	float brTxVl = length( brTxVt ); // sin(theta_v)
 	brTxVt /= max( brTxVl, 1e-4 );
-	float brTxK = smoothstep( 0.0, 0.2, brTxVl ); // looking straight down the direction to the camera is undefined
+	float brTxF = smoothstep( 0.0, 0.2, brTxVl ); // looking straight down the direction to the camera is undefined
 	vec3 brTxL = brTbn[ 0 ] * ( brLean.x * inversesqrt( max( dot( brTbn[ 0 ], brTbn[ 0 ] ), 1e-12 ) ) )
 		+ brTbn[ 1 ] * ( brLean.y * inversesqrt( max( dot( brTbn[ 1 ], brTbn[ 1 ] ), 1e-12 ) ) );
+	float brTxNd;
 	if ( brL == BR_TX_M_OFFICE ) {
-		// loop rows have no nap: only the angle between the rows and the view matters
-		brTxRow = brTxK * pow2( dot( brTxVt, brTxL ) ) / max( dot( brTxL, brTxL ), 1e-4 );
+		// loop rows have no nap: only the angle between the rows and the view matters, along or across
+		brTxRow = brTxF * pow2( dot( brTxVt, brTxL ) ) / max( dot( brTxL, brTxL ), 1e-4 );
+		brTxNd = 1.0 - 0.5 * BR_TX_ROW_DIFF + BR_TX_ROW_DIFF * brTxRow * ( 1.0 - brTxMu );
 	} else {
-		brTxS = brTxK * dot( brTxVt, brTxL + ( viewMatrix * vec4( brTxNapW.x, 0.0, brTxNapW.y, 0.0 ) ).xyz );
-		// the share of fibre ends against fibre sides in view changes with the lean times sin(theta_v)
-		brTxSd = brTxS * brTxVl;
+		// nap: leaning toward the camera the pile shows fibre ends (darker); their share against the fibre sides in
+		// view changes with the lean times sin(theta_v)
+		brTxS = brTxF * dot( brTxVt, brTxL + ( viewMatrix * vec4( brTxNapW.x, 0.0, brTxNapW.y, 0.0 ) ).xyz );
+		brTxNd = clamp( 1.0 - BR_TX_NAP_DIFF * brTxS * brTxVl, 0.6, 1.4 );
 	}
+	// wet pile clumps into bundles: its valleys open and darken
+	float brTxVv = pow( clamp( brOrmh.r, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs );
+	float brTxDv = max( 1.0 - brTxKp.x * ( 1.0 - brTxVv ) * pow( brTxMu, brTxKp.y ), 0.0 );
+	vec3 brTxK = vec3( brTxDv * brTxNd * brTxAm );
+	if ( brL == BR_M_CARPET_L0 ) {
+		// the Level 0 pile trap: what escapes the pile has crossed more dyed fibre (darker and more saturated than one
+		// fibre); the layer table albedo stays the fibre colour the bake bounces with
+		vec3 brTxA = max( diffuseColor.rgb, vec3( 1e-4 ) );
+		brTxK *= BR_TX_TRAP * pow( brTxA / max3( brTxA ), vec3( BR_TX_TRAP_SAT ) );
+	}
+	material.diffuseContribution *= brTxK;
+	if ( uDebugView == BR_DV_TEXTILE ) BR_DEBUG_EXIT( vec3( brTxDv, 0.5 * brTxNd, 0.5 + 0.5 * brTxS ) )
 }
+#endif
 // textile sheen (Charlie lobe): fibre surfaces reflect nearly white, so the colour is the sqrt albedo pulled toward
 // grey; the nap and the office rows modulate it, damp fibres keep a grazing gloss, a film and standing water hide it
 #ifdef USE_SHEEN
@@ -335,25 +378,8 @@ if ( BR_L_PILE[ brL ].x > 0.0 ) {
 `,
   postLight: /* glsl */ `
 #ifndef BR_DECAL
-if ( BR_L_PILE[ brL ].x > 0.0 ) {
-	// pile visibility (TS twin pileVisibility): wet pile clumps, its valleys open and darken
-	vec2 brTxKp = BR_L_PILE[ brL ];
-	float brTxV = pow( clamp( brOrmh.r, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs );
-	float brTxDv = max( 1.0 - brTxKp.x * ( 1.0 - brTxV ) * pow( brTxMu, brTxKp.y ), 0.0 );
-	// nap (TS twin napDiffuse): leaning toward the camera the pile shows fibre ends, darker; office rows: along or across
-	float brTxNd = clamp( 1.0 - BR_TX_NAP_DIFF * brTxSd, 0.6, 1.4 );
-	if ( brL == BR_TX_M_OFFICE ) brTxNd *= 1.0 - 0.5 * BR_TX_ROW_DIFF + BR_TX_ROW_DIFF * brTxRow * ( 1.0 - brTxMu );
-	vec3 brTxK = vec3( brTxDv * brTxNd * brTxAm );
-	if ( brL == BR_M_CARPET_L0 ) {
-		// the Level 0 pile trap: what escapes the pile has crossed more dyed fibre (darker and more saturated than one
-		// fibre); the layer table albedo stays the fibre colour the bake bounces with
-		vec3 brTxA = max( diffuseColor.rgb, vec3( 1e-4 ) );
-		brTxK *= BR_TX_TRAP * pow( brTxA / max3( brTxA ), vec3( BR_TX_TRAP_SAT ) );
-	}
-	reflectedLight.directDiffuse *= brTxK;
-	reflectedLight.indirectDiffuse *= brTxK / max( brCav, 1e-3 ); // Dv replaces the generic cavity multiply
-	if ( uDebugView == BR_DV_TEXTILE ) BR_DEBUG_EXIT( vec3( brTxDv, 0.5 * brTxNd, 0.5 + 0.5 * brTxS ) )
-}
+// pile layers: Dv (in the diffuse albedo, matPost) stands for the generic texture-cavity multiply on the ambient
+if ( BR_TX_PILE_ON( brL ) ) reflectedLight.indirectDiffuse /= max( brCav, 1e-3 );
 #endif
 `,
   preFog: '',

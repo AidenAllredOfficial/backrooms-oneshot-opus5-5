@@ -4214,12 +4214,13 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
   a5c03e1 at high and medium.
 - **Detail on pile layers:** the detail map's multiplier (tuft cracks, ply splits) is applied as visibility with the
   same view hiding, 1 + (am − 1)(0.35 + 0.65 μv^kv), not as albedo (view=albedo keeps the fibre colour).
-- **Nap** (cut pile): s = v_t · lean, v_t the unit tangent direction to the camera; the diffuse × clamp(1 − 0.25 s
+- **Nap** (cut pile): s = v_t · lean, v_t the unit tangent direction to the camera; the diffuse × clamp(1 − 0.28 s
   sin θv, 0.6, 1.4) (fibre ends in view when the pile leans toward the camera: darker) and the sheen × clamp(1 − 0.6 s,
   0.2, 1.8). The lean is the texel clump lean (× 0.6) plus, on Level 0 floors, a world nap along each 3.84 m broadloom
   roll (20 % of the widths laid reversed, ±25° wobble over 0.6 m, magnitude 0.5 + 0.5 × wear), flipped inside
-  pile-reversal patches (15 % of 2.4 m cells, 0.3-1.2 m, blotchy outline, 6-10 cm edge). Yaw 0 against yaw 180 at pitch
-  −25° from one eye: the floor changes by 12 % relative to the base.
+  pile-reversal patches (~15 % of the floor where a 0.96 m value noise plus a 0.3 / 0.1 m wobble crosses a threshold:
+  0.3-1.2 m blotches with a crisp edge, one noise instead of a disc loop). Yaw 0 against yaw 180 at pitch −25° from one
+  eye: the floor changes by 11 % relative to the base.
 - **Office tiles:** the loop-pile detail turns with its tile (rotated about the tile centre by the tile's M, its slope
   turned back); k = (v_t · row)² shades the diffuse × (0.96 + 0.08 k (1 − μv)) and the sheen × (0.6 + 0.8 k); a world
   dye lot per 0.6 m tile (±3 %, one in 12 a replacement from another lot at ±8 %), one in 20 with a lifted edge, and the

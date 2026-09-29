@@ -92,14 +92,16 @@ describe('textile GLSL', () => {
       ['HIDE', TEXTILE.HIDE], ['WET_V', TEXTILE.WET_V]] as const) {
       expect(pars, name).toContain(`#define BR_TX_${name} ${f(v)}\n`);
     }
-    expect(TEXTILE_HOOKS.postLight).toContain('1.0 - brTxKp.x * ( 1.0 - brTxV ) * pow( brTxMu, brTxKp.y )');
-    expect(TEXTILE_HOOKS.postLight).toContain('clamp( 1.0 - BR_TX_NAP_DIFF * brTxSd, 0.6, 1.4 )');
+    expect(TEXTILE_HOOKS.matPost).toContain('1.0 - brTxKp.x * ( 1.0 - brTxVv ) * pow( brTxMu, brTxKp.y )');
+    expect(TEXTILE_HOOKS.matPost).toContain('clamp( 1.0 - BR_TX_NAP_DIFF * brTxS * brTxVl, 0.6, 1.4 )');
   });
 
-  it('the Level 0 pile trap lives on the diffuse (postLight), not on the whole radiance (preFog)', () => {
+  it('the Level 0 pile trap lives on the diffuse albedo the lights see, not on the whole radiance (preFog)', () => {
     expect(TEXTILE_HOOKS.preFog).toBe('');
-    expect(TEXTILE_HOOKS.postLight).toContain('BR_TX_TRAP');
-    expect(TEXTILE_HOOKS.postLight).toContain('reflectedLight.directDiffuse *= brTxK');
+    expect(TEXTILE_HOOKS.matPost).toContain('BR_TX_TRAP');
+    expect(TEXTILE_HOOKS.matPost).toContain('material.diffuseContribution *= brTxK');
+    // the generic cavity multiply on the ambient is undone, nothing else happens after the lighting
+    expect(TEXTILE_HOOKS.postLight).toContain('reflectedLight.indirectDiffuse /= max( brCav, 1e-3 )');
   });
 
   it('every world lattice period is a whole number of cells per NOISE_WRAP', () => {
