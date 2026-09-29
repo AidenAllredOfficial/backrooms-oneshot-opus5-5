@@ -542,14 +542,15 @@ function fanOpenings(g: BakeJob['g'], mc: MaskCache, c: number): Int32Array {
 /** Rack aisles (hard floors), near occluders at least AISLE_MIN_H tall (cars stay below): occluder boxes reaching
  * between 1 and 2.5 m above the floor (rack decks, uprights, stacked goods) and at least AISLE_MIN_LEN long along the
  * aisle count as shelving; an aisle is a gap of AISLE_MIN_W to AISLE_MAX_W between two of them. */
-const AISLE_MIN_H = 1.8, AISLE_MIN_LEN = 0.9, AISLE_MIN_W = 1.0, AISLE_MAX_W = 4.2;
+const AISLE_MIN_H = 1.8, AISLE_MIN_LEN = 0.9, AISLE_MIN_W = 1.0, AISLE_MAX_W = 4.2, AISLE_FADE = 2.0;
 /** Per bake job: per halo cell, the shelving box rectangles (x0 z0 x1 z1, halo units) within 3 cells. */
 const aisleRects = new WeakMap<BakeJob, (Float64Array | null)[]>();
 /**
  * Wheel-track wear (0..1) of a floor texel (x, z halo units) in a rack aisle: the gap to the nearest tall box on
- * each side along x and along z (boxes whose extent across covers the texel); a gap of at most AISLE_MAX_W is an
- * aisle, worn in two tracks 0.45 m either side of its centre (one centre track in aisles under 1.6 m) and fading out
- * next to the racks. 0 under a box or outside aisles.
+ * each side along x and along z (boxes whose extent along the aisle covers the texel, or ends within AISLE_FADE of
+ * it: past the end of a rack row the tracks fade out); a gap of at most AISLE_MAX_W is an aisle, worn in two tracks
+ * 0.45 m either side of its centre (one centre track in aisles under 1.6 m) and fading out next to the racks. 0 under
+ * a box or outside aisles.
  */
 function aisleTracks(job: BakeJob, x: number, z: number, floorY: number, c: number): number {
   const g = job.g;
@@ -576,21 +577,35 @@ function aisleTracks(job: BakeJob, x: number, z: number, floorY: number, c: numb
     rl = Float64Array.from(out);
     per[c] = rl;
   }
-  const m = 0.1 / CELL, len = AISLE_MIN_LEN / CELL;
-  let xl = Infinity, xr = Infinity, zl = Infinity, zr = Infinity;
+  const m = 0.1 / CELL, fade = AISLE_FADE / CELL, len = AISLE_MIN_LEN / CELL;
+  // per side (x left / right, z left / right): the gap to the chosen box and its weight, 1 beside the box and fading
+  // over AISLE_FADE past its end along the aisle (the traffic runs on where a rack row stops: the tracks fade out
+  // instead of ending in a straight line at the rack end); the highest weight wins, then the nearest box. A box
+  // straight ahead along the aisle (overlapping the texel across it) blocks that aisle direction by its weight: the
+  // texel lies beside a rack row's end or its side, not between two rows
+  const d = [Infinity, Infinity, Infinity, Infinity], k = [0, 0, 0, 0], blk = [0, 0];
+  const pick = (i: number, gap: number, wt: number): void => {
+    if (wt > k[i] || (wt === k[i] && gap < d[i])) { d[i] = gap; k[i] = wt; }
+  };
   for (let q = 0; q < rl.length; q += 4) {
     const x0 = rl[q], z0 = rl[q + 1], x1 = rl[q + 2], z1 = rl[q + 3];
     if (x >= x0 && x <= x1 && z >= z0 && z <= z1) return 0;
-    if (z >= z0 - m && z <= z1 + m && z1 - z0 >= len) { if (x1 <= x) xl = Math.min(xl, x - x1); else if (x0 >= x) xr = Math.min(xr, x0 - x); }
-    if (x >= x0 - m && x <= x1 + m && x1 - x0 >= len) { if (z1 <= z) zl = Math.min(zl, z - z1); else if (z0 >= z) zr = Math.min(zr, z0 - z); }
+    if (z1 - z0 >= len) {
+      const wt = 1 - sstep(m, m + fade, Math.max(z0 - z, z - z1));
+      if (wt > 0) { if (x1 <= x) pick(0, x - x1, wt); else if (x0 >= x) pick(1, x0 - x, wt); else blk[0] = Math.max(blk[0], wt); }
+    }
+    if (x1 - x0 >= len) {
+      const wt = 1 - sstep(m, m + fade, Math.max(x0 - x, x - x1));
+      if (wt > 0) { if (z1 <= z) pick(2, z - z1, wt); else if (z0 >= z) pick(3, z0 - z, wt); else blk[1] = Math.max(blk[1], wt); }
+    }
   }
   let w = 0;
-  for (const [dl, dr] of [[xl * CELL, xr * CELL], [zl * CELL, zr * CELL]]) {
-    const wd = dl + dr;
+  for (let a = 0; a < 4; a += 2) {
+    const dl = d[a] * CELL, dr = d[a + 1] * CELL, wd = dl + dr;
     if (!(wd <= AISLE_MAX_W) || wd < AISLE_MIN_W) continue; // (the flue between back-to-back racks is no aisle)
     const off = Math.abs(dl - dr) / 2; // metres from the aisle centre
     const track = wd < 1.6 ? Math.exp(-((off / 0.35) ** 2)) : Math.exp(-(((off - 0.45) / 0.22) ** 2));
-    w = Math.max(w, track * sstep(0.15, 0.5, Math.min(dl, dr)));
+    w = Math.max(w, Math.min(k[a], k[a + 1]) * (1 - blk[a / 2]) * track * sstep(0.15, 0.5, Math.min(dl, dr)));
   }
   return w;
 }

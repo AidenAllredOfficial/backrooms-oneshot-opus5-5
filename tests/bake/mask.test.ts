@@ -99,6 +99,13 @@ describe('surface mask: hard-floor traffic wear (texture realism v2 lane B)', ()
     expect(track).toBeGreaterThan(0.4);
     expect(wearAt(l, 9.1, 13.5)).toBeLessThan(0.6 * track); // between the tracks
     expect(wearAt(l, 9.1, 12.62)).toBeLessThan(0.5 * track); // next to the rack face
+    // past the end of the rack rows (x = 16.8 m) the tracks fade out over ~2 m instead of stopping at the rack end;
+    // beside a rack row (in line with its decks) no cross-aisle tracks appear
+    const past = [17.1, 17.7, 18.3, 19.2].map((x) => Math.max(wearAt(l, x, 13.05), wearAt(l, x, 13.95)));
+    expect(past[0]).toBeGreaterThan(0.3 * track);
+    for (let i = 1; i < past.length; i++) expect(past[i]).toBeLessThanOrEqual(past[i - 1] + 1e-9);
+    expect(past[3]).toBe(0);
+    expect(wearAt(l, 9.1, 11.2)).toBeLessThan(0.02);
     // carpet keeps its own (corridor / threshold / lane) wear: no aisle tracks
     for (let c = 0; c < 1024; c++) l.floorMat[c] = Mat.CARPET_L0;
     expect(wearAt(l, 9.1, 13.05)).toBe(0);
