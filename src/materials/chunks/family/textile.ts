@@ -161,31 +161,30 @@ export const TEXTILE_HOOKS: FamilyHooks = {
 // the pile layers (BR_L_PILE rows) as compares: a dynamically indexed const array costs a local copy per use
 #define BR_TX_PILE_ON( l ) ( ${PILE_ON} )
 vec2 brTxPile( int l ) { return ${PILE_OF}; }
-// hashed discs on the 2.4 m feature lattice (spills): 1 inside a disc of radius rr.x..rr.y whose outline wobbles with
-// wob (0..1, a smooth world noise), fading over an edge ee.x..ee.y metres wide; rim = a band rimW wide just inside the
-// outline (a stain's dried edge). Both widen to the pixel footprint fp (metres) and the rim keeps its coverage there, so
-// a thin rim far away fades instead of breaking up into crawling dots (no derivatives in the loop: fp is the caller's)
+// the blotchy outline wobble of stains and reversal patches (0..1): two octaves, 0.3 m and 0.1 m
+float brTxWobble( vec2 s2 ) {
+	return 0.65 * brVNoise( s2 / 0.3, ivec2( BR_TX_OUTLINE_P ), 359u ) + 0.35 * brVNoise( s2 / 0.1, ivec2( BR_TX_OUTLINE_P2 ), 361u );
+}
+// spills on the 2.4 m feature lattice: at most one per cell (probability prob), kept inside it (its centre at least
+// 0.6 m from the cell edges, the disc reaches at most 0.52 m), so a pixel reads its own cell only (a 3 x 3 neighbourhood
+// cost 0.04-0.07 ms at high on a carpeted frame). 1 inside a disc of radius rr.x..rr.y whose outline wobbles with wob
+// (brTxWobble; < 0: evaluated here, only in a spill's cell), fading over an edge ee.x..ee.y metres wide; rim = a band
+// rimW wide just inside the outline (a stain's dried edge). Both widen to the pixel footprint fp (metres) and the rim
+// keeps its coverage there, so a thin rim far away fades instead of breaking up into crawling dots
 float brTxDiscs( vec2 s2, uint salt, float prob, vec2 rr, vec2 ee, float rimW, float wob, float fp, out float rim ) {
-	float rw = max( rimW, fp );
-	float rk = rimW / rw;
-	ivec2 qi = ivec2( floor( s2 / BR_FEATURE_CELL ) );
-	float acc = 0.0;
 	rim = 0.0;
-	for ( int y = - 1; y <= 1; y ++ ) {
-		for ( int x = - 1; x <= 1; x ++ ) {
-			ivec2 c = qi + ivec2( x, y );
-			uint h = brHash2u( brWrap( c, ivec2( BR_FEATURE_P ) ), salt );
-			if ( brU01( h ) > prob ) continue;
-			vec2 ctr = ( vec2( c ) + vec2( brU01( brPcg( h ) ), brU01( brPcg( h + 1u ) ) ) ) * BR_FEATURE_CELL;
-			float r = mix( rr.x, rr.y, brU01( brPcg( h + 2u ) ) );
-			float e = max( mix( ee.x, ee.y, brU01( brPcg( h + 3u ) ) ), fp );
-			vec2 dv = ( s2 - ctr ) * vec2( 1.0, mix( 0.75, 1.25, brU01( brPcg( h + 4u ) ) ) );
-			float d = length( dv ) - r * ( 0.7 + 0.6 * wob ); // metres outside the (wobbly) outline
-			acc = max( acc, 1.0 - smoothstep( - e, 0.0, d ) );
-			rim = max( rim, rk * ( 1.0 - smoothstep( 0.0, 0.5 * rw, abs( d + 0.5 * rw ) ) ) );
-		}
-	}
-	return acc;
+	ivec2 c = ivec2( floor( s2 / BR_FEATURE_CELL ) );
+	uint h = brHash2u( brWrap( c, ivec2( BR_FEATURE_P ) ), salt );
+	if ( brU01( h ) > prob ) return 0.0;
+	if ( wob < 0.0 ) wob = brTxWobble( s2 );
+	vec2 ctr = ( vec2( c ) + 0.25 + 0.5 * vec2( brU01( brPcg( h ) ), brU01( brPcg( h + 1u ) ) ) ) * BR_FEATURE_CELL;
+	float r = mix( rr.x, rr.y, brU01( brPcg( h + 2u ) ) );
+	float e = max( mix( ee.x, ee.y, brU01( brPcg( h + 3u ) ) ), fp );
+	vec2 dv = ( s2 - ctr ) * vec2( 1.0, mix( 0.75, 1.25, brU01( brPcg( h + 4u ) ) ) );
+	float d = length( dv ) - r * ( 0.7 + 0.6 * wob ); // metres outside the (wobbly) outline
+	float rw = max( rimW, fp );
+	rim = rimW / rw * ( 1.0 - smoothstep( 0.0, 0.5 * rw, abs( d + 0.5 * rw ) ) );
+	return 1.0 - smoothstep( - e, 0.0, d );
 }
 `,
   postSample: /* glsl */ `
@@ -253,9 +252,10 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 		}
 		brWet = wet;
 		if ( BR_DETAIL == 1 && brHoriz ) {
-			// spills: 5-30 cm stains with a sharp edge and a darker dried rim
-			// two octaves of outline wobble (0.3 m and 0.1 m): stains and reversal patches are blotchy, not ellipses
-			float brTxWob = 0.65 * brVNoise( brS2 / 0.3, ivec2( BR_TX_OUTLINE_P ), 359u ) + 0.35 * brVNoise( brS2 / 0.1, ivec2( BR_TX_OUTLINE_P2 ), 361u );
+			// spills: 5-30 cm stains with a sharp edge and a darker dried rim; the outline wobble makes stains and
+			// reversal patches blotchy, not ellipses (the Level 0 reversal patches need it everywhere, the office tiles
+			// only in a spill's cell)
+			float brTxWob = brL == BR_M_CARPET_L0 ? brTxWobble( brS2 ) : - 1.0;
 			float brTxRim;
 			float b = brTxDiscs( brS2, 301u, BR_TX_BLOT_P, BR_TX_BLOT_R, vec2( 0.008, 0.02 ), BR_TX_BLOT_RIM, brTxWob, brTxFp, brTxRim );
 			float bs = clamp( 0.35 + brMask.g + brMask.a, 0.0, 1.0 );

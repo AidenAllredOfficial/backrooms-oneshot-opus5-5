@@ -8,7 +8,7 @@ import { NOISE_WRAP } from '../../src/core/constants.ts';
 import { Mat } from '../../src/core/ids.ts';
 import { LAYER_DEFS } from '../../src/core/materials.ts';
 import { napDiffuse, pileVisibility, TEXTILE, TEXTILE_HOOKS } from '../../src/materials/chunks/family/textile.ts';
-import { f } from '../../src/materials/chunks/params.ts';
+import { f, TUNE } from '../../src/materials/chunks/params.ts';
 import { Det, DETAIL_RECIPES, DETAIL_SIZE } from '../../src/textures/detail.ts';
 import { LAYER_RECIPES_FULL } from '../../src/textures/registry.ts';
 
@@ -119,6 +119,16 @@ describe('textile GLSL', () => {
     expect(TEXTILE_HOOKS.grime).toContain('BR_TX_BLOT_RIM, brTxWob, brTxFp, brTxRim )');
     expect(TEXTILE_HOOKS.grime).toContain('max( BR_TX_REV_W, fwidth( brTxRn ) )');
     expect(TEXTILE_HOOKS.grime).toContain('1.0 - smoothstep( 0.25, 0.75, brTxFp / BR_TX_FRONT_CELL )');
+  });
+
+  it('a spill stays inside its 2.4 m feature cell, so the lookup reads one cell', () => {
+    // brTxDiscs: the centre lies 0.25-0.75 across the cell; the outline reaches r (0.7 + 0.6 wob) along x and that over
+    // the 0.75 minimum axis scale along z; the edge and rim lie inside the outline
+    expect(TEXTILE_HOOKS.pars).toContain('( vec2( c ) + 0.25 + 0.5 * vec2(');
+    expect(TEXTILE_HOOKS.pars).toContain('mix( 0.75, 1.25, brU01( brPcg( h + 4u ) ) )');
+    expect(TEXTILE_HOOKS.pars).toContain('r * ( 0.7 + 0.6 * wob )');
+    expect(TEXTILE_HOOKS.pars).not.toMatch(/for \( int/);
+    expect((TEXTILE.BLOT_R[1] * 1.3) / 0.75).toBeLessThan(0.25 * TUNE.FEATURE_CELL);
   });
 
   it('every world lattice period is a whole number of cells per NOISE_WRAP', () => {

@@ -165,7 +165,7 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Cubicle partition fabric: polyester in a fine basket weave (1.6 mm threads, below the 1.17 mm texel: the weave
+/** Cubicle partition fabric: polyester in a fine basket weave (1.17 mm threads, one texel of the base: the weave
  * itself is the detail map D7's) with two-tone heathered yarn, seen at 1-3 m as a fuzzy mottle rather than a pattern.
  * The base holds what the texel can: faint horizontal barre streaks (weft yarns of slightly different thickness and
  * dye uptake, +-3 % and +-2 %), the heather (a dark and a light yarn, x 0.82 / x 1.14, softened along the thread
