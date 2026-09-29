@@ -4408,9 +4408,10 @@ its outer edge (3 mm wide in metres, the inner ones 20 % weaker), whose width th
 integral stays, so a front neither darkens nor lightens with distance. A fine field steers them: the layer's relief,
 the detail multiplier and world noise at 12 and 40 mm, applied as a metric displacement (4, 6 and 15 mm) along the wet
 extent's gradient, so a front stays one coherent ragged line on a gentle extent. Inside: a pale halo, mould specks
-inside the innermost front, efflorescence 5-20 mm above rising damp, runnels (one per 0.1 m column, narrowing down the
-wall) ending in teardrops. Ceiling tiles take the leak extent per tile (absorbing a little differently, so a stain
-steps at the T-bars) and a few carry an old lobed stain of their own with their own front spacing.
+inside the innermost front, efflorescence 5-20 mm above rising damp (only where the wet side is below the front, so
+not around a low seepage tongue's tip), runnels (one per 0.1 m column, narrowing down the wall) ending in teardrops.
+Ceiling tiles take the leak extent per tile (absorbing a little differently, so a stain steps at the T-bars) and a
+few carry an old lobed stain of their own with their own front spacing.
 
 **Damage.** Wallpaper: roll seams per roll pair (60 % tight, 25 % open 0.3-0.8 mm, 15 % lifted with a shadow), a peel
 edge from the mask A field's screen gradient (torn fibres, a flap showing its back and casting a shadow, exposed paper
@@ -4419,7 +4420,12 @@ crack), spackle patches, scuffs at shoe and chair height, blisters where damp, f
 MDF. Life marks on wallpaper and drywall: picture ghosts, tack holes, tape residue, burnished hand zones. Ceiling tiles:
 3 % displaced (a plenum wedge up to 15 mm, 2 degrees), 12 % sagging, 6 % replacements from another lot. Troffer lenses
 (PRISM, OPAL): 5-15 insect silhouettes and dust toward one end, divided by their own mean. The analytic relief of
-all these is a world-space height gradient added in the family `normal` hooks.
+all these is a world-space height gradient added in the family `normal` hooks. Thin features keep their integral as
+the pixel footprint widens them, so none darkens or brightens a wall with distance: lines and dots are box-filtered
+(`brWlLine`, `brWlDot`) and edge bands (torn fibres, flaps, cast shadows, flake and chip lips) lower their peak as
+they widen (`brWlBand`); tests/materials/wallsCeiling.test.ts runs these helpers' GLSL. The reflection passes (the
+water mirror and the probe) skip the small features (seams, cockle, scuffs, chips, blisters, screw spots, patches,
+life marks, runnels and the tile states), and the tile states are shell-only (a fallen tile prop is never displaced).
 
 **Measured** (A/B against a5c03e1 at high; box-4 high-pass is rms (L − box9(L)) / box9(L) on a fixed crop):
 - Ceiling tile, harness layer 2: albedo dark fraction (< 0.85x median) 7.1 % → 0; ormh.r mean 0.981 → 0.939, 22 % of
@@ -4445,6 +4451,21 @@ all these is a world-space height gradient added in the family `normal` hooks.
   textures.genMs 207.6 → 198.8 ms (noise), detail genMs 18.7 → 18.6 ms; no new memory. After merging lanes A, B and C
   (tex-integ c7ca203, which already carries EON and relief dirt): high +0.17 / +0.15 / +0.13 / +0.08 ms, ultra (gallery
   03 / 11) +1.31 / +0.25 ms.
+- Review (same method, tex-integ c7ca203; high: 3 interleaved rounds, which agree within ~0.02 ms; ultra: 2 rounds,
+  ±0.3-0.5 ms). High, gallery 03 / 11 / 14 / LOBBY ceiling: +0.20 / +0.14 / +0.13 / +0.11 ms after the review fixes
+  (the lane head measured +0.23 / +0.18 / +0.17 / +0.11: skipping the small features in the probe's capture passes
+  saves 0.02-0.04). A bisect at high that removes one block at a time finds no single owner: the wall stains save
+  0.015-0.02 ms, the damage blocks 0-0.03, the life marks 0.01-0.03 (0.06 on the ceiling-only LOBBY framing, where
+  they never run: the cost is the shared surface program's occupancy) and the ceiling hook 0-0.03; the glossier paint
+  and T-bars (probe and SSR paths) and EON on the ceiling are within noise at high. Ultra, gallery 03 / 11 (the lane
+  head): +0.89 / +0.74 ms, and +0.51 / +0.41 ms with `probe=0&ssr=0`, so ~0.35 ms of the ultra cost is the probe
+  and SSR now running on the satin wallpaper (0.52), the eggshell drywall (0.62) and the enamel T-bars (0.33).
+  Raising the drywall field to 0.665 (above the probe's 0.65 fade), adding the relief to the detail slope instead of
+  its own vec2 and merging the two wall grime branches all measured within noise.
+- Distance (review): with the exposure fixed (EV 10), the lane's change of a wall patch's luminance at fov 50 and at
+  fov 90 (the same patch at 2.1x the pixel footprint) is +2.55 / +2.42 % on the Level 0 wallpaper, +2.94 / +3.15 %
+  on OFFICE drywall, +2.56 / +2.21 % on the LOBBY ceiling and +1.34 / +1.44 % on manila: no drift with distance
+  beyond 0.35 %. Two captures 2 cm apart (wallpaper, fov 50) show no crawl; medium and ultra render cleanly.
 
 **Limits.** At 2-3 m the fissures are sub-pixel: their mean darkening is right, but a linear-in-V term cannot draw
 the raking shadows that make a fissured tile read under a bulb from across a room; the sparse 22 mm fissure family

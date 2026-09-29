@@ -261,11 +261,14 @@ v2 conventions").
   0.12, D17 0.15 (at 0.2-0.45 the RGBA8 variance rounded to 0). D3 PAINT is unchanged (shared with TRIM, CMU and
   METAL_PAINTED).
 - **Family hooks** (`chunks/family/walls.ts`, `ceiling.ts`): grime profiles 2 (wallpaper), 7 (paint) and 3
-  (ceilingTile). Exports `WALL_STAIN` and `CEIL_STAIN`; `brWlFronts`, `brWlMetricGrad`, `brWlNoise`, `brWlLine`,
-  `brWlDot` and `brWlEdgeDist` are GLSL helpers in the walls family's `pars` (the ceiling family calls `brWlFronts`).
-  The analytic relief of seams, flaps, cockle, pops, blisters and the tile states is a world-space height gradient
-  (`brWlBump`, `brClBump`) added in the `normal` hooks. postSample divides out surface.ts's ±3 % per-roll shade and
-  applies ±0.8 % (one dye lot) plus a per-roll sheen. No new uniforms or samplers.
+  (ceilingTile). Exports `WALL_STAIN` and `CEIL_STAIN`; `brWlFronts`, `brWlGrad2`, `brWlNoise`, `brWlNoiseD`,
+  `brWlLine`, `brWlDot`, `brWlBand` and `brWlEdgeDist` are GLSL helpers in the walls family's `pars` (the ceiling
+  family calls `brWlFronts`). The analytic relief of seams, flaps, cockle, pops, blisters and the tile states is a
+  world-space height gradient (`brWlBump`, `brClBump`) added in the `normal` hooks. postSample divides out
+  surface.ts's ±3 % per-roll shade and applies ±0.8 % (one dye lot) plus a per-roll sheen. The reflection passes
+  (`uBrReflPass`) skip the small features and the tile states; the tile states are shell-only (`BR_SHELL`). No new
+  uniforms or samplers. tests/materials/wallsCeiling.test.ts runs the anti-aliasing helpers' GLSL and checks the world
+  lattices.
 - **`chunks/emitters.ts`** (lens aging only): `brLensAge` on PRISM and OPAL lenses (5-15 insect silhouettes and a dust
   gradient toward one end), divided by its own mean so each lens still emits what the bake assumed.
 - **`src/mesh/ceilings.ts`** (plenum throat tint only): the diffuser throat's PLENUM tint 0.08 → 0.35.
@@ -273,7 +276,11 @@ v2 conventions").
   +0.14 / +0.09 ms, ultra +1.84 / +1.37 / +1.17 / +0.55 ms, over the plan's +0.02 / +0.04 ms. Where it goes is in the
   DESIGN.md lane D section (a per-block bisect; part of it is occupancy of the shared surface program). Against
   tex-integ c7ca203 (lanes A, B and C in): high +0.17 / +0.15 / +0.13 / +0.08 ms, ultra (gallery 03 / 11) +1.31 /
-  +0.25 ms. genMs and memory unchanged.
+  +0.25 ms. genMs and memory unchanged. Review, after its fixes (3 rounds at high, stable to ~0.02 ms): high +0.20 /
+  +0.14 / +0.13 / +0.11 ms; the lane head at ultra (2 rounds, ±0.3-0.5 ms) +0.89 / +0.74 ms, of which ~0.35 ms is
+  the probe and SSR on the glossier walls and T-bars. At high the cost is spread over the hooks (0.01-0.03 ms per
+  block) and part of it is the shared surface program's occupancy: removing the life marks speeds a ceiling-only
+  frame by 0.06 ms (DESIGN.md lane D).
 - **Consumers affected:**
   - The concrete and masonry grime profiles (lanes B and C) still draw R above their threshold as a flat darkening.
     Seepage zones are now 0.44-0.68 m tongues (the old wall streaks were 8-45 cm), so on CMU and concrete walls they
