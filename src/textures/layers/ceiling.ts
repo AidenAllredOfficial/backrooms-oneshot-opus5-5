@@ -113,34 +113,54 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Plenum: the dark void above missing ceiling tiles: sprayed fireproofing lumps over a deck, dust. */
+/** Plenum: the void above missing ceiling tiles, the deck and joists under sprayed fibre / cementitious fireproofing
+ * (SFRM): a cottage-cheese of overlapping 6-20 mm lumps (two Worley scales, a hashed radius and height per lump) with
+ * deep crevices between them, a coarser 5-10 cm pass-to-pass swell, grey dust settled on the lump tops, and a few
+ * rust-brown drip stains. Seen through a tile hole it reads by its relief and the crevices' cavity AO. The albedo mean
+ * stays the table's near-black: props borrow PLENUM as a dark duct or underbody. */
 const PLENUM = /* glsl */ `
+#define SS 4
+// overlapping domes on one Worley scale: height of the tallest dome over this point (0 in the crevices)
+float plLumps(vec2 uv, ivec2 P, int seed) {
+  Cell c = worley(uv, P, 0.9, seed);
+  float r = mix(0.55, 0.95, hashf(c.id, seed + 1));
+  float d = sat(c.f1 / r);
+  return sqrt(max(1.0 - d * d, 0.0)) * mix(0.6, 1.0, hashf(c.id, seed + 2));
+}
 void gen(vec2 uv, inout Surf s) {
-  float a = fbm(uv, PM(1.5), 4, 3);
-  float b = fbm(uv, PM(12.0), 3, 4);
-  Cell l = worley(uv, PM(40.0), 1.0, 5);
-  float lump = 1.0 - smoothstep(0.0, 0.9, l.f1);
-  float dust = smoothstep(0.15, 0.6, fbmV(uv, PM(3.0), 4, 6));
-  vec3 col = TABLE_ALBEDO * (1.0 + 0.25 * a + 0.1 * b + 0.1 * (lump - 0.5));
-  col = mix(col, TABLE_ALBEDO * vec3(1.6, 1.55, 1.45), dust * 0.45);
+  float big = plLumps(uv, PM(55.0), 3);
+  float small = plLumps(uv, PM(140.0), 5);
+  float lump = max(big, 0.75 * small);
+  float swell = fbm(uv, PM(12.0), 3, 7);
+  float fine = fbm(uv, PM(300.0), 2, 9);
+  float h = 0.35 + 0.45 * lump + 0.1 * swell + 0.04 * fine;
+  // dust settles on the tops; the crevices stay dark (their cavity AO does the rest)
+  float dust = smoothstep(0.55, 0.8, h) * smoothstep(0.3, 0.7, fbmV(uv, PM(6.0), 3, 11));
+  float stain = smoothstep(0.7, 0.9, fbmV(uv, PMxy(8.0, 2.0), 3, 13));
+  vec3 col = TABLE_ALBEDO * (0.8 + 0.4 * lump + 0.1 * fine);
+  col = mix(col, TABLE_ALBEDO * vec3(1.7, 1.65, 1.55), 0.5 * dust);
+  col *= mix(vec3(1.0), vec3(1.15, 0.85, 0.6), 0.6 * stain);
   s.albedo = col;
-  s.height = 0.4 + 0.3 * lump + 0.1 * b;
-  s.rough = 0.95;
+  s.height = h;
+  s.rough = 0.95 - 0.05 * dust;
 }
 `;
 
-// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). CEILING_TILE's dirt is grey dust
+// in the fissures (0b's relief-aware block: x the cavity, more near walls and fixtures where the mask holds grime); the
+// wall layers set none, since their hand and kick zones are drawn by the walls family from the mask, and the relief term
+// has no concavity to fill on smooth paint and paper
 export const CEILING_RECIPES: RecipeTable = {
   [Mat.CEILING_TILE]: {
     glsl: CEILING_TILE, normalStrength: 1.5, heightScale: 0.004, trim: [0.997, 0.994, 0.985],
-    phys: phys(0.9, { tok: 0.8, det: 5, detS: 0.8, sigma: 0.6 }), aux: 'detailMask',
+    phys: phys(0.9, { tok: 0.8, det: 5, detS: 0.8, sigma: 0.6, dirt: [0.7, 0.68, 0.64, 0.4] }), aux: 'detailMask',
   },
   [Mat.PANEL_LENS]: {
     glsl: PANEL_LENS, normalStrength: 3.0, heightScale: 0.002, trim: [0.978, 0.978, 0.983],
     phys: phys(0), aux: 'emissive',
   },
   [Mat.PLENUM]: {
-    glsl: PLENUM, normalStrength: 1.0, heightScale: 0.01, trim: [0.827, 0.838, 0.864],
+    glsl: PLENUM, normalStrength: 1.0, heightScale: 0.012, trim: [0.895, 0.905, 0.916],
     phys: phys(0.8, { det: 4, detS: 1, sigma: 0.6 }),
   },
 };
