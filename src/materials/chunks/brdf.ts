@@ -18,7 +18,10 @@
 // only redistributes the light (flatter under a torch at the eye, less cosine falloff). The paper's rho_ms =
 // rho^2 E_avg / (1 - rho (1 - E_avg)) belongs to a facet albedo rho: it darkens a 0.3 albedo by 2-8 % at sigma 0.45
 // (4-15 % at 0.9), which the bake and the albedo calibration would not know about.
-// TS twin (eonBrdf, eonAlbedo*) below; tests/materials/brdf.test.ts checks the white furnace and the published ratios.
+// TS twins (eonBrdf, eonDelta, eonAlbedo) below; tests/materials/brdf.test.ts checks the white furnace and the published
+// ratios. Cost: the code is compiled in (dead-code eliminated while every BR_L_SIGMA is 0); once any layer sets a sigma,
+// the whole surface shader pays ~0.2-0.3 ms at ultra (2560x1440, register pressure) whether or not those pixels are on
+// screen, see TEX2.md.
 
 import { ShaderChunk } from 'three';
 import { f } from './params.ts';
@@ -49,7 +52,7 @@ export function fonAlbedo(mu: number, r: number): number {
 }
 
 /**
- * EON BRDF value (per steradian, the twin of brEon) for albedo rho, roughness r = sigma, cosines muI = N.L and
+ * EON BRDF value (per steradian) for albedo rho, roughness r = sigma, cosines muI = N.L and
  * muO = N.V and cIO = L.V. Single scattering f_ss = rho / pi A (1 + r s / t), s = L.V - muI muO, t = max(muI, muO) when
  * s > 0 else 1; multiple scattering f_ms = rho / pi (1 - E(muO)) (1 - E(muI)) / (1 - E_avg).
  */
@@ -60,6 +63,19 @@ export function eonBrdf(rho: number, r: number, muI: number, muO: number, cIO: n
   const eAvg = a * (1 + EON_C2 * r);
   const ms = (Math.max(1e-7, 1 - fonAlbedo(muO, r)) * Math.max(1e-7, 1 - fonAlbedo(muI, r))) / Math.max(1e-7, 1 - eAvg);
   return (rho / Math.PI) * (a * (1 + r * st) + ms);
+}
+
+/** The shader's form (twin of brEonD, what brRE_Direct adds): eonBrdf / (rho / pi) - 1, with E(mu) = A (1 + r g(mu)) and
+ * the divisions shared. */
+export function eonDelta(r: number, muI: number, muO: number, cIO: number): number {
+  const s = cIO - muI * muO;
+  const a = 1 / (1 + EON_C1 * r);
+  const st = s > 0 ? s / Math.max(Math.max(muI, muO), 1e-4) : s;
+  const e1 = [muI, muO].map((mu) => {
+    const c = 1 - clamp01(mu);
+    return Math.max(1e-7, 1 - a - a * r * c * (EON_G[0] + c * (EON_G[1] + c * (EON_G[2] + c * EON_G[3]))));
+  });
+  return a * (1 + r * st) + (e1[0] * e1[1]) / Math.max(1e-7, 1 - a - a * EON_C2 * r) - 1;
 }
 
 /** Single-scattering part over Lambert (f_ss / (rho / pi)). */
@@ -102,19 +118,20 @@ export function physicalDirectSource(chunk: string = ShaderChunk.lights_physical
   throw new Error('brdf.ts: unbalanced RE_Direct_Physical');
 }
 
-/** brRE_Direct: RE_Direct_Physical with the Lambert line behind a brDiffSigma branch (throws on anchor drift). */
+/** brRE_Direct: RE_Direct_Physical plus, after its Lambert line, the EON difference where brDiffSigma > 0 (throws on
+ * anchor drift). */
 export function brDirectSource(chunk?: string): string {
   const src = physicalDirectSource(chunk);
   if (src.split(LAMBERT_LINE).length !== 2) throw new Error('brdf.ts: the Lambert line of RE_Direct_Physical changed (three upgrade?)');
   // three's line stays verbatim and first (the Lambert path compiles exactly as before); EON adds its difference
-  const eon = 'reflectedLight.directDiffuse += irradiance * ( brEon( material.diffuseContribution, brDiffSigma, dotNL, '
-    + 'dot( geometryNormal, geometryViewDir ), dot( directLight.direction, geometryViewDir ) ) '
-    + '- BRDF_Lambert( material.diffuseContribution ) ) * ( 1.0 - F );';
+  const eon = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseContribution ) * ( brEonD( brDiffSigma, dotNL, '
+    + 'dot( geometryNormal, geometryViewDir ), dot( directLight.direction, geometryViewDir ) ) * ( 1.0 - F ) );';
   return src.replace('void RE_Direct_Physical(', 'void brRE_Direct(')
     .replace(LAMBERT_LINE, `${LAMBERT_LINE}\n\tif ( brDiffSigma > 0.0 ) ${eon}`);
 }
 
-/** Injected after `#include <clipping_planes_pars_fragment>` (fragment preamble, after lights_physical_pars). */
+/** Injected after `#include <clipping_planes_pars_fragment>` (fragment preamble, after lights_physical_pars). brEonD
+ * is eonRatio(r, muI, muO, cIO) - 1. */
 export function brdfParsGlsl(): string {
   return /* glsl */ `
 // ---- texture realism v2 (0b): EON rough diffuse for the direct lights (chunks/brdf.ts)
@@ -122,21 +139,17 @@ export function brdfParsGlsl(): string {
 #define BR_EON_C2 ${f(EON_C2)}
 // the EON roughness of this pixel (0 = three's Lambert); written by chunks/materialPost.ts before the lights
 float brDiffSigma = 0.0;
-// FON directional albedo (the paper's polynomial fit in 1 - mu)
-float brFonE( float mu, float r ) {
-	float c = 1.0 - saturate( mu );
-	float g = c * ( ${f(EON_G[0])} + c * ( ${f(EON_G[1])} + c * ( ${f(EON_G[2])} + c * ${f(EON_G[3])} ) ) );
-	return ( 1.0 + r * g ) / ( 1.0 + BR_EON_C1 * r );
-}
-// EON BRDF (per steradian): Fujii Oren-Nayar single scattering plus the multiple-scattering lobe, rho_ms = rho (the
-// directional albedo stays rho: rho is the calibrated macroscopic albedo)
-vec3 brEon( vec3 rho, float r, float muI, float muO, float cIO ) {
+// EON over Lambert, minus 1 (eonBrdf / (rho / pi) - 1): Fujii Oren-Nayar single scattering A (1 + r s / t) plus the
+// multiple-scattering lobe (1 - E(muI)) (1 - E(muO)) / (1 - E_avg) with rho_ms = rho, E(mu) = A (1 + r g(mu)) the FON
+// directional albedo (the paper's polynomial g in 1 - mu). Compact on purpose: this inlines into both RE_Direct calls
+// and every extra live value costs the whole surface shader (register pressure)
+float brEonD( float r, float muI, float muO, float cIO ) {
 	float s = cIO - muI * muO;
-	float st = s > 0.0 ? s / max( max( muI, muO ), 1e-4 ) : s;
 	float a = 1.0 / ( 1.0 + BR_EON_C1 * r );
-	float eAvg = a * ( 1.0 + BR_EON_C2 * r );
-	float ms = max( 1e-7, 1.0 - brFonE( muO, r ) ) * max( 1e-7, 1.0 - brFonE( muI, r ) ) / max( 1e-7, 1.0 - eAvg );
-	return rho * ( RECIPROCAL_PI * ( a * ( 1.0 + r * st ) + ms ) );
+	float st = s > 0.0 ? s / max( max( muI, muO ), 1e-4 ) : s;
+	vec2 c = 1.0 - saturate( vec2( muI, muO ) );
+	vec2 e1 = max( vec2( 1e-7 ), 1.0 - a - a * r * c * ( ${f(EON_G[0])} + c * ( ${f(EON_G[1])} + c * ( ${f(EON_G[2])} + c * ${f(EON_G[3])} ) ) ) );
+	return a * ( 1.0 + r * st ) + e1.x * e1.y / max( 1e-7, 1.0 - a - a * BR_EON_C2 * r ) - 1.0;
 }
 ${brDirectSource()}
 #undef RE_Direct

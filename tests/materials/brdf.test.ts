@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { ShaderChunk, ShaderLib } from 'three';
 import {
-  brdfParsGlsl, brDirectSource, EON_C1, EON_C2, EON_G, eonAlbedo, eonBrdf, eonSingleRatio, fonAlbedo, fonAlbedoExact,
+  brdfParsGlsl, brDirectSource, EON_C1, EON_C2, EON_G, eonAlbedo, eonBrdf, eonDelta, eonSingleRatio, fonAlbedo, fonAlbedoExact,
   physicalDirectSource,
 } from '../../src/materials/chunks/brdf.ts';
 import { DIRVIS, dirVis, dirVisG, FRAG_DIRVIS_GLSL } from '../../src/materials/chunks/pom.ts';
@@ -41,6 +41,15 @@ describe('EON rough diffuse (chunks/brdf.ts)', () => {
     expect(eonBrdf(1, 0.45, 0.3, 0.3, fwd)).toBeLessThan(1 / Math.PI);
   });
 
+  it('the shader form (brEonD, twin eonDelta) is the BRDF over Lambert minus 1', () => {
+    for (const s of [0.2, 0.45, 0.9]) {
+      for (const [mi, mo, c] of [[1, 1, 1], [0.5, 0.5, 1], [0.3, 0.8, 0.1], [0.9, 0.2, -0.4], [0.05, 0.7, 0.5]]) {
+        expect(eonDelta(s, mi, mo, c)).toBeCloseTo(eonBrdf(1, s, mi, mo, c) * Math.PI - 1, 9);
+      }
+    }
+    expect(eonDelta(0, 0.3, 0.7, 0.2)).toBeCloseTo(0, 6); // (the branch never runs at sigma 0)
+  });
+
   it('the FON albedo fit is within 0.1 % of the closed form', () => {
     for (const s of [0.1, 0.45, 0.9]) {
       for (let mu = 0.02; mu <= 1; mu += 0.02) {
@@ -63,7 +72,7 @@ describe('EON rough diffuse (chunks/brdf.ts)', () => {
     const ours = brDirectSource();
     const extra = ours.split('\n').filter((l) => l.includes('brDiffSigma'));
     expect(extra).toHaveLength(1);
-    expect(extra[0]).toMatch(/^\tif \( brDiffSigma > 0\.0 \) reflectedLight\.directDiffuse \+= irradiance \* \( brEon\(/);
+    expect(extra[0]).toMatch(/^\tif \( brDiffSigma > 0\.0 \) reflectedLight\.directDiffuse \+= irradiance \* BRDF_Lambert\( material\.diffuseContribution \) \* \( brEonD\(/);
     expect(ours.split('\n').filter((l) => !l.includes('brDiffSigma')).join('\n'))
       .toBe(three.replace('void RE_Direct_Physical(', 'void brRE_Direct('));
     // a changed Lambert line (three upgrade) fails loudly instead of silently dropping EON
