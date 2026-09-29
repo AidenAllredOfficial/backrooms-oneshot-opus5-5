@@ -33,9 +33,9 @@ export const CONCRETE_HOOKS: FamilyHooks = {
 #define BRC_SPALL_P 5120
 // The kerf profile at signed distance x (m) from a joint line, seen along the view slope t (horizontal travel across
 // the joint per unit of depth): albedo multiplier (a), tangent normal of the kerf / spall / arris faces (n; z up) and
-// its weight (nw), roughness target and weight (r, rw), cavity multiplier (cav). sw / sd: the spall's half-width and
-// depth on the side x > 0 (sp.x) and x < 0 (sp.y). filled: the kerf holds filler at BRC_FILL_D (else debris at
-// BRC_OPEN_D). The axis is the joint's across direction: n.x is along it.
+// its weight (nw), roughness target and weight (r, rw), cavity multiplier (cav). sw: the spall half-widths on the
+// side x > 0 (sw.x) and x < 0 (sw.y). filled: the kerf holds filler at BRC_FILL_D (else debris at BRC_OPEN_D). The
+// axis is the joint's across direction: n.x is along it.
 void brcKerfTap( float x, float t, vec2 sw, bool filled, inout float a, inout vec3 n, inout float nw, inout float r, inout float rw, inout float cav ) {
 	float ax = abs( x );
 	float sd = x >= 0.0 ? 1.0 : - 1.0;
@@ -73,7 +73,7 @@ void brcKerfTap( float x, float t, vec2 sw, bool filled, inout float a, inout ve
 		nw += 1.0;
 		rw += 1.0;
 	} else if ( ax < BRC_KERF_HW + spw + BRC_ARRIS ) {
-		// arris: the saw's 1 mm bevel (45 degrees), a little worn and paler
+		// arris: the saw's bevel (45 degrees, ravelled to 1.5 mm), a little worn and paler
 		a *= 1.03;
 		n += vec3( - sd * 0.707, 0.0, 0.707 );
 		cav *= 0.9;
@@ -159,11 +159,16 @@ float brcSlabCrack( vec2 s2, ivec2 pid, float p, float pf, out float hal ) {
 	vec2 o = vec2( pid ) * BR_CONCRETE_JOINT;
 	vec2 A = o + brcCrackEnd( e0, mix( 0.15, 0.85, brU01( h3 ) ) ) * BR_CONCRETE_JOINT;
 	vec2 B = o + brcCrackEnd( e1, mix( 0.15, 0.85, brU01( h4 ) ) ) * BR_CONCRETE_JOINT;
+	// run the segment 15 cm past both edges: the warp may shift its ends, the panel boundary clips it at the joint
+	vec2 dAB = normalize( B - A ) * 0.15;
+	A -= dAB;
+	B += dAB;
 	bool br = brU01( brPcg( h4 ) ) < 0.35;
 	float tb = mix( 0.25, 0.75, brU01( brPcg( h4 + 1u ) ) );
 	vec2 C = A + ( B - A ) * tb;
 	int e2 = e0 == ( ( e1 + 1 ) & 3 ) ? ( e1 + 3 ) & 3 : ( e1 + 1 ) & 3;
 	vec2 D = o + brcCrackEnd( e2, mix( 0.2, 0.8, brU01( brPcg( h4 + 2u ) ) ) ) * BR_CONCRETE_JOINT;
+	D += normalize( D - C ) * 0.15;
 	float hh;
 	float d0 = brcSegD( s2, A, B, hh );
 	float d0b = br ? brcSegD( s2, C, D, hh ) : 1e3;

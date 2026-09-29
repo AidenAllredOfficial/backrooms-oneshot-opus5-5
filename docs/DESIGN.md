@@ -4201,6 +4201,33 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 #### Lane A: textiles
 
 #### Lane B: concrete, terrazzo, floor paint
+Under overhead lamps a slab shows almost no diffuse relief (for Lambert, Σ n·Lᵢ = n·ΣLᵢ), so real concrete reads
+through tone structure, dirty pores, joints with depth and specular lanes. Lane B moves everything bigger than the
+2.4 m texture into world space (`chunks/family/concrete.ts`) and keeps the textures physical (the WP8 rows above):
+- **Slab system** (up-facing CONCRETE_FLOOR, the grime branch): pours of 4 × 2 panels and 4.8 m panels with their
+  own tone (±6 % / ±3 %), hue and sheen (× 0.85–1.15); saw-cut kerfs 4.4 mm wide with 1.5 mm arrises, filled 4 mm
+  down with dark polyurea (70 %) or open, where the view ray meets the far wall at depth
+  z = (W/2 − x·sgn t)/|t| (darkened by 0.5·e^(−z/6 mm)) or the bottom; spalls on 30 % of the 0.24 m joint segments
+  (5–25 mm long, 3–10 mm wide, a paler fracture sloping 25–40° into the kerf); a dirt band beside the cut. The kerf
+  is supersampled with 4 taps across the pixel footprint and fades to its mean darkening below ~1 pixel. 60 % of the
+  panels carry one shrinkage crack between two panel edges (so every crack ends at a joint), warped at 0.4 m and
+  5 cm, 0.2–1.2 mm wide along its length, 35 % branched, with a dirty halo; sub-pixel cracks keep a 0.35-pixel
+  rendered width with scaled contrast. Early-outs keep the cost to a few hashes away from joints and cracks.
+- **Traffic lanes:** WP7 mask A covers the hard floors (bake/mask.ts; TEX2.md). On concrete the lanes are burnished:
+  roughness × 0.62, albedo × 0.88 and a little warmer, the detail stronger (exposed fines, LEAN micro-scratches),
+  dust at their edges; rack aisles get two wheel tracks. On terrazzo the lanes lose the polish (roughness × 3.5, the
+  rough lobe covers 40 % more) and the edges by the walls keep yellowed wax.
+- **Finish class** per room (the FLOOR_AUX region key): sealed 35 % (roughness × 0.6, the trowel swirl stronger
+  through ormh.a), plain 45 %, dusty 20 % (roughness × 1.3, albedo × 1.06, detail × 0.7). Risers drop the swirl.
+- **Walls and soffits:** oil only drips onto floors; on walls and soffits the same grime fields are matte soot. Each
+  form sheet (1.2 × 1.5 m on walls, 1.2 × 2.4 m on soffits, world grid) gets its own tone and sheen, which breaks the
+  texture's 2.4 m ABAB. Rising damp has a ragged fringe (the tide field perturbed at 0.3 m) and efflorescence blooms
+  at the drying front (crystals from the detail speckle, matte, raised).
+- **Floor-paint stripes** (decal variant): the wet, film and puddle path of the slab (they carry NO_GRIME), edge
+  flakes from the stripe-local uv and width, the slab's joints through the stripe (the kerf stays unpainted) and the
+  slab's D12 speckle under the film (the decal variant samples the detail array: 16 units at high / ultra).
+- **v2 shading parameters** (active with the 0b block): σ CONCRETE_WALL / CONCRETE_CEIL 0.35, CONCRETE_FLOOR 0.25,
+  TERRAZZO 0; dirt on the slab, walls, soffits and terrazzo.
 
 #### Lane C: masonry and tile
 
