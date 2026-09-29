@@ -4242,11 +4242,15 @@ Block walls read as concrete block at every distance, and the tile layers as fir
 - **CMU_RAW** is placed on PIPEWORKS walls, the transition service corridors and the loading bays; CONCRETE, WAREHOUSE
   and the towers stay painted.
 - **Masonry grime** (profile 8): in the damp band of painted block the paint flakes in ragged patches that show the raw
-  block at the same uv (CMU_RAW's albedo, relief and roughness and D15, three or four fetches inside flakes only) with
-  a salt bloom and a lifted film edge, and 2-8 mm blisters dome the film where it holds. Seepage stains are brownish
-  and wick further along the joints; efflorescence crusts the drying front and blooms three times as strongly in the
-  joints of the bottom 0.6 m; dirt gathers on the joint ledges; rubber scuffs mark the cart and boot heights. sigma
-  (0.3 painted, 0.45 raw) and the relief-aware dirt are set for 0b.
+  block at the same uv (CMU_RAW's albedo and relief, two trilinear fetches in one branch on the smooth damp field, raw
+  roughness, the aggregate roughened) with a salt bloom and a lifted film edge, and 2-8 mm blisters dome the film where
+  it holds. Seepage stains are brownish and wick further along the joints; efflorescence crusts the drying front and
+  blooms three times as strongly in the joints of the bottom 0.6 m; dirt gathers on the joint ledges and in the joints
+  of the bottom courses; rubber scuffs mark the cart and boot heights.
+- **0b switches:** EON sigma is the facet roughness below the detail map (painted 0.2, raw 0.3; 0b adds the
+  unresolved detail variance, so far walls reach ~0.33 / 0.43). The relief-aware dirt and brStainFront are not used:
+  measured at ultra, the dirt amount compiles 0b's block into every surface program (+0.63 ms in POOLROOMS with no CMU
+  on screen) and the nested fronts cost 0.2 ms on a full-screen CMU wall.
 - **Tile** (`layers/tile.ts`, table above; `chunks/family/tile.ts`): POOL_TILE and POOL_MOSAIC store their grout
   coverage in ormh.a. The shader colours the grout along its lines in world space: per-tile rotation would split a
   texture-space variation down the middle of each line. Dry, up-facing pool deck glaze is dulled to 0.17 (art

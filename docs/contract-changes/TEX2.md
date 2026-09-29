@@ -111,12 +111,18 @@ v2 conventions").
 - **Channels:** CMU_PAINTED and CMU_RAW use aux `'detailMask'` (ormh.a 1 on faces, 0.3 in the joints; the masonry hooks
   also read it as the face / joint share). POOL_TILE and POOL_MOSAIC use aux `'mask'` = grout coverage (the tile hooks
   colour the grout along its lines in world space and the tile grime reads it instead of the roughness heuristic).
-- **Detail slots:** D14 CMU_FACE and D15 CMU_RAW filled (rms slope 0.375 / 0.44); D6 GLAZE rewritten (waviness at 25 and
-  12 mm, rms slope 0.0046, sparse pinholes; heightScale 0.00018, S 0.02, roughK 0.1, cavity 0.3).
-- **SurfacePhys:** CMU_PAINTED `det: 14, detS: 1, pomTop: 0.95, sigma: 0.3, dirt: [0.45, 0.41, 0.35, 1]`; CMU_RAW
-  `det: 15, detS: 1, pomTop: 0.95, tok: 0.8, sigma: 0.45, dirt: [0.55, 0.52, 0.46, 1]` (sigma and dirt take effect with
-  0b); POOL_TILE `pomTop: 0.76, roughComp: 0.8`; POOL_MOSAIC `pomTop: 0.8, roughComp: 0.8`; VINYL_VCT `glaze: 0.22,
-  roughComp: 0.7`.
+- **Detail slots:** D14 CMU_FACE and D15 CMU_RAW filled (rms slope 0.39 / 0.44, cavity folded in at exponent 1); D6
+  GLAZE rewritten (waviness at 25 and 12 mm, rms slope 0.0046, sparse pinholes; heightScale 0.00018, S 0.02, roughK
+  0.1, cavity 0.3).
+- **SurfacePhys:** CMU_PAINTED `det: 14, detS: 1, pomTop: 0.95, sigma: 0.2`; CMU_RAW `det: 15, detS: 1, pomTop: 0.95,
+  tok: 0.8, sigma: 0.3` (sigma is the facet roughness below the detail map: 0b adds the unresolved detail variance, so
+  far walls reach ~0.33 / 0.43); POOL_TILE `pomTop: 0.76, roughComp: 0.8`; POOL_MOSAIC `pomTop: 0.8, roughComp: 0.8`;
+  VINYL_VCT `glaze: 0.22, roughComp: 0.7`. No `dirt` / `wear`.
+- **0b costs measured by lane C** (ultra 2560x1440, gpuProfile RenderPass, 3 interleaved rounds against tex-integ at
+  ff42a23): a relief dirt amount on CMU compiled the dirt / wear block into every surface program, +0.63 ms in
+  POOLROOMS with no CMU on screen (so lane C sets none); brStainFront on every CMU wall pixel +0.2 ms on a full-screen
+  wall (not used); EON on CMU (sigma 0.2) +0.65 ms on a full-screen CMU wall (g08), kept. The integrator budgets EON
+  once for the union of layers that set sigma.
 - **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
   (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. `world/content/decals.ts` places wall CRACK
   decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost theirs (not lane C's file; adding CMU_RAW to
