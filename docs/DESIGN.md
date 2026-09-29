@@ -4332,7 +4332,7 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
 (edges, kick zones, hands) and each layer keeps its own colours under the part tint. The shading is in
 `chunks/family/props.ts`, the recipes in `layers/metal.ts` and `layers/misc.ts`, the details in
 `detailRecipes/props.ts` and the geometry side in `props/builder.ts` and `props/primitives.ts`.
-- **Tint headroom and topcoat mask.** Non-emissive prop parts store `byte(tint / 2)` (at least 1) and postWet decodes
+- **Tint headroom and topcoat mask.** Non-emissive prop parts store `byte(tint / 2)` (at least 1) and postSample decodes
   x2, so a part can be up to twice its layer mean: chrome, white enamel, pale woods and the rack orange no longer clamp
   to the layer colour. The tint colours only the topcoat: diffuse = recipe x mix(1, tint, brWpTop), so primer, steel
   and rust keep their own colours (the old tint turned locker chips and scratches into black ink strokes). METAL_RUST
@@ -4361,10 +4361,10 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   break first along their borders; albedo.a (aux2) a scratch field (0-2 segments of 8-80 mm per 60 mm cell, 60 %
   within 15 degrees of u, depth class 0.3-1). Runtime: topcoat, then a primer ring (grey, or red oxide on 40 % of the
   props, roughness 0.7), then the steel core 0.06 further down W (F0 0.56, roughness 0.3; on old props oxidised
-  (0.10, 0.07, 0.05) with a rust-bloom halo in the paint around it). Scratches are stress-whitened after the tint
+  (0.10, 0.07, 0.05)). Scratches are stress-whitened after the tint
   (luma x 1.3 + 0.04, roughness + 0.15), the deepest cut to steel; the kick zone is chalkier (+0.12 roughness) and the
-  hand band greasier (roughness x 0.75 in the grime tide field). A chip-step bump (the screen derivatives of
-  -0.1 mm x exposure, Mikkelsen 2010) gives chips a 1-2 px lit and shadowed rim. D18 ENAMEL is 2-4 mm orange peel at
+  hand band greasier (roughness x 0.75 in the grime tide field). (A chip-step bump from the screen derivatives of the
+  exposure was tried and dropped: under overhead light it was barely visible for 0.03-0.05 ms.) D18 ENAMEL is 2-4 mm orange peel at
   +-6 um with faint buffing swirls. The part's roughness override scales the topcoat (ormh.g x override / 0.4), so
   the recipe's variation survives (locker doors 0.26). Only car paint keeps the clearcoat: its weight is the topcoat x
   (1 - dust), its roughness max(0.05, 0.35 x override), and its normal the base map's (a new

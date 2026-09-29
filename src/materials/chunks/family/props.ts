@@ -3,8 +3,9 @@
 // clearcoat fields (materialPost). Lane E's file; hook points and rules in chunks/family/index.ts.
 //
 // Lane E (docs/DESIGN.md "Lane E"):
-// - tint headroom: non-emissive prop parts store tint / 2 (props/builder.ts tintByte); postWet decodes x2 and applies the
-//   tint only to the topcoat, diffuse = recipe x mix(1, tint, brWpTop), so primer, steel and rust keep their own colours;
+// - tint headroom: non-emissive prop parts store tint / 2 (props/builder.ts tintByte); postSample decodes x2 and applies
+//   the tint only to the topcoat, diffuse = recipe x mix(1, tint, brWpTop), so primer, steel and rust keep their own
+//   colours;
 // - edge and contact wear on the 'wear' layers: a level from the face-local edge coordinates of props (the lmUv stream,
 //   props/builder.ts edgeEncode; props light from the light volume), the kick zone and the hand band, thresholded
 //   against the layer's rank-normalised wear field W (ormh.a, P(W < x) = x). The threshold widens with the texel
@@ -39,7 +40,9 @@ const f = (v: number): string => (Number.isInteger(v) ? `${v}.0` : String(v));
 /** TS twin of the shader's brWpExpose: the exposed share of a texel with wear threshold w at level l, over a linear
  * ramp of half-width a, with the low / high level correction that keeps the mean over a uniform W equal to l. */
 export function wearExposure(w: number, a: number, l: number): number {
-  const lc = l < a ? 2 * Math.sqrt(a * Math.max(l, 0)) - a : l > 1 - a ? 1 + a - 2 * Math.sqrt(a * Math.max(1 - l, 0)) : l;
+  const t = Math.min(l, 1 - l);
+  const c = t < a ? 2 * Math.sqrt(a * Math.max(t, 0)) - a : t;
+  const lc = l < 0.5 ? c : 1 - c;
   return Math.min(1, Math.max(0, (lc - w + a) / (2 * a)));
 }
 
@@ -71,15 +74,21 @@ float brPropEdgeD( float x ) {
 // lower half clips at W = 0), so a low level moves to l' = 2 sqrt(a l) - a, which restores mean = l (and the mirror
 // at the top): the exposed share stays the level at every distance
 float brWpExpose( float w, float a, float l ) {
-	float lc = l < a ? 2.0 * sqrt( a * max( l, 0.0 ) ) - a : l > 1.0 - a ? 1.0 + a - 2.0 * sqrt( a * max( 1.0 - l, 0.0 ) ) : l;
+	float t = min( l, 1.0 - l ); // distance to the nearer end (one sqrt for both corrections)
+	float c = t < a ? 2.0 * sqrt( a * max( t, 0.0 ) ) - a : t;
+	float lc = l < 0.5 ? c : 1.0 - c;
 	return clamp( ( lc - w + a ) / ( 2.0 * a ), 0.0, 1.0 );
 }
 `,
   postSample: /* glsl */ `
 // ---- lane E: edge and contact wear of the 'wear' layers (per-face layer: quad-uniform). brWpTop: topcoat coverage (the
-// part tint applies there); brWpPrim / brWpCore: exposed primer ring and core (METAL_PAINTED); brWpScr: scratch / scuff
-// visibility; brWpLvl: the wear level; brWpExp: the exposed share (all exposed layers)
-float brWpTop = 1.0, brWpPrim = 0.0, brWpCore = 0.0, brWpScr = 0.0, brWpLvl = 0.0, brWpExp = 0.0;
+// part tint applies there; the only value that stays live past this hook: everything else is scoped, which kept the
+// surface programs' register pressure, and so the frame cost, down); brWpPrim / brWpCore: exposed primer ring and core
+// (METAL_PAINTED); brWpScr: scratch / scuff visibility; brWpLvl: the wear level; brWpExp: the exposed share
+float brWpTop = 1.0;
+#ifndef BR_DECAL
+{
+float brWpPrim = 0.0, brWpCore = 0.0, brWpScr = 0.0, brWpLvl = 0.0, brWpExp = 0.0;
 bool brWpOn = BR_DETAIL == 1 && brAuxK == BR_AUX_WEAR;
 bool brWpProp = false; // a non-emissive prop part (tint stored halved, edge coordinates, roughness override)
 #ifdef BR_PROPS
@@ -93,11 +102,13 @@ if ( brWpOn ) {
 	if ( brWpOvr > 0.0 ) brOrmh.g *= brWpOvr / brWpRef;
 	float brWpEd = 1e4; // mm to the nearest face edge
 	float brWpHash = 0.5, brWpDec = 0.0;
+#ifdef BR_PROPS
 	if ( brWpProp ) {
 		brWpEd = min( brPropEdgeD( vBrLmUv.x ), brPropEdgeD( vBrLmUv.y ) );
 		brWpHash = fract( vBrTint.a * 97.31 + 0.137 );
 		brWpDec = float( ( int( brAuxB.z ) >> 2 ) & 63 ) / 63.0;
 	}
+#endif
 	float brWpY = vBrLocal.y; // storey-relative
 	float brWpHand = exp( - ( brWpY - ${f(PROP_WEAR.HAND_Y)} ) * ( brWpY - ${f(PROP_WEAR.HAND_Y)} ) * ${f(1 / (PROP_WEAR.HAND_W * PROP_WEAR.HAND_W))} );
 	float brWpEdge = ${f(PROP_WEAR.EDGE_NEAR)} * exp( - brWpEd * ${f(1 / PROP_WEAR.EDGE_NEAR_MM)} ) + ${f(PROP_WEAR.EDGE_FAR)} * exp( - brWpEd * ${f(1 / PROP_WEAR.EDGE_FAR_MM)} );
@@ -109,19 +120,21 @@ if ( brWpOn ) {
 	brWpLvl = brWpProp && brL == BR_M_METAL_PAINTED && vBrLmUv.y < 0.0 ? 0.0 : clamp( brWpLvl, 0.0, 1.0 );
 	// threshold against W: an AA ramp over the screen gradient, widened to a half-width of 0.5 once the texel footprint
 	// hides the flakes (the mip-filtered W tends to its mean 0.5: exposure = level, not a step at level 0.5)
-	float brWpFp = max( length( brDx ), length( brDy ) ) * float( textureSize( uBrOrmh, 0 ).x );
-	float brWpA = min( fwidth( brAux ) + 0.01 + 0.5 * smoothstep( 4.0, 16.0, brWpFp ), 0.5 );
+	float brWpFp = max( dot( brDx, brDx ), dot( brDy, brDy ) ) * float( textureSize( uBrOrmh, 0 ).x * textureSize( uBrOrmh, 0 ).x ); // texels^2
+	float brWpA = min( fwidth( brAux ) + 0.01 + 0.5 * smoothstep( 16.0, 256.0, brWpFp ), 0.5 );
 	brWpExp = brWpExpose( brAux, brWpA, brWpLvl );
 	if ( brL == BR_M_METAL_PAINTED ) {
-		// painted steel: topcoat -> primer ring -> steel core; old steel (hash x decay) is oxidised dark brown with a
-		// rust-bloom halo in the paint around it. Primer grey or red oxide by part.
+		// painted steel: topcoat -> primer ring -> steel core; old steel (hash x decay) is oxidised dark brown. Primer grey
+		// or red oxide by part.
 		brWpCore = brWpExpose( brAux, brWpA, brWpLvl - ${f(PROP_WEAR.CORE)} );
 		// scratches (albedo.a S: segments of depth class 0.3-1): more in the hand band and near edges; the deepest cut to
 		// bright steel
-		float brWpSg = brWpLvl > 0.0 ? clamp( brWpAge * ( 0.12 + 0.6 * brWpHand + 0.4 * exp( - brWpEd * 0.025 ) + 0.3 * brWpKick ), 0.0, 1.0 ) : 0.0;
+#ifdef BR_PROPS
+		float brWpSg = brWpLvl > 0.0 ? clamp( brWpAge * ( 0.12 + 0.6 * brWpHand + 2.0 * brWpEdge + 0.3 * brWpKick ), 0.0, 1.0 ) : 0.0;
 		brWpScr = brAux2 * brWpSg;
 		float brWpLine = smoothstep( 0.82, 0.95, brAux2 ) * smoothstep( 0.3, 0.7, brWpSg );
 		brWpCore = max( brWpCore, brWpLine );
+#endif
 		brWpExp = max( brWpExp, brWpCore );
 		brWpPrim = brWpExp - brWpCore;
 		brWpTop = 1.0 - brWpExp;
@@ -129,10 +142,9 @@ if ( brWpOn ) {
 		vec3 brWpPr = fract( brWpHash * 7.13 ) < 0.6 ? vec3( 0.32, 0.31, 0.29 ) : vec3( 0.24, 0.10, 0.06 );
 		vec3 brWpSt = mix( vec3( 0.56, 0.57, 0.58 ), vec3( 0.10, 0.07, 0.05 ), smoothstep( 0.25, 0.6, brWpOx ) );
 		float brWpStM = 1.0 - smoothstep( 0.25, 0.6, brWpOx );
-		float brWpHalo = ( brWpExpose( brAux, brWpA, brWpLvl + 0.08 ) - brWpExp ) * smoothstep( 0.2, 0.6, brWpOx );
 		// topcoat roughness: scratches and the scuffed kick zone are chalkier (the hand band's grease is in the grime branch)
 		float brWpTr = brOrmh.g + 0.15 * brWpScr + 0.12 * brWpAge * brWpKick;
-		brA = brA * mix( vec3( 1.0 ), vec3( 0.85, 0.7, 0.55 ), 0.4 * brWpHalo ) * brWpTop + brWpPr * brWpPrim + brWpSt * brWpCore;
+		brA = brA * brWpTop + brWpPr * brWpPrim + brWpSt * brWpCore;
 		brOrmh.g = brWpTr * brWpTop + 0.7 * brWpPrim + mix( 0.3, 0.75, 1.0 - brWpStM ) * brWpCore;
 		brOrmh.b = brWpStM * brWpCore;
 		brWpScr *= brWpTop;
@@ -155,7 +167,9 @@ if ( brWpOn ) {
 #endif
 		// run-off: world drips (the grime texture's drip channel, two projections blended by the normal: no 45-degree seam
 		// on pipes and tanks) below rusty areas, found with three coarse taps of C 3, 8 and 18 cm up the surface
-		// (derivatives and implicit-LOD fetches outside any per-pixel condition: the branch is per face)
+		// (derivatives and implicit-LOD fetches outside any per-pixel condition: the branch is per face). Props only: in
+		// the shell program its registers cost every shell pixel (measured), and the rusty props carry the look
+#ifdef BR_PROPS
 		if ( uBrReflPass < 0.5 ) {
 			vec3 brWpQx = dFdx( vBrLocal ), brWpQy = dFdy( vBrLocal );
 			float brWpG11 = dot( brWpQx, brWpQx ), brWpG12 = dot( brWpQx, brWpQy ), brWpG22 = dot( brWpQy, brWpQy );
@@ -173,6 +187,7 @@ if ( brWpOn ) {
 			brA *= mix( vec3( 1.0 ), vec3( 0.75, 0.55, 0.4 ), 0.85 * brWpRun );
 			brOrmh.g = min( brOrmh.g + 0.1 * brWpRun, 1.0 );
 		}
+#endif
 	} else if ( brL == BR_M_WOOD ) {
 		// finish wear (W = ormh.a): where hands and objects wore the finish off, the wood is lighter, a little greyer and
 		// rough; edges, the hand band and up-facing tops (things slid over them) go first
@@ -185,6 +200,7 @@ if ( brWpOn ) {
 			brA *= 0.7;
 			brOrmh.g = min( brOrmh.g + 0.2, 1.0 );
 		}
+#ifdef BR_PROPS
 	} else if ( brL == BR_M_PLASTIC ) {
 		if ( brWpProp && vBrLmUv.y < 0.0 ) {
 			// part kind 1: kraft board. The kraft detail (D20: flutes, floc) replaces the haircell; the liner is matte;
@@ -214,7 +230,7 @@ if ( brWpOn ) {
 #endif
 			brWpExp = 0.0;
 		} else {
-			// moulded plastic: stress-whitened scuffs where edges and the kick zone wear (whitened after the tint, postWet);
+			// moulded plastic: stress-whitened scuffs where edges and the kick zone wear (whitened after the tint, below);
 			// UV chalking of up-facing faces on old parts: greyer, lighter, rough
 			brWpScr = 0.85 * brWpExp;
 			brOrmh.g = min( brOrmh.g + 0.15 * brWpExp, 1.0 );
@@ -229,6 +245,7 @@ if ( brWpOn ) {
 		brA *= 1.0 - 0.1 * brWpSm;
 		brOrmh.g = min( brOrmh.g + 0.2 * brWpSm, 1.0 );
 		brWpExp = 0.0;
+#endif
 	}
 }
 #if BR_DETAIL == 0
@@ -246,6 +263,18 @@ if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
 	brA += vec3( 0.06, 0.058, 0.055 ) * brWpBl;
 	brOrmh.g = min( brOrmh.g + 0.15 * brWpBl, 1.0 );
 }
+// tint headroom and topcoat mask. Props store tint / 2 (decoded x2 here); the tint colours the topcoat only (brWpTop):
+// exposed primer / steel / rust keep the recipe's colour. Whitened scratches and scuffs act on the tinted colour. The
+// surface multiplies by vBrTint after the grime and wetness, so brA is pre-divided (tint bytes are >= 1 on props); the
+// grime and wetness then act on the untinted colour as before lane E
+if ( brWpProp || brWpOn ) {
+	vec3 brWpT = brWpProp ? vBrTint.rgb * 2.0 : vBrTint.rgb;
+	vec3 brWpC = brA * mix( vec3( 1.0 ), brWpT, brWpTop );
+	if ( brWpScr > 0.0 ) brWpC = mix( brWpC, vec3( brLuma( brWpC ) * 1.3 + 0.04 ), 0.7 * brWpScr ); // stress-whitened paint
+	brA = brWpC / max( vBrTint.rgb, vec3( 1.0 / 255.0 ) );
+}
+}
+#endif
 `,
   postDetail: '',
   grime: /* glsl */ `
@@ -260,7 +289,7 @@ if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
 		}
 		// settled dust on up-facing shell steel (props get the anchor cell's dust in surface.ts), heavier in the mask's
 		// grime; a greasy hand band on painted steel (glossier)
-		float brWpDu = ( brWpProp || brNWg.y < 0.5 ) ? 0.0 : smoothstep( 0.5, 0.95, brNWg.y ) * clamp( 0.25 + brMask.g + 0.3 * ( g2.r - 0.5 ), 0.0, 1.0 );
+		float brWpDu = ( ( brF & BR_F_PROP_AUX ) != 0 || brNWg.y < 0.5 ) ? 0.0 : smoothstep( 0.5, 0.95, brNWg.y ) * clamp( 0.25 + brMask.g + 0.3 * ( g2.r - 0.5 ), 0.0, 1.0 );
 		brA = mix( brA, BR_DUST_COLOR, 0.55 * brWpDu );
 		brMetal *= 1.0 - brWpDu;
 		brRoughMul *= mix( 1.0, 1.5, brWpDu );
@@ -270,53 +299,30 @@ if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
 		}
 	}
 `,
-  postWet: /* glsl */ `
-// ---- lane E: tint headroom and topcoat mask. Props store tint / 2 (decoded x2 here); the tint colours the topcoat only
-// (brWpTop), exposed primer / steel / rust / raw wood keep the recipe's colour. Whitened scratches and scuffs act on the
-// tinted colour. surface.ts multiplies by vBrTint next: brA is pre-divided (tint bytes are >= 1 on props)
-if ( brWpProp || brWpOn ) {
-	vec3 brWpT = brWpProp ? vBrTint.rgb * 2.0 : vBrTint.rgb;
-	vec3 brWpC = brA * mix( vec3( 1.0 ), brWpT, brWpTop );
-	if ( brWpScr > 0.0 ) brWpC = mix( brWpC, vec3( brLuma( brWpC ) * 1.3 + 0.04 ), 0.7 * brWpScr ); // stress-whitened paint
-	brA = brWpC / max( vBrTint.rgb, vec3( 1.0 / 255.0 ) );
-}
-`,
+  postWet: '',
   rough: /* glsl */ `
 // ---- lane E: the 'wear' layers carry their exposed roughness and the override-scaled topcoat in ormh.g (postSample):
 // replace the override with it (Toksvig and LEAN as above)
-if ( brWpOn ) {
+if ( BR_DETAIL == 1 && brAuxK == BR_AUX_WEAR ) {
 	brRt = sqrt( brOrmh.g * brOrmh.g + brVar );
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 	brRt = sqrt( sqrt( pow4( brRt ) + brDetVar ) );
 #endif
 }
 `,
-  normal: /* glsl */ `
-// ---- lane E: the chip step. The paint film ends in a ~0.1 mm step at a chip's edge: a surface-gradient bump from the
-// screen derivatives of h = -0.1 mm x exposed (Mikkelsen 2010), a 1-2 px lit / shadowed rim at 0.5-2 m that fades as
-// the chip gets smaller than a pixel (per-face layer: quad-uniform)
-if ( brWpOn && brL == BR_M_METAL_PAINTED && uBrReflPass < 0.5 ) {
-	float brWpH = - 0.0001 * brWpExp;
-	vec3 brWpPx = dFdx( - vViewPosition ), brWpPy = dFdy( - vViewPosition );
-	vec3 brWpR1 = cross( brWpPy, normal ), brWpR2 = cross( normal, brWpPx );
-	float brWpDt = dot( brWpPx, brWpR1 );
-	vec3 brWpGr = sign( brWpDt ) * ( dFdx( brWpH ) * brWpR1 + dFdy( brWpH ) * brWpR2 );
-	vec3 brWpN = abs( brWpDt ) * normal - brWpGr;
-	if ( dot( brWpN, brWpN ) > 1e-30 ) normal = normalize( brWpN ); // (edge-on pixels: keep the normal)
-}
-`,
+  normal: '',
   matPost: /* glsl */ `
 // clearcoat (props with the coat bit: car paint): a lacquer lobe over the topcoat that dust dulls, at the part's
 // override-scaled roughness
 #ifdef USE_CLEARCOAT
 brCoat = ( brF & BR_F_PROP_AUX ) != 0 && vBrEmit <= 0.0 && ( int( brAuxB.z ) & 2 ) != 0;
 material.clearcoat = brCoat ? brWpTop * ( 1.0 - brDust ) : 0.0;
-material.clearcoatRoughness = min( max( max( BR_COAT_ROUGH, 0.0525 ), 0.35 * brWpOvr ) + geometryRoughness, 1.0 );
+material.clearcoatRoughness = min( max( max( BR_COAT_ROUGH, 0.0525 ), 0.35 * brAuxB.x / 255.0 ) + geometryRoughness, 1.0 );
 material.clearcoatF0 = vec3( 0.04 );
 material.clearcoatF90 = 1.0;
 #endif
 // kraft board (PLASTIC part kind 1): a fibrous liner, rough diffuse (EON sigma 0.5)
-if ( brWpProp && brL == BR_M_PLASTIC && vBrLmUv.y < 0.0 ) brDiffSigma = 0.5;
+if ( brL == BR_M_PLASTIC && ( brF & BR_F_PROP_AUX ) != 0 && vBrEmit <= 0.0 && vBrLmUv.y < 0.0 ) brDiffSigma = 0.5;
 `,
   postLight: '',
   preFog: '',

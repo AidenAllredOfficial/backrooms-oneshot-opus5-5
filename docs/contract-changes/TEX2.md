@@ -202,7 +202,8 @@ v2 conventions").
 - **Status:** APPLIED by lane E on its branch.
 - **WP6 contract (props/builder.ts):**
   - Tint: non-emissive PROP_AUX parts store `byte(tint / 2)`, at least 1 (`tintByte`); the props family decodes
-    `vBrTint.rgb x 2` in postWet (brA is pre-divided by the stored tint, since surface.ts multiplies by it next).
+    `vBrTint.rgb x 2` at the end of postSample (brA is pre-divided by the stored tint, since surface.ts multiplies by
+    it after the grime and wetness).
     Emissive parts keep x1. METAL_RUST tints are relative to `RUST_PAINT_REF` 0.3, not the layer mean.
   - lmUv on props (was 0, 0): face-local edge coordinates, `edgeEncode(half mm, s) = 4 max(1, round(half)) + 1 + s`
     per axis (0 = no edge on this axis); decode `h = floor(|x| / 4)`, `s = |x| - 4h - 1`, distance `h (1 - |s|)`. The
@@ -227,8 +228,8 @@ v2 conventions").
   cavity 0.5), D20 KRAFT (8e-5, S 0.05); D10 HAIRCELL 2.5 -> 1.4 mm.
 - **Anchor:** `clearcoat_normal_fragment_begin` ('after'; anchors.ts, SurfaceMaterial injectionCode ->
   `PROP_COAT_NORMAL_GLSL`): the props clearcoat uses the base map's normal.
-- **Hooks (chunks/family/props.ts):** main-scope names `brWpTop`, `brWpPrim`, `brWpCore`, `brWpScr`, `brWpLvl`,
-  `brWpExp`, `brWpOn`, `brWpProp`, `brWpOvr` (postSample; read by grime, postWet, rough, normal, matPost); pars
+- **Hooks (chunks/family/props.ts):** one main-scope name, `brWpTop` (postSample; read by grime and matPost); the rest
+  of the wear state is scoped inside postSample, which measurably lowered the programs' cost; pars
   `brPropEdgeD`, `brPropEdgeHS`, `brWpExpose` and `BR_M_*` for the prop layers. The rough hook replaces the override
   path for 'wear' layers (their ormh.g already holds the override-scaled topcoat and the exposed layers' roughness).
 - **World output:** light-well window band, copier platen and control panel RUBBER -> PLASTIC; children's playroom
