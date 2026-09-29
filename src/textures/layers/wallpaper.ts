@@ -6,13 +6,15 @@ import { phys, type RecipeTable } from './types.ts';
 /** Level 0 wallpaper: mustard paper-backed vinyl (Type I, satin) in two 0.6 m rolls. Print (the Level 0 photo's
  * identity): vertical stripe system on a 0.15 m pitch, a slightly darker ink band carrying a column of stacked
  * up-pointing chevrons, flanked by pinlines. The print is surface-printed flat ink over the emboss (5-10 um film, a
- * 0.02 mm step with rounded shoulders, not a stamped relief), -22 % in value and a touch glossier (0.56), with gravure
+ * 0.02 mm step with rounded shoulders, not a stamped relief), -22 % in value and a touch glossier (0.48), with gravure
  * density streaks along the roll and the band fill misregistered 0.2 mm against the strokes. The ground is a
  * fabric-look print in register with its emboss: a strie of 2.5-17 mm streaks (+-5 %) and raised slub dashes (+4 %,
  * vertical 3 x 25 mm and horizontal 25 x 3 mm), which carry the field's texture at room distance (the emboss alone
  * shaded < 1 % under the baked light), and a 0.05 mm cockle over 3-5 cm that only the sheen shows; the finer thread
- * emboss is D2 (VINYL_FABRIC). Satin roughness: ground 0.62 (emboss peaks -0.05, valleys +0.04), glue squeeze-out
- * along the roll seam 0.53 (all above the SSR cut-off at high, 0.45: below it the lamps glinted off single texels).
+ * emboss is D2 (VINYL_FABRIC). Satin roughness: ground 0.52 (emboss peaks -0.05, valleys +0.04), glue squeeze-out
+ * along the roll seam 0.46 (all above the SSR cut-off at high, 0.45: below it the lamps glinted off single texels). At
+ * 0.62 the sheen under the lamps was 0.4 % over the old 0.7 build (yawDeg=60, 20-40 cm below the ceiling), at 0.52
+ * +2.8 %, and at grazing views it shows the strie and linen emboss.
  * ormh.a is the detail mask: 0.6 on ink (the emboss under the ink film is shallower). Lifted edges, fading and stains
  * come from the WP7 mask and the walls family (chunks/family/walls.ts). */
 const WALLPAPER_L0 = /* glsl */ `
@@ -62,8 +64,8 @@ void gen(vec2 uv, inout Surf s) {
   s.albedo = c;
   s.height = 0.5 + 0.04 * inkH + 0.06 * strie + 0.16 * slub + 0.12 * cockle + 0.2 * gauss(dSeam / 0.0018) - 0.2 * gap;
   float glue = gauss(dSeam / 0.004);
-  s.rough = mix(0.62 + 0.04 * sat(-strie) - 0.05 * slub - 0.03 * sat(strie), 0.56, ink);
-  s.rough = mix(s.rough, 0.53, glue);
+  s.rough = mix(0.52 + 0.04 * sat(-strie) - 0.05 * slub - 0.03 * sat(strie), 0.48, ink);
+  s.rough = mix(s.rough, 0.46, glue);
   s.aux = 1.0 - 0.4 * ink;
 }
 `;

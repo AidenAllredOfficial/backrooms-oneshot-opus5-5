@@ -31,7 +31,7 @@ export interface MaterialLayerDef {
 
 const S = SurfaceSound;
 export const LAYER_DEFS: readonly MaterialLayerDef[] = [
-  { id: 0, name: 'WALLPAPER_L0', repeat: 1.2, tileSize: 0, albedoMean: [0.42, 0.34, 0.12], roughness: 0.6, metal: 0, grime: 'wallpaper', sound: S.CARPET, absorption: 0.1, reflective: false },
+  { id: 0, name: 'WALLPAPER_L0', repeat: 1.2, tileSize: 0, albedoMean: [0.42, 0.34, 0.12], roughness: 0.52, metal: 0, grime: 'wallpaper', sound: S.CARPET, absorption: 0.1, reflective: false },
   { id: 1, name: 'CARPET_L0', repeat: 2.4, tileSize: 0, hexTile: 1.2, albedoMean: [0.22, 0.17, 0.08], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.35, reflective: true },
   { id: 2, name: 'CEILING_TILE', repeat: 1.2, tileSize: 0.6, albedoMean: [0.7, 0.67, 0.56], roughness: 0.9, metal: 0, grime: 'ceilingTile', sound: S.CARPET, absorption: 0.6, reflective: false },
   { id: 3, name: 'PANEL_LENS', repeat: 0.6, tileSize: 0, albedoMean: [0.7, 0.7, 0.68], roughness: 0.3, metal: 0, grime: 'none', sound: S.METAL, absorption: 0.05, reflective: false },
