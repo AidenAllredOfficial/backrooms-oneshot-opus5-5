@@ -16,7 +16,9 @@
 // white back and casting a shadow, the exposed face paper and adhesive) and damp cockle; paint gets scuffs, blisters
 // and flakes to the primer, and drywall its screw spots, pops and spackle patches (postSample: they change the detail
 // mask). The analytic relief of seams, flaps, cockle, pops and blisters is a world-space height gradient
-// (brWlBump, d h / d along and d h / d y) that the normal hook adds on the wall's world axes.
+// (brWlBump, d h / d along and d h / d y) that the normal hook adds on the wall's world axes. The reflection passes
+// (uBrReflPass: the water mirror and the probe) skip the small features (seams, cockle, scuffs, chips, blisters, screw
+// spots, patches, life marks, runnels); stains and peel edges stay, as they are large enough to show in a reflection.
 
 import { SEEP_R0, STAIN_MAX } from '../../../bake/mask.ts';
 import { Mat } from '../../../core/ids.ts';
@@ -153,11 +155,12 @@ void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2,
 	}
 	if ( zone > 0.0 ) {
 		// runnels: one per 0.1 m column (p 0.6), wandering +-10 mm, 5-20 mm wide narrowing down the wall, each ending
-		// in a teardrop at its own progress tEnd; the zone's own progress t = (1 - R) / (1 - SEEP_R0)
+		// in a teardrop at its own progress tEnd; the zone's own progress t = (1 - R) / (1 - SEEP_R0). Not in the
+		// reflection passes (mirror and probe: the lines would alias there)
 		float t = clamp( ( 1.0 - R ) / ( 1.0 - BR_WL_SEEP_R0 ), 0.0, 1.0 );
 		float col = floor( s2.x / 0.1 );
 		uint h = brHash2u( brWrap( ivec2( int( col ), 0 ), ivec2( int( BR_NOISE_WRAP / 0.1 + 0.5 ), 1 ) ), 877u );
-		if ( brU01( h ) < 0.6 ) {
+		if ( brU01( h ) < 0.6 && uBrReflPass < 0.5 ) {
 			float h1 = brU01( brPcg( h ) ), h2 = brU01( brPcg( h + 1u ) ), h3 = brU01( brPcg( h + 2u ) );
 			float wob = brVNoise( vec2( col * 7.31, s2.y / 0.05 ), ivec2( 1 << 20, int( BR_PITCH / 0.05 + 0.5 ) ), 881u ) - 0.5;
 			float cx = ( col + 0.3 + 0.4 * h1 ) * 0.1 + 0.02 * wob;
@@ -215,7 +218,7 @@ if ( brRoll ) {
 	brOrmh.g = clamp( brOrmh.g + 0.03 * ( brU01( brPcg( brRollH + 0x9e3779b9u ) ) * 2.0 - 1.0 ), 0.03, 1.0 );
 }
 #if BR_DETAIL == 1 && ! defined( BR_DECAL )
-if ( brL == BR_WL_M_DRYWALL && ! brHoriz ) {
+if ( brL == BR_WL_M_DRYWALL && ! brHoriz && uBrReflPass < 0.5 ) {
 	float wlFp0 = max( 0.5 * ( fwidth( brS2.x ) + fwidth( brS2.y ) ), 1e-5 );
 	float wlFade0 = 1.0 - smoothstep( 0.004, 0.012, wlFp0 );
 	// screw spots: studs every 0.4 m (the 1.2 m sheet edges and joints on every third), screws every 0.3 m up each stud.
@@ -270,7 +273,7 @@ const WALLPAPER_DAMAGE = /* glsl */ `
 			float dS = brS2.x - sK * BR_WALL_ROLL;
 			uint hsm = brHash2u( brWrap( ivec2( int( sK ), 0 ), ivec2( BR_WALL_ROLL_P, 1 ) ), 613u + wlOr * 13u );
 			float um = brU01( hsm );
-			if ( ! brHoriz && um >= 0.6 && abs( dS ) < 0.03 ) {
+			if ( ! brHoriz && um >= 0.6 && abs( dS ) < 0.03 && uBrReflPass < 0.5 ) {
 				float h2 = brU01( brPcg( hsm ) ), h3 = brU01( brPcg( hsm + 1u ) );
 				if ( um < 0.85 ) {
 					float gap = brWlLine( dS, mix( 0.00015, 0.0004, h2 ), wlFp );
@@ -310,7 +313,7 @@ const WALLPAPER_DAMAGE = /* glsl */ `
 			}
 			// damp cockle: the swollen paper bubbles 1.5 mm over ~6 cm and turns a little glossier
 			float ck = smoothstep( 0.3, 0.6, brMask.b + min( brMask.r, BR_WL_STAIN_MAX ) );
-			if ( ck > 0.0 && ! brHoriz ) {
+			if ( ck > 0.0 && ! brHoriz && uBrReflPass < 0.5 ) {
 				brWlBump += ck * 0.0015 * brWlNoiseD( brS2, 0.06, 953u ).yz;
 				brOrmh.g = max( brOrmh.g - 0.05 * ck, 0.03 );
 			}
@@ -321,7 +324,7 @@ const WALLPAPER_DAMAGE = /* glsl */ `
 // cores) with a shadowed lip, chips in the trim down to the MDF, and blisters where the wall is damp
 const PAINT_DAMAGE = /* glsl */ `
 		{
-			if ( ! brHoriz ) {
+			if ( ! brHoriz && uBrReflPass < 0.5 ) {
 				float y = vBrLocal.y;
 				float band = smoothstep( 0.04, 0.1, y ) * ( 1.0 - smoothstep( 0.35, 0.45, y ) )
 					+ 0.6 * smoothstep( 0.66, 0.72, y ) * ( 1.0 - smoothstep( 0.92, 0.98, y ) );
@@ -343,7 +346,7 @@ const PAINT_DAMAGE = /* glsl */ `
 				float edge = ( 1.0 - ex ) * brWlBand( - dE, 0.0004, 0.001, wlFp );
 				brA *= ( 1.0 - 0.35 * lip ) * ( 1.0 + 0.08 * edge );
 			}
-			if ( brL == BR_WL_M_TRIM ) {
+			if ( brL == BR_WL_M_TRIM && uBrReflPass < 0.5 ) {
 				// chips: 12 mm cells, a 1-6 mm chip down to the MDF with a dark broken lip, mostly on the top face and the
 				// top arris of a baseboard, more where the grime is heavy
 				vec2 cq = brS2 / 0.012;
@@ -364,7 +367,7 @@ const PAINT_DAMAGE = /* glsl */ `
 				}
 			}
 			float damp = clamp( brMask.b + brMask.a, 0.0, 1.0 );
-			if ( damp > 0.2 && ! brHoriz ) {
+			if ( damp > 0.2 && ! brHoriz && uBrReflPass < 0.5 ) {
 				// blisters: 15 mm cells, a 3-7 mm dome 0.4 mm high in up to 45 % of them (more where it is wetter)
 				vec2 bq = brS2 / 0.015;
 				vec2 bc = floor( bq );
@@ -392,7 +395,7 @@ const WALL_FADES = /* glsl */ `
 // poster's traces (p 0.12: four tack holes and yellowed, glossy tape residue at its top corners); the hand zones near
 // openings (the mask's G at 0.9-1.5 m) are burnished glossier as well as dirtier
 const WALL_LIFE = /* glsl */ `
-		if ( BR_DETAIL == 1 && ! brHoriz && brL != BR_WL_M_TRIM ) {
+		if ( BR_DETAIL == 1 && ! brHoriz && brL != BR_WL_M_TRIM && uBrReflPass < 0.5 ) {
 			vec3 lfAn = abs( brNWg );
 			int lfOr = lfAn.x > lfAn.z ? ( brNWg.x > 0.0 ? 0 : 1 ) : ( brNWg.z > 0.0 ? 2 : 3 );
 			float gx = floor( brS2.x / 2.4 );

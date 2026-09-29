@@ -6,8 +6,9 @@
 // fine field that roughens the fronts is the tile's own relief (water wicks along the fissures), the D5 multiplier and
 // two world noise octaves. Each 0.6 m tile absorbs a little differently and its front spacing is its
 // own, so a stain steps at the T-bars (water does not cross them). A few tiles are displaced (a dark plenum wedge at a
-// lifted edge), sag or are replacements from another lot; their tilt is a world-space height gradient (brClBump) that
-// the normal hook adds.
+// lifted edge), sag or are replacements from another lot (on the shell only: not the tile debris props); their tilt is
+// a world-space height gradient (brClBump) that the normal hook adds. The reflection passes skip the states (the
+// wedge would alias there).
 
 import { STAIN_FRONT } from '../grimeLib.ts';
 import { f } from '../params.ts';
@@ -96,7 +97,8 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 		// tile states: 3 % displaced (one edge lifted off its flange: a dark plenum wedge opening to 15 mm along that
 		// edge, the face tilted 2 degrees), 12 % sagging with humidity (0.7 degrees at the edges, the centre a shade
 		// darker), 6 % replacements from another lot (whiter, less yellow). The T-bar (brAux = 1 - bar) stays put
-		if ( BR_DETAIL == 1 && brHoriz ) {
+#ifdef BR_SHELL
+		if ( BR_DETAIL == 1 && brHoriz && uBrReflPass < 0.5 ) {
 			float us = brU01( brPcg( ht + 31u ) );
 			vec2 lc = ( tfr - 0.5 ) * 0.6; // metres from the tile centre
 			if ( us < 0.03 ) {
@@ -118,6 +120,7 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 				brA = mix( brA, mix( fr, vec3( brLuma( fr ) ), 0.3 ), brAux );
 			}
 		}
+#endif
 	}
 `,
   postWet: '',
