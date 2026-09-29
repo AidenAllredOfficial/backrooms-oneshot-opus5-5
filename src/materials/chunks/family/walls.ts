@@ -75,13 +75,25 @@ void brWlFronts( float sp, float wpIn, float wAA, float L0, float L1, float L2, 
 	tide *= amp;
 	inside = smoothstep( L0 - wo, L0 + wo, sp );
 }
-// the gradient (per metre) of a field on the surface's 2D coordinate s2, from its screen derivatives (uniform control
-// flow only)
-vec2 brWlMetricGrad( float v, vec2 s2 ) {
-	vec2 dp = vec2( dFdx( v ), dFdy( v ) );
-	vec2 sx = dFdx( s2 ), sy = dFdy( s2 );
+// the gradient (per metre) of a field on the surface's 2D coordinate s2 from its screen derivatives dp and those of s2
+// (sx, sy); the derivatives are taken in uniform control flow, the solve may run in a branch
+vec2 brWlGrad2( vec2 dp, vec2 sx, vec2 sy ) {
 	float det = sx.x * sy.y - sx.y * sy.x;
 	return abs( det ) > 1e-14 ? vec2( sy.y * dp.x - sx.y * dp.y, sx.x * dp.y - sy.x * dp.x ) / det : vec2( 0.0 );
+}
+// world value noise on a wall and its gradient (per metre) in one evaluation (4 corner hashes): .x the value 0..1,
+// .yz d/d along, d/d y; cell c metres (c divides NOISE_WRAP and STOREY_PITCH)
+vec3 brWlNoiseD( vec2 s2, float c, uint salt ) {
+	ivec2 P = ivec2( int( BR_NOISE_WRAP / c + 0.5 ), int( BR_PITCH / c + 0.5 ) );
+	vec2 p = s2 / c;
+	ivec2 i = ivec2( floor( p ) );
+	vec2 fr = p - floor( p );
+	float a = brU01( brHash2u( brWrap( i, P ), salt ) ), b = brU01( brHash2u( brWrap( i + ivec2( 1, 0 ), P ), salt ) );
+	float d0 = brU01( brHash2u( brWrap( i + ivec2( 0, 1 ), P ), salt ) ), d1 = brU01( brHash2u( brWrap( i + 1, P ), salt ) );
+	vec2 u = fr * fr * ( 3.0 - 2.0 * fr );
+	vec2 du = 6.0 * fr * ( 1.0 - fr ) / c;
+	float k = a - b - d0 + d1;
+	return vec3( a + ( b - a ) * u.x + ( d0 - a ) * u.y + k * u.x * u.y, du * vec2( b - a + k * u.y, d0 - a + k * u.x ) );
 }
 // world value noise on a wall (along, storey-relative y), cell c metres (c divides NOISE_WRAP and STOREY_PITCH)
 float brWlNoise( vec2 s2, float c, uint salt ) {
@@ -93,11 +105,11 @@ float brWlLine( float d, float hw, float fp ) { return max( 0.0, min( d + 0.5 * 
 // ...and of a small dot of radius r at offset q (a square of the same area, so the coverage is separable and exact)
 float brWlDot( vec2 q, float r, float fp ) { return brWlLine( q.x, 0.886 * r, fp ) * brWlLine( q.y, 0.886 * r, fp ); }
 // signed distance (m) to the level T of a smooth damage field pfS (positive where pfS > T) and the unit direction
-// toward that side, on the wall's (along, y) plane, from the field's screen gradient (derivatives: uniform control flow
-// only); the caller's fine offset ragM (metres) roughens the edge. (A fine field added to pfS before the division
-// crossed T wherever pfS lay near it with a small gradient: thin false edges in long streaks.)
-float brWlEdgeDist( float pfS, float ragM, float T, vec2 s2, out vec2 dir ) {
-	vec2 g = brWlMetricGrad( pfS, s2 );
+// toward that side, on the wall's (along, y) plane, from the field's screen derivatives dp and those of s2 (taken by the
+// caller in uniform control flow); the caller's fine offset ragM (metres) roughens the edge. (A fine field added to pfS
+// before the division crossed T wherever pfS lay near it with a small gradient: thin false edges in long streaks.)
+float brWlEdgeDist( float pfS, vec2 dp, vec2 sx, vec2 sy, float ragM, float T, out vec2 dir ) {
+	vec2 g = brWlGrad2( dp, sx, sy );
 	float gl = length( g );
 	dir = gl > 1e-6 ? g / gl : vec2( 0.0, - 1.0 );
 	return ( pfS - T ) / max( gl, 0.05 ) + ragM;
@@ -162,7 +174,8 @@ void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2,
 // control flow). Low relief is wetter (the paper's formation, emboss and joints steer a front), the detail's dark
 // pores too
 const WALL_FIELDS = /* glsl */ `
-		float wlFp = max( 0.5 * ( fwidth( brS2.x ) + fwidth( brS2.y ) ), 1e-5 );
+		vec2 wlSx = dFdx( brS2 ), wlSy = dFdy( brS2 ); // shared by every metric gradient below
+		float wlFp = max( 0.5 * ( abs( wlSx.x ) + abs( wlSy.x ) + abs( wlSx.y ) + abs( wlSy.y ) ), 1e-5 );
 		float wlFade = 1.0 - smoothstep( 0.004, 0.012, wlFp ); // analytic relief below a few pixels would only sparkle
 		float wlFine = clamp( ( brMuH - brNrm.w ) / 0.15, - 1.0, 1.0 ) * ${f(WALL_STAIN.RELIEF)};
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
@@ -175,9 +188,9 @@ const WALL_FIELDS = /* glsl */ `
 const WALL_STAIN_CALL = /* glsl */ `
 		{
 			float wlS0 = min( brMask.r, BR_WL_STAIN_MAX ) + 0.12 * ( g2.r - 0.5 );
-			float wlW = ${f(STAIN_FRONT.W_PX)} * fwidth( wlS0 );
-			float wlGs = length( brWlMetricGrad( wlS0, brS2 ) );
-			if ( brMask.r > 0.02 ) brWlStain( brA, brRoughMul, brMask, g1, g2, wlFine, wlW, wlGs, brS2, wlFp, vBrLocal.y );
+			vec2 wlDs = vec2( dFdx( wlS0 ), dFdy( wlS0 ) );
+			float wlW = ${f(STAIN_FRONT.W_PX)} * ( abs( wlDs.x ) + abs( wlDs.y ) );
+			if ( brMask.r > 0.02 ) brWlStain( brA, brRoughMul, brMask, g1, g2, wlFine, wlW, length( brWlGrad2( wlDs, wlSx, wlSy ) ), brS2, wlFp, vBrLocal.y );
 		}
 `;
 
@@ -270,8 +283,10 @@ const WALLPAPER_DAMAGE = /* glsl */ `
 			// peeling (mask A, more at the roll seams): the edge distance from the field's screen gradient
 			float seam = 1.0 - smoothstep( 0.0, 0.07, abs( dS ) );
 			float pfS = brMask.a * ( 0.45 + 0.8 * seam ) + ( g2.r - 0.5 ) * 0.3; // the smooth tide field: blobs (the scuff channel made dashes)
+			vec2 pfD = vec2( dFdx( pfS ), dFdy( pfS ) );
 			vec2 pdir;
-			float dE = brWlEdgeDist( pfS, 0.01 * wlFine, 0.55, brS2, pdir );
+			// below A 0.08 the field stays >= 0.28 under T: an edge within 3 cm would need a gradient of 9 / m
+			float dE = brMask.a > 0.08 ? brWlEdgeDist( pfS, pfD, wlSx, wlSy, 0.01 * wlFine, 0.55, pdir ) : - 1.0;
 			if ( dE > - 0.03 ) {
 				float ex = smoothstep( - wlFp, wlFp, dE ); // exposed wall
 				float torn = ex * ( 1.0 - smoothstep( 0.0015, 0.0025 + wlFp, dE ) );
@@ -290,10 +305,7 @@ const WALLPAPER_DAMAGE = /* glsl */ `
 			// damp cockle: the swollen paper bubbles 1.5 mm over ~6 cm and turns a little glossier
 			float ck = smoothstep( 0.3, 0.6, brMask.b + min( brMask.r, BR_WL_STAIN_MAX ) );
 			if ( ck > 0.0 && ! brHoriz ) {
-				float n0 = brWlNoise( brS2, 0.06, 953u );
-				float nx = brWlNoise( brS2 + vec2( 0.004, 0.0 ), 0.06, 953u );
-				float ny = brWlNoise( brS2 + vec2( 0.0, 0.004 ), 0.06, 953u );
-				brWlBump += ck * 0.0015 * vec2( nx - n0, ny - n0 ) / 0.004;
+				brWlBump += ck * 0.0015 * brWlNoiseD( brS2, 0.06, 953u ).yz;
 				brOrmh.g = max( brOrmh.g - 0.05 * ck, 0.03 );
 			}
 		}
@@ -313,7 +325,9 @@ const PAINT_DAMAGE = /* glsl */ `
 			}
 			vec2 pdir;
 			float pfS = brMask.a + ( g2.r - 0.5 ) * 0.3;
-			float dE = brWlEdgeDist( pfS, 0.008 * wlFine, 0.6, brS2, pdir );
+			vec2 pfD = vec2( dFdx( pfS ), dFdy( pfS ) );
+			// below A 0.2 the field stays >= 0.25 under T: an edge within 2 cm would need a gradient of 12 / m
+			float dE = brMask.a > 0.2 ? brWlEdgeDist( pfS, pfD, wlSx, wlSy, 0.008 * wlFine, 0.6, pdir ) : - 1.0;
 			if ( dE > - 0.02 ) {
 				float ex = smoothstep( - wlFp, wlFp, dE );
 				float core = smoothstep( 0.02, 0.06, dE );

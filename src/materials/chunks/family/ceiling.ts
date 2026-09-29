@@ -51,8 +51,9 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 		// the front footprint is the smooth field's: the fine field only moves the fronts (brWlFronts)
 		// leak stains: the mask's wet extent, each tile absorbing a little differently (the fronts step at the T-bars)
 		float cs = brMask.r * mix( 0.88, 1.12, brU01( brPcg( ht + 7u ) ) ) + 0.1 * ( g2.r - 0.5 ) * smoothstep( 0.02, 0.2, brMask.r );
-		float clW = ${f(STAIN_FRONT.W_PX)} * fwidth( cs );
-		float clGs = length( brWlMetricGrad( cs, brS2 ) );
+		vec2 clDc = vec2( dFdx( cs ), dFdy( cs ) );
+		float clW = ${f(STAIN_FRONT.W_PX)} * ( abs( clDc.x ) + abs( clDc.y ) );
+		float clGs = - 1.0; // the metric gradient: solved below only on stained texels (or set by an old stain)
 		// old water stains on a few tiles: an off-centre blotch with a lobed outline, clipped to the tile
 		if ( brHoriz && brU01( hs ) < BR_CEIL_STAIN_P ) {
 			vec2 ctr = 0.3 + 0.28 * vec2( brU01( brPcg( hs ) ), brU01( brPcg( hs + 1u ) ) ) - 0.14;
@@ -71,6 +72,7 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 			}
 		}
 		if ( cs > 0.02 ) {
+			if ( clGs < 0.0 ) clGs = length( brWlGrad2( clDc, clDx, clDy ) );
 			float n12 = ( brClNoise( brS2, 0.012, 811u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, clFp / 0.012 ) );
 			float n40 = ( brClNoise( brS2, 0.04, 823u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, clFp / 0.04 ) );
 			float sp = cs + clGs * ( ${f(WALL_STAIN.M_TEX)} * clFine + ${f(2 * WALL_STAIN.M_12)} * n12 + ${f(2 * WALL_STAIN.M_40)} * n40 );
