@@ -186,16 +186,18 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
 }
 `;
 
-// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). sigma: rough (EON) diffuse of the
-// porous face; dirt: the relief-aware dirt of package 0b (cavity^1.5, stronger near the floor): dust in the joints and
-// voids of the bottom courses
+// trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts). sigma: the EON facet roughness
+// below the detail map (the sand's own facets); 0b adds the unresolved detail variance per axis, so beyond a few metres
+// painted block reaches ~0.33 and raw ~0.43 without counting the resolved grains twice up close. dirt: the
+// relief-aware dirt of package 0b (cavity^1.5, stronger near the floor): dust in the joints and voids of the bottom
+// courses
 export const MASONRY_RECIPES: RecipeTable = {
   [Mat.CMU_PAINTED]: {
     glsl: cmuBlock(true), normalStrength: 1.0, heightScale: CMU_HS, trim: [1.007, 1.007, 1.008], aux: 'detailMask',
-    phys: phys(0.3, { pomTop: 0.95, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.3, dirt: [0.45, 0.41, 0.35, 1] }),
+    phys: phys(0.3, { pomTop: 0.95, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.2, dirt: [0.45, 0.41, 0.35, 1] }),
   },
   [Mat.CMU_RAW]: {
     glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.96, 0.965, 0.98], aux: 'detailMask',
-    phys: phys(0.6, { pomTop: 0.95, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.45, dirt: [0.55, 0.52, 0.46, 1] }),
+    phys: phys(0.6, { pomTop: 0.95, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.3, dirt: [0.55, 0.52, 0.46, 1] }),
   },
 };

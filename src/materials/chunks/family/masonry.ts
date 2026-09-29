@@ -37,10 +37,6 @@ export const CMU_DET_VAR_MEAN: Readonly<Record<number, number>> = { [Mat.CMU_PAI
  * so blocks whose flashing, class and distance put them around the cut popped between the paths as the camera moved. */
 export const CMU_PAINTED_MAX_ROUGH = Number((SSR.ELIG_ROUGH - 0.03).toFixed(3));
 
-/** Until package 0b multiplies the detail strength by the 'detailMask' channel itself, the family applies it on CMU
- * (1 = on). */
-const DETAIL_MASK_SHIM = 1;
-
 const f = (x: number): string => (Number.isInteger(x) ? `${x}.0` : String(x));
 const v3 = (c: readonly number[]): string => `vec3( ${c.map(f).join(', ')} )`;
 /** Masonry grime colours: seepage (x 0.86 with a brown tint) and efflorescence salts. */
@@ -110,11 +106,11 @@ if ( brMsOn ) {
 `,
   postDetail: /* glsl */ `
 	if ( brMsOn ) {
-		// block class and the smoother tooled joints (${DETAIL_MASK_SHIM ? 'detail-mask shim until 0b applies brAux' : 'block class only'})
-		float k = brMsDet * mix( 1.0, brAux, ${f(DETAIL_MASK_SHIM)} );
-		brDetSl *= k;
-		brDetVar *= k * k;
-		brAm = 1.0 + k * ( brAm - 1.0 );
+		// the block's texture class (the tooled joints' weaker aggregate is 0b's: the 'detailMask' channel scales the
+		// strength before the fetch)
+		brDetSl *= brMsDet;
+		brDetVar *= brMsDet * brMsDet;
+		brAm = 1.0 + brMsDet * ( brAm - 1.0 );
 	}
 `,
   grime: /* glsl */ `
@@ -186,8 +182,11 @@ if ( brMsOn ) {
 			// out along the joints; brownish, not black
 			float wR = step( 0.02, brMask.r );
 			float s = brMask.r + ( g1.r - 0.5 ) * 0.3 * wR + 0.05 * jM * wR;
-			float damp = smoothstep( 0.42, 0.5, s );
-			float front = ( 1.0 - smoothstep( 0.0, 0.05, abs( s - 0.47 ) ) ) * wR;
+			// nested, ragged tide fronts (0b's brStainFront), roughened by the grime speckle
+			float damp, front;
+			brStainFront( s, ( g2.g - 0.5 ) * 2.0, 0.46, damp, front );
+			damp *= wR;
+			front *= wR;
 			brA *= mix( vec3( 1.0 ), ${v3(SEEPAGE)}, damp );
 			// efflorescence: salt crust along the drying front and blooming in the joints (salts migrate through the
 			// mortar), in streaks down the damp area of the bottom 0.6 m

@@ -65,6 +65,6 @@ ${painted ? `  // paint: the film rounds the crowns and fills between them (smoo
 
 export const MASONRY_DETAILS: DetailTable = {
   [Det.GLAZE]: { name: 'GLAZE', glsl: GLAZE, heightScale: 0.00018, slope: 0.02, roughK: 0.1, cavity: 0.3 },
-  [Det.CMU_FACE]: { name: 'CMU_FACE', glsl: cmuFace(true), heightScale: 0.0044, slope: 1.6, roughK: 0.2, cavity: 0.6 },
-  [Det.CMU_RAW]: { name: 'CMU_RAW', glsl: cmuFace(false), heightScale: 0.0028, slope: 1.8, roughK: 0.25, cavity: 0.7 },
+  [Det.CMU_FACE]: { name: 'CMU_FACE', glsl: cmuFace(true), heightScale: 0.0046, slope: 1.6, roughK: 0.2, cavity: 1.0 },
+  [Det.CMU_RAW]: { name: 'CMU_RAW', glsl: cmuFace(false), heightScale: 0.0028, slope: 1.8, roughK: 0.25, cavity: 1.0 },
 };
