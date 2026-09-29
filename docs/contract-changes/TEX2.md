@@ -101,6 +101,49 @@ v2 conventions").
 
 ## Lane A: textiles
 
+### 2026-09-28 — textiles: pile visibility, nap, rebuilt carpet / fabric recipes and D0 / D1 / D7 — APPLIED
+- **Status:** APPLIED by lane A on its branch (merge pending), on top of 0b (merged into the lane at ff42a23): EON
+  `sigma` L0 0.75, office 0.5, fabric 0.4.
+- **`src/core/materials.ts` LAYER_DEFS** (world output; `tests/world/golden.json` does not hash material uvs and is
+  unchanged): CARPET_L0 `repeat` 2.4 → 1.2, `hexTile` 1.2 → 0.6; CARPET_OFFICE `repeat` 2.4 → 1.2 (tiles stay 0.6 m).
+- **Recipe rows (`textures/layers/carpet.ts`):** CARPET_L0 and CARPET_OFFICE `aux: 'lean'` (ormh.b/a = pile lean;
+  no metalness), `phys.pile` L0 [1.0, 0.8], office [1.0, 1.2], FABRIC_PARTITION [0.6, 1.5]; sheen L0 0.3 @ 0.42, office
+  0.3 @ 0.55, fabric 0.45 @ 0.65; trims 1.03-1.06 (the office palette now hits the table albedo: its 1.46 / 1.36 /
+  1.20 trim is gone); ormh.r of the three is the pile visibility V (means 0.61 / 0.78 / 0.88).
+- **Detail maps:** D0, D1, D7 rewritten in place (ids, sizes and slots unchanged); their regular periods are 2, 4
+  or 8 texels (other periods beat in the box-filtered mips).
+- **Shading (`chunks/family/textile.ts`), for the core owners:**
+  - matPost scales `material.diffuseContribution` on layers with `pile.x > 0` (before `brDiffRoom` captures it, so the
+    punctual lights, the baked light and the ambient all see it) and postLight divides the generic texture-cavity
+    multiply (`brCav`) back out of `reflectedLight.indirectDiffuse`; the hooks read the pile rows through generated
+    layer compares, not the dynamically indexed `BR_L_PILE` (same data);
+  - the Level 0 pile trap moved from `gl_FragColor` (preFog, now empty) to the diffuse (T 0.69 × chroma^0.3);
+  - postDetail sets `brAm = 1` on pile layers (their detail multiplier is applied as visibility in matPost);
+  - a lane that wants to scale a punctual light's diffuse apart from the baked light's (the planned torch retro term)
+    needs a core hook between lights_fragment_begin and the baked light; none exists, so lane A left it out;
+  - the carpet grime branch overrides `wet` / `brWet` with a narrow wicking front (the porosity model's absorption
+    therefore follows it on carpets) and writes `brOrmh.r` in worn lanes;
+  - postWet raises `brOrmh.r` to 1 on pile layers under standing water and a saturated film (`max( brPuddle, brFilm )`),
+    so `brCav`, the specular occlusion and the SSR weight see the water surface, not the tuft gaps; Dv reads the V
+    saved before it (`brTxVis`);
+  - `brPileLean` (surface.ts) is no longer written; the sheen roughness no longer follows the lean (TUNE
+    `CARPET_PILE_SHADE`, `CARPET_PILE_CELL`, `SHEEN_LEAN_ROUGH`, `CARPET_WEAR_LIGHTEN` are now unused);
+  - debug view 25 `textile`: r = Dv, g = nap diffuse factor / 2, b = 0.5 + 0.5 s.
+- **Stale WP9 text (lane 0's paragraphs):** the WP9 sheen sentence ("colour = amount · sqrt(albedo) …, roughness
+  from the pile lean") and the carpet grime bullet describe the old model; DESIGN.md WP8 "Lane A: textiles" has the
+  current one.
+- **Budget (over):** whole frame against tex-integ 3eb5d47 (`gpuBench(20)`): high +0.24 ms on gallery 00, +0.26
+  Level 0 straight down, +0.09 EXECUTIVE_SUITE, +0.03 without textiles; ultra +0.55 / +0.65 / +0.18 / ±0.02, against
+  +0.03 / +0.07 allowed. About 0.1 ms of a carpet-filled frame at high is SMAA reacting to the pile's contrast.
+  Generation times unchanged within noise; 0 MB (DESIGN.md WP8 lane A, Cost).
+- **For lane 0:** `BR_L_SIGMA[ brL ]` (materialPost.ts) and `BR_L_PILE[ brL ]` (pom.ts FRAG_DIRVIS) are dynamically
+  indexed const arrays; generated compares (as textile.ts does for its pile gate) measured 0.01-0.04 ms cheaper at high
+  once rows are non-zero.
+- **Pile gaps:** matPost colours the gaps deeper at the same luminance (`pileGap`): the visibility K becomes
+  K + (1 − K) 0.15 (c / m − 1) per channel; the calibrations are unchanged.
+- **Consumers affected:** lane 0b (FRAG_DIRVIS skips `pile.x > 0` as planned: Dv replaces it); the integrator
+  (gallery calibration: gallery 11 carpet / wall ratio −4 % at high, +3 % at medium against a5c03e1).
+
 ## Lane B: concrete, terrazzo, floor paint
 
 ### 2026-09-28 — lane B: layer rows, stripe decal uv, hard-floor traffic wear, D12 / D13 — APPLIED
