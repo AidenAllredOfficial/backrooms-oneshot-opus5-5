@@ -23,11 +23,11 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 /** D12 troweled slab (CONCRETE_FLOOR; the FLOOR_PAINT decals fetch it too, so the stripes carry the slab's speckle):
- * the paste between the grains is burnished smooth (tens of microns), so the texture is tone, not relief: two sand
- * populations on a 1.4 mm lattice (light quartz / limestone grains +40 % on 30 % of the cells, dark mineral and dirt
- * specks -55 % on 8 %) over coarse 2-3 mm sand (+30 % / -45 %), 0.4-2 mm pinholes (7 % of a 17 mm lattice: ~250 / m^2) with dark dirty cores, steep walls
- * and a paler lip, and ~8 dragged micro-scratches per tile (1-4 cm, 0.05-0.1 mm half-width) that the traffic lanes
- * turn into LEAN roughness. */
+ * the paste between the grains is burnished smooth (tens of microns), so the texture is mostly tone, not relief: two
+ * sand populations on a 1.4 mm lattice (light quartz / limestone grains +40 % on 30 % of the cells, dark mineral and
+ * dirt specks -55 % on 8 %) over coarse 2-3 mm sand (+30 % / -45 %), the grains ~60 microns proud of the paste,
+ * 0.4-2 mm pinholes (7 % of a 17 mm lattice: ~250 / m^2) with dark dirty cores, steep walls and a paler lip, and ~8
+ * dragged micro-scratches per tile (1-4 cm, 0.05-0.1 mm half-width) that the traffic lanes turn into LEAN roughness. */
 const SLAB = /* glsl */ `
 #define SS 4
 void gen(vec2 uv, inout Surf s) {
@@ -67,7 +67,7 @@ void gen(vec2 uv, inout Surf s) {
       }
     }
   }
-  s.height = 0.5 + 0.04 * paste + 0.05 * light - 1.0 * pin + 0.08 * lip - 0.2 * scr;
+  s.height = 0.5 + 0.1 * paste + 0.1 * light + 0.06 * cLight - 1.0 * pin + 0.08 * lip - 0.2 * scr;
   s.albedo = vec3((1.0 + 0.4 * light - 0.55 * dark + 0.08 * paste) * (1.0 + 0.3 * cLight - 0.45 * cDark)
     * (1.0 - 0.65 * pin) * (1.0 + 0.03 * lip) * (1.0 + 0.05 * scr));
 }

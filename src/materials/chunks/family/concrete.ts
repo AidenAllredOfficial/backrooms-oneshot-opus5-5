@@ -149,25 +149,27 @@ float brcSegD( vec2 p, vec2 a, vec2 b, out float h ) {
 	h = clamp( dot( pa, ba ) / dot( ba, ba ), 0.0, 1.0 );
 	return length( pa - ba * h );
 }
+// 10-bit fields of a hash (fewer PCG rounds per floor pixel)
+float brcBits( uint h, uint shift ) { return float( ( h >> shift ) & 1023u ) * ( 1.0 / 1023.0 ); }
 float brcSlabCrack( vec2 s2, ivec2 pid, float p, float pf, out float hal ) {
 	hal = 0.0;
 	uint h = brHash2u( brWrap( pid, ivec2( BR_CONCRETE_JOINT_P ) ), 1741u );
 	if ( brU01( h ) >= p ) return 0.0;
-	uint h1 = brPcg( h ), h2 = brPcg( h1 ), h3 = brPcg( h2 ), h4 = brPcg( h3 );
-	int e0 = int( brU01( h1 ) * 4.0 );
-	int e1 = ( e0 + 1 + int( brU01( h2 ) * 3.0 ) ) & 3;
+	uint h1 = brPcg( h ), h2 = brPcg( h1 );
+	int e0 = int( h1 & 3u );
+	int e1 = ( e0 + 1 + int( ( ( h1 >> 2 ) & 255u ) % 3u ) ) & 3;
 	vec2 o = vec2( pid ) * BR_CONCRETE_JOINT;
-	vec2 A = o + brcCrackEnd( e0, mix( 0.15, 0.85, brU01( h3 ) ) ) * BR_CONCRETE_JOINT;
-	vec2 B = o + brcCrackEnd( e1, mix( 0.15, 0.85, brU01( h4 ) ) ) * BR_CONCRETE_JOINT;
+	vec2 A = o + brcCrackEnd( e0, mix( 0.15, 0.85, brcBits( h1, 10u ) ) ) * BR_CONCRETE_JOINT;
+	vec2 B = o + brcCrackEnd( e1, mix( 0.15, 0.85, brcBits( h1, 20u ) ) ) * BR_CONCRETE_JOINT;
 	// run the segment 15 cm past both edges: the warp may shift its ends, the panel boundary clips it at the joint
 	vec2 dAB = normalize( B - A ) * 0.15;
 	A -= dAB;
 	B += dAB;
-	bool br = brU01( brPcg( h4 ) ) < 0.35;
-	float tb = mix( 0.25, 0.75, brU01( brPcg( h4 + 1u ) ) );
+	bool br = brcBits( h2, 0u ) < 0.35;
+	float tb = mix( 0.25, 0.75, brcBits( h2, 10u ) );
 	vec2 C = A + ( B - A ) * tb;
 	int e2 = e0 == ( ( e1 + 1 ) & 3 ) ? ( e1 + 3 ) & 3 : ( e1 + 1 ) & 3;
-	vec2 D = o + brcCrackEnd( e2, mix( 0.2, 0.8, brU01( brPcg( h4 + 2u ) ) ) ) * BR_CONCRETE_JOINT;
+	vec2 D = o + brcCrackEnd( e2, mix( 0.2, 0.8, brcBits( h2, 20u ) ) ) * BR_CONCRETE_JOINT;
 	D += normalize( D - C ) * 0.15;
 	float hh;
 	float d0 = brcSegD( s2, A, B, hh );
@@ -190,20 +192,15 @@ float brcSlabCrack( vec2 s2, ivec2 pid, float p, float pf, out float hal ) {
 	// sub-pixel line: rendered at least 0.35 pixel wide with the darkness scaled by the true width (no shimmer)
 	float hr = max( hw, 0.35 * pf );
 	float core = ( 1.0 - smoothstep( hr - 0.5 * pf, hr + 0.5 * pf, d ) ) * ( hw / hr );
-	hal = 1.0 - smoothstep( 0.0, mix( 0.003, 0.006, brU01( h2 ) ) + pf, d );
+	hal = 1.0 - smoothstep( 0.0, mix( 0.003, 0.006, float( h2 >> 30 ) / 3.0 ) + pf, d );
 	return core;
 }
 // The slab system of an up-facing CONCRETE_FLOOR (and FLOOR_PAINT stripes over it): joints, spalls, pours, panels and
-// cracks. vw: world direction to the eye. Writes albedo multiplier am, roughness multiplier rm, the tangent normal of
-// the joint faces nj with weight nw, a roughness target (rt, rtw) and a cavity multiplier cav.
-void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 nj, out float nw, out float rt, out float rtw, out float cav ) {
-	am = vec3( 1.0 );
-	rm = 1.0;
-	nj = vec3( 0.0, 0.0, 1.0 );
-	nw = 0.0;
-	rt = 0.0;
-	rtw = 0.0;
-	cav = 1.0;
+// cracks, applied in place to the surface state (albedo a, roughness multiplier rm, the filtered tangent normal nrm of
+// length nlen, ormh: r cavity, g roughness). paint: a stripe (joints only). Returns the joint coverage of the pixel.
+// Most pixels leave after a few hashes (no crack within 0.1 m, no joint within 4 cm): the kerf and the view vector
+// are only evaluated near a joint.
+float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm, float nlen, inout vec4 ormh ) {
 	vec2 fw = max( fwidth( s2 ), vec2( 1e-5 ) );
 	ivec2 pid = ivec2( floor( s2 / BR_CONCRETE_JOINT ) );
 	if ( ! paint ) {
@@ -211,44 +208,40 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 		ivec2 pour = ivec2( floor( vec2( pid ) / vec2( 4.0, 2.0 ) ) );
 		uint hp = brHash2u( brWrap( pour, ivec2( BR_CONCRETE_JOINT_P / 4, BR_CONCRETE_JOINT_P / 2 ) ), 1613u );
 		uint hq = brHash2u( brWrap( pid, ivec2( BR_CONCRETE_JOINT_P ) ), 1619u );
-		float vp = brU01( hp ) * 2.0 - 1.0;
-		float vq = brU01( hq ) * 2.0 - 1.0;
-		float hue = brU01( brPcg( hp ) ) * 2.0 - 1.0;
-		am *= ( 1.0 + 0.06 * vp + 0.03 * vq ) * vec3( 1.0 + 0.012 * hue, 1.0, 1.0 - 0.012 * hue );
-		rm *= mix( 0.85, 1.15, brU01( brPcg( hp + 3u ) ) ) * mix( 0.95, 1.05, brU01( brPcg( hq ) ) );
+		float hue = brcBits( hp, 10u ) * 2.0 - 1.0;
+		a *= ( 1.0 + 0.06 * ( brcBits( hp, 0u ) * 2.0 - 1.0 ) + 0.03 * ( brcBits( hq, 0u ) * 2.0 - 1.0 ) ) * vec3( 1.0 + 0.012 * hue, 1.0, 1.0 - 0.012 * hue );
+		rm *= mix( 0.85, 1.15, brcBits( hp, 20u ) ) * mix( 0.95, 1.05, brcBits( hq, 10u ) );
 		float hal;
 		float cr = brcSlabCrack( s2, pid, 0.6, max( fw.x, fw.y ), hal );
-		if ( cr > 0.0 || hal > 0.0 ) {
-			am *= ( 1.0 - 0.65 * cr ) * ( 1.0 - 0.07 * hal );
+		if ( hal > 0.0 ) {
+			a *= ( 1.0 - 0.65 * cr ) * ( 1.0 - 0.07 * hal );
 			rm *= 1.0 + 0.12 * hal;
-			cav *= ( 1.0 - 0.4 * cr ) * ( 1.0 - 0.1 * hal );
+			ormh.r *= ( 1.0 - 0.4 * cr ) * ( 1.0 - 0.1 * hal );
 		}
 	}
 	// joints: the nearer of the two line families
 	vec2 lj = floor( s2 / BR_CONCRETE_JOINT + 0.5 );
 	vec2 jx = s2 - lj * BR_CONCRETE_JOINT; // signed metres from the nearest x-line (x) / z-line (y)
 	vec2 ajx = abs( jx );
-	if ( min( ajx.x, ajx.y ) > 0.04 + 2.0 * max( fw.x, fw.y ) ) return;
+	if ( min( ajx.x, ajx.y ) > 0.04 + 2.0 * max( fw.x, fw.y ) ) return 0.0;
 	bool zl = ajx.y < ajx.x; // nearer to a z = const line: across = z
 	float x = zl ? jx.y : jx.x;
-	float al = zl ? s2.x : s2.y;
 	int li = int( zl ? lj.y : lj.x );
+	vec3 vw = ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz; // world direction to the eye
 	float t = - ( zl ? vw.z : vw.x ) / max( vw.y, 0.05 );
-	float fx = zl ? fw.y : fw.x;
 	uint hl = brHash2u( brWrap( ivec2( li, zl ? 1 : 0 ), ivec2( BR_CONCRETE_JOINT_P, 2 ) ), 1627u );
-	bool filled = brU01( hl ) < 0.7;
 	float ka, kr, kc;
 	vec3 kn;
-	float cov = brcJoint( x, al, li, t, fx, filled, ka, kn, kr, kc );
+	float cov = brcJoint( x, zl ? s2.x : s2.y, li, t, zl ? fw.y : fw.x, brU01( hl ) < 0.7, ka, kn, kr, kc );
 	// dirt collected beside the cut
-	am *= ka * ( 1.0 - 0.12 * ( 1.0 - smoothstep( 0.0, 0.025, abs( x ) ) ) );
-	cav *= kc;
+	a *= ka * ( 1.0 - 0.12 * ( 1.0 - smoothstep( 0.0, 0.025, abs( x ) ) ) );
+	ormh.r *= kc;
 	if ( cov > 0.0 ) {
-		nj = zl ? vec3( 0.0, kn.x, kn.z ) : kn; // the across axis is the tangent y (world z) for z-lines
-		nw = cov;
-		rt = kr;
-		rtw = cov;
+		ormh.g = mix( ormh.g, kr, cov );
+		// the across axis is the tangent y (world z) for z-lines
+		nrm.xyz = mix( nrm.xyz, normalize( zl ? vec3( 0.0, kn.x, kn.z ) : kn ) * nlen, cov );
 	}
+	return cov;
 }
 `,
   postSample: /* glsl */ `
@@ -279,11 +272,10 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 		}
 		// the slab's saw-cut joints run through the stripe: the filler and the kerf stay unpainted (the slab shows)
 		if ( BR_DETAIL == 1 ) {
-			vec3 brcAm, brcN;
-			float brcRm, brcNw, brcRt, brcRtw, brcCav;
-			vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
-			brcSlab( brS2, brcV, true, brcAm, brcRm, brcN, brcNw, brcRt, brcRtw, brcCav );
-			brAlpha *= 1.0 - brcNw;
+			float brcRm = 1.0;
+			vec3 brcA = vec3( 1.0 );
+			vec4 brcN = vec4( 0.0, 0.0, 1.0, 0.0 ), brcO = vec4( 1.0 );
+			brAlpha *= 1.0 - brcSlab( brS2, true, brcA, brcRm, brcN, 1.0, brcO );
 		}
 #ifdef BR_DETAIL_MAPS
 		// the slab's detail (D12, world-anchored) through the thin film: speckle and pinholes continue under the paint
@@ -360,15 +352,7 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 			// joints, pours and cracks belong to the slab (the FLOOR_AUX floor faces), not to stair treads and block tops
 			bool brcSlabOn = ( brF & BR_F_FLOOR_AUX ) != 0;
 			if ( brcSlabOn && BR_DETAIL == 1 && uBrReflPass < 0.5 ) {
-				vec3 brcAm, brcN;
-				float brcRm, brcNw, brcRt, brcRtw, brcCav;
-				vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
-				brcSlab( brS2, brcV, false, brcAm, brcRm, brcN, brcNw, brcRt, brcRtw, brcCav );
-				brA *= brcAm;
-				brRoughMul *= brcRm;
-				brOrmh.g = mix( brOrmh.g, brcRt, brcRtw );
-				brOrmh.r *= brcCav;
-				if ( brcNw > 0.0 ) brNrm.xyz = mix( brNrm.xyz, normalize( brcN ) * brNLen, brcNw );
+				brcSlab( brS2, false, brA, brRoughMul, brNrm, brNLen, brOrmh );
 			} else if ( brcSlabOn ) {
 				// low quality and the planar mirror pass: the joints as their mean darkening only
 				vec2 brcJd = abs( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT;
