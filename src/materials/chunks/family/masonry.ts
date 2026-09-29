@@ -4,6 +4,7 @@
 
 import { Mat } from '../../../core/ids.ts';
 import { NOISE_WRAP, STOREY_PITCH } from '../../../core/constants.ts';
+import { SSR } from '../../../post/ssr/ssrGlsl.ts';
 import { CMU_BLOCK, CMU_BOND } from '../../../textures/layers/masonry.ts';
 import type { FamilyHooks } from './index.ts';
 
@@ -16,10 +17,10 @@ import type { FamilyHooks } from './index.ts';
  * glossier, less texture), heavily filled blocks (less texture), open blocks (more texture).
  */
 export const CMU_VARIATION = {
-  painted: { value: 0.04, warm: 0.01, rough: 0.1 },
+  painted: { value: 0.032, warm: 0.01, rough: 0.05 },
   raw: { value: 0.06, warm: 0.02, rough: 0.03 },
   tilt: 0.0044,
-  touchUp: { p: 0.06, value: 0.03, rough: -0.08, detail: 0.8 },
+  touchUp: { p: 0.06, value: 0.025, rough: -0.04, detail: 0.85 },
   filled: { p: 0.04, detail: 0.6 },
   open: { p: 0.1, detail: 1.25 },
   /** detail uv offset per block (detail repeats): the aggregate never continues across a joint */
@@ -29,6 +30,12 @@ export const CMU_VARIATION = {
 /** Unresolved detail slope variance E[|s|^2] of D14 / D15 (harness extra=detail, stats().detailMoments rmsSlope^2),
  * added to alpha^2 where no detail maps are bound (low / medium), so block walls keep their matte sheen there. */
 export const CMU_DET_VAR_MEAN: Readonly<Record<number, number>> = { [Mat.CMU_PAINTED]: 0.12, [Mat.CMU_RAW]: 0.18 };
+
+/** Upper bound of painted CMU's lobe roughness once the aggregate is unresolved: real painted block measures about
+ * 0.62-0.7 beyond 2 m (the film's 0.52 broadened by the grain slopes), and every block of a wall must stay on one
+ * side of SSR's G-buffer eligibility cut (SSR.ELIG_ROUGH 0.7). Its two paths differ by the lamps' glossy reflection,
+ * so blocks whose flashing, class and distance put them around the cut popped between the paths as the camera moved. */
+export const CMU_PAINTED_MAX_ROUGH = Number((SSR.ELIG_ROUGH - 0.03).toFixed(3));
 
 /** Until package 0b multiplies the detail strength by the 'detailMask' channel itself, the family applies it on CMU
  * (1 = on). */
@@ -139,6 +146,7 @@ if ( brMsOn ) {
 					brA = mix( brA, mix( ra, ${v3(EFFLORESCENCE)}, 0.35 * smoothstep( 0.3, 0.9, g1.g + 0.3 * g2.r ) ), fl );
 					brNrm.xyz = mix( brNrm.xyz, rn, fl );
 					brOrmh.g = mix( brOrmh.g, 0.9, fl );
+				brRoughMul *= mix( 1.0, 1.4, fl ); // over the painted layer's roughness cap (rough hook): raw ~0.9
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 					brDetSl *= 1.0 + 0.4 * fl;
 					brDetVar *= 1.0 + 0.9 * fl;
@@ -202,6 +210,9 @@ if ( brMsOn ) {
 if ( brL == BR_M_CMU_PAINTED ) brRt = sqrt( sqrt( pow4( brRt ) + ${f(CMU_DET_VAR_MEAN[Mat.CMU_PAINTED])} * brAux * brAux ) );
 else if ( brL == BR_M_CMU_RAW ) brRt = sqrt( sqrt( pow4( brRt ) + ${f(CMU_DET_VAR_MEAN[Mat.CMU_RAW])} * brAux * brAux ) );
 #endif
+// painted block stays on one side of the SSR cut (CMU_PAINTED_MAX_ROUGH; flakes get their raw roughness from
+// brRoughMul, applied after this)
+if ( brL == BR_M_CMU_PAINTED ) brRt = min( brRt, ${f(CMU_PAINTED_MAX_ROUGH)} );
 `,
   normal: '',
   matPost: '',
