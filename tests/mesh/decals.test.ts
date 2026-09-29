@@ -9,7 +9,7 @@ import { DECAL_PAINT_STRIPE, Mat, VFlag } from '../../src/core/ids.ts';
 import type { ChunkLayout, DecalPlacement } from '../../src/core/layout.ts';
 import type { MeshBuffers } from '../../src/core/mesh.ts';
 import { buildTile } from '../../src/mesh/buildTile.ts';
-import { decalFrame, digitRect, parkingNumber } from '../../src/mesh/decals.ts';
+import { decalFrame, digitRect, parkingNumber, stripeV0 } from '../../src/mesh/decals.ts';
 import { Scene } from './fixtures.ts';
 import { asciiNb, tileKey } from './helpers.ts';
 
@@ -129,6 +129,19 @@ describe('decal buffer contents', () => {
       return s;
     };
     expect(area(a) + area(b)).toBeCloseTo(0.4, 6);
+  });
+  test('a stripe clipped at a chunk edge continues its v (mod the repeat); parallel lines get their own offset', () => {
+    // one line along x at z = 12.3, clipped by the layouts at x = 38.4 into [21.6, 38.4] and [38.4, 50] (rot PI/2: +v
+    // along -x, so each piece starts at its larger x)
+    const d = D({ kind: DECAL_PAINT_STRIPE, rot: Math.PI / 2, w: 0.12 });
+    const { n, u, v } = decalFrame(d);
+    const rep = 1.2, frac = (x: number): number => x - Math.floor(x);
+    const a0 = stripeV0(n, u, v, 30, 12.3, 0.002, 8.4), b0 = stripeV0(n, u, v, 44.2, 12.3, 0.002, 5.8);
+    const bEnd = b0 + 11.6 / rep; // piece B's v at x = 38.4, where piece A starts
+    expect(Math.min(frac(bEnd - a0), 1 - frac(bEnd - a0))).toBeLessThan(1e-9);
+    expect(a0).toBeGreaterThanOrEqual(0);
+    expect(a0).toBeLessThan(1);
+    expect(stripeV0(n, u, v, 30, 14.7, 0.002, 8.4)).not.toBeCloseTo(a0, 3);
   });
 });
 

@@ -262,9 +262,10 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 			vec2 brcDep = vec2( 0.0 ); // chip depth into each edge (u = 0, u = width)
 			float brcQ = brcAl / 0.008;
 			float brcC0 = floor( brcQ );
+			float brcNc = floor( brLB.x / 0.008 + 0.5 ); // cells per texture repeat: v continues modulo 1 between pieces
 			for ( int k = - 1; k <= 1; k ++ ) {
 				float c = brcC0 + float( k );
-				uint h = brHash2u( ivec2( int( c ), int( brAuxB.x ) ), 1777u );
+				uint h = brHash2u( ivec2( int( mod( c, brcNc ) ), int( brAuxB.x ) ), 1777u );
 				if ( brU01( h ) > 0.4 ) continue;
 				uint h1 = brPcg( h );
 				float r = mix( 0.002, 0.01, brU01( h1 ) * brU01( h1 ) );
