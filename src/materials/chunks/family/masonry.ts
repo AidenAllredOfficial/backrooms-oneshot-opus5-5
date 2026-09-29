@@ -17,7 +17,7 @@ import type { FamilyHooks } from './index.ts';
  * glossier, less texture), heavily filled blocks (less texture), open blocks (more texture).
  */
 export const CMU_VARIATION = {
-  painted: { value: 0.025, warm: 0.01, rough: 0.07 },
+  painted: { value: 0.04, warm: 0.01, rough: 0.1 },
   raw: { value: 0.06, warm: 0.02, rough: 0.03 },
   tilt: 0.0044,
   touchUp: { p: 0.06, value: 0.03, rough: -0.08, detail: 0.8 },
