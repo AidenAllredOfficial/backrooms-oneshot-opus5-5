@@ -66,11 +66,18 @@ In fullscreen (from the title menu, the pause menu or Settings > Video), browser
 (Chromium) pass Ctrl to the game.
 
 **Title menu:** Continue (the last saved position), Enter, Seed (type a seed and press Enter, or pick a random one),
-Camcorder on/off, Settings, Controls, Fullscreen.
+Camcorder on/off, Settings, Controls, Load location link, Fullscreen.
 
-**Pause menu:** Resume, Settings, Controls, Fullscreen, Copy location link (a URL that reopens this exact spot), New
-tape (a new seed), Quit to title. The pause screen also shows a log of the zones, landmarks and storeys you have found
+**Pause menu:** Resume, Settings, Controls, Fullscreen, Copy location link (a URL that reopens this exact spot),
+Load location link, Debug menu, New tape (a new seed), Quit to title. The pause screen also shows a log of the zones, landmarks and storeys you have found
 on this seed.
+
+Choose **Debug menu**, select a level and zone, then **Teleport**. The zone list follows each level's generation
+rules and covers all 12 zones across the three levels. **Level spawn** takes you to that level's starting point.
+Teleports keep the game paused until you choose Resume. No debug URL flag is required.
+
+Choose **Load location link** on the title or pause menu and paste a copied URL or a query such as
+`?seed=7&s=2&zone=POOLROOMS`. Loading enters that tape at the destination and keeps your video and audio controls.
 
 ## Settings
 

@@ -1,8 +1,9 @@
 // src/ui/ui.ts (WP14) — the DOM UI layer (no framework): black curtain, loading phase list, title, pause,
 // settings panel, press-to-enter prompt, F3 overlay, HUD, toast and the error screen.
-// Stacking (bottom -> top): canvas | HUD | curtain | loading | title | pause | settings | prompt | F3 | toast | error.
+// Stacking (bottom -> top): canvas | HUD | curtain | loading | title | pause | settings | location | prompt | F3 | toast | error.
 
 import './style.css';
+import { createLocationPanel, type LocationPanel, type LocationPanelCallbacks } from './locationPanel.ts';
 import type { SettingsStore } from '../app/settingsStore.ts';
 import { el } from './dom.ts';
 import { createLoadingScreen, createPhaseList } from './loading.ts';
@@ -24,6 +25,7 @@ export interface UIOptions {
   title: TitleCallbacks;
   pause: Omit<PauseCallbacks, 'toast'>;
   settings: SettingsPanelCallbacks;
+  location: LocationPanelCallbacks;
 }
 
 export interface UI {
@@ -33,6 +35,7 @@ export interface UI {
   readonly title: TitleScreen;
   readonly pause: PauseScreen;
   readonly settings: SettingsPanel;
+  readonly location: LocationPanel;
   readonly overlay: DebugOverlay;
   readonly hud: Hud;
   /** fades the black curtain (over the picture, under the menus) to `opacity` */
@@ -63,12 +66,13 @@ export function createUI(root: HTMLElement, o: UIOptions): UI {
   };
   const pause = createPause({ ...o.pause, toast });
   const settings = createSettingsPanel(o.store, o.settings);
+  const locationPanel = createLocationPanel(o.location);
   const overlay = createDebugOverlay();
   const prompt = el('div', 'br-screen br-press');
   const promptText = el('span');
   prompt.append(promptText);
   const errorEl = el('div', 'br-screen br-error');
-  layer.append(hud.el, curtainEl, loading.el, title.el, pause.el, settings.el, prompt, overlay.el, toastEl, errorEl);
+  layer.append(hud.el, curtainEl, loading.el, title.el, pause.el, settings.el, locationPanel.el, prompt, overlay.el, toastEl, errorEl);
   root.append(layer);
 
   let promptGo: (() => void) | null = null;
@@ -87,7 +91,7 @@ export function createUI(root: HTMLElement, o: UIOptions): UI {
 
   let fadeTimer = 0;
   return {
-    layer, phases, loading, title, pause, settings, overlay, hud,
+    layer, phases, loading, title, pause, settings, location: locationPanel, overlay, hud,
     curtain(opacity, ms) {
       clearTimeout(fadeTimer);
       curtainEl.style.transition = ms > 0 ? `opacity ${ms}ms ease` : 'none';
@@ -120,6 +124,7 @@ export function createUI(root: HTMLElement, o: UIOptions): UI {
       errorEl.append(retry);
       for (const s of [loading, title, pause]) s.hide();
       settings.close();
+      locationPanel.hide();
       hud.hideTransient();
       promptGo = null;
       prompt.classList.remove('is-open');

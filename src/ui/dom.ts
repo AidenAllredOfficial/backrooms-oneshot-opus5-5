@@ -39,6 +39,7 @@ export function navigable(items: () => (HTMLButtonElement | HTMLInputElement)[],
     for (const b of items()) row(b).classList.remove('is-active');
     row(list[idx]).classList.add('is-active');
     list[idx].focus({ preventScroll: true });
+    list[idx].scrollIntoView({ block: 'nearest' });
   };
   const sync = (): void => {
     const cur = enabled().indexOf(document.activeElement as HTMLButtonElement);

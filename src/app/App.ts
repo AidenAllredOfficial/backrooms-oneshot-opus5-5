@@ -27,7 +27,7 @@ import { EventBus } from '../core/events.ts';
 import type { GameEvents } from '../core/events.ts';
 import { CHUNK_CELLS, STOREY_COUNT } from '../core/constants.ts';
 import { cellIdx, worldToCell } from '../core/grid.ts';
-import { CellFlag, DEBUG_VIEW_NAMES, LANDMARK_COUNT, ZONE_COUNT } from '../core/ids.ts';
+import { CellFlag, DEBUG_VIEW_NAMES, LANDMARK_COUNT, ZONE_COUNT, ZONE_NAMES } from '../core/ids.ts';
 import { QUALITY } from '../core/quality.ts';
 import type { QualityConfig, QualityName } from '../core/quality.ts';
 import { hashString } from '../core/rng.ts';
@@ -54,6 +54,7 @@ import { isIntegratedRenderer, rendererString, resolveQuality, resolveQualityNam
 import { UnsupportedError, createRenderer, pixelRatioFor, primeGpuContext } from './renderer.ts';
 import { createSettingsStore } from './settingsStore.ts';
 import type { SettingsStore } from './settingsStore.ts';
+import { LOCATION_KEYS, locationLinkSearch } from './locationLink.ts';
 import { loadRefusal, locationSearch, parseLaunchParams, worldChanged } from './urlParams.ts';
 import { createDynamicResolution } from '../post/DynamicResolution.ts';
 import { getCaptureControl } from '../stream/ChunkStreamer.ts';
@@ -395,14 +396,14 @@ export function createApp(root: HTMLElement): App {
 
   /** Esc on the pause menu: a key cannot take pointer lock right after Esc, so ask for the click at once. */
   const resumeFromKey = (): void => {
-    if (mode !== 'paused' || ui.settings.visible || lost) return;
+    if (mode !== 'paused' || ui.settings.visible || ui.location.visible || lost) return;
     ui.pause.hide();
     resumePrompt = true;
     ui.showPrompt('Click to resume', () => { resumePrompt = false; resume(); });
   };
 
   const resume = (): void => {
-    if (mode !== 'paused' || ui.settings.visible || lost) return;
+    if (mode !== 'paused' || ui.settings.visible || ui.location.visible || lost) return;
     ui.pause.hide();
     ui.hidePrompt();
     resumePrompt = false;
@@ -447,7 +448,7 @@ export function createApp(root: HTMLElement): App {
     try {
       // Keep the current video/audio controls, replacing only world and starting-position parameters.
       const next = new URLSearchParams(location.search);
-      for (const k of ['seed', 's', 'x', 'y', 'z', 'yaw', 'pitch', 'yawDeg', 'pitchDeg', 'goto', 'zone', 'forceZone', 'forceMood', 'forceLandmark', 'testScene', 'lights']) next.delete(k);
+      for (const k of LOCATION_KEYS) next.delete(k);
       for (const [k, v] of new URLSearchParams(search)) next.set(k, v);
       const nextParams = parseLaunchParams(`?${next}`, settings.get(), randomSeedText());
       if (!params.autostart) core.sys?.input.lock();
@@ -699,6 +700,7 @@ export function createApp(root: HTMLElement): App {
       randomSeed: randomSeedText,
       onSettings: () => { ui.title.setInteractive(false); ui.settings.open('settings'); },
       onControls: () => { ui.title.setInteractive(false); ui.settings.open('keys'); },
+      onLoadLocation: () => { ui.title.setInteractive(false); ui.location.open('link', core.sys?.player.state.s ?? 0); },
       camcorder: () => settings.get().film.camcorder,
       onCamcorder: () => { const f = settings.get().film; settings.set({ film: { ...f, camcorder: !f.camcorder } }); },
       onFullscreen: () => setFullscreen(!isFullscreen()),
@@ -708,6 +710,8 @@ export function createApp(root: HTMLElement): App {
       onResume: resume,
       onSettings: () => { ui.pause.setInteractive(false); ui.settings.open('settings'); },
       onControls: () => { ui.pause.setInteractive(false); ui.settings.open('keys'); },
+      onDebug: () => { ui.pause.setInteractive(false); ui.location.open('debug', core.sys?.player.state.s ?? 0); },
+      onLoadLocation: () => { ui.pause.setInteractive(false); ui.location.open('link', core.sys?.player.state.s ?? 0); },
       onFullscreen: () => setFullscreen(!isFullscreen()),
       onNewTape: () => {
         if (mode !== 'paused') return;
@@ -723,6 +727,31 @@ export function createApp(root: HTMLElement): App {
       },
       onQuit: quitToTitle,
       sound: uiSound,
+    },
+    location: {
+      sound: uiSound,
+      onClose: () => {
+        if (mode === 'paused') ui.pause.show(pauseInfo());
+        ui.pause.setInteractive(true);
+        ui.title.setInteractive(true);
+      },
+      teleport: async (storey, zone) => {
+        const s = core.sys;
+        if (!s || mode !== 'paused' || lost || changingTape || loadingShot || core.gate.active) {
+          throw new Error('The world is busy. Try again when it has finished loading.');
+        }
+        const st = s.player.state;
+        const sp = zone === null ? await s.streamer.spawn(storey)
+          : await s.streamer.findNearest(`zone:${ZONE_NAMES[zone]}`, { s: storey, x: st.x, z: st.z }, 24);
+        if (!sp) throw new Error('No matching zone found nearby in this level. Try another zone or the level spawn.');
+        await teleportPlayer(core, { s: sp.s, x: sp.x, z: sp.z, yaw: sp.yaw, pitch: sp.pitch });
+        saveContinue();
+      },
+      loadLink: async (text) => {
+        const search = locationLinkSearch(text);
+        if (lost || changingTape || loadingShot) throw new Error('The world is busy. Try again when it has finished loading.');
+        await changeTape(search);
+      },
     },
     settings: {
       sound: uiSound,
@@ -794,7 +823,7 @@ export function createApp(root: HTMLElement): App {
       if (params.hud) ui.toast(`view: ${DEBUG_VIEW_NAMES[viewIndex]}`);
     } else if (e.code === 'Escape') {
       lastEscKeyAt = performance.now();
-      if (ui.settings.visible || lost) return;
+      if (ui.settings.visible || ui.location.visible || lost) return;
       if (resumePrompt && mode === 'paused') {
         // Esc on 'Click to resume': back to the menu
         resumePrompt = false;
@@ -810,7 +839,7 @@ export function createApp(root: HTMLElement): App {
   // gamepad Start button arrives only here as 'pause' and toggles the pause menu.
   window.addEventListener(INPUT_ACTION_EVENT, (e: Event) => {
     const a = (e as CustomEvent<{ action?: string }>).detail?.action;
-    if (a !== 'pause' || performance.now() - lastEscKeyAt < 150 || ui.settings.visible) return;
+    if (a !== 'pause' || performance.now() - lastEscKeyAt < 150 || ui.settings.visible || ui.location.visible) return;
     if (mode === 'play') pause();
     else if (mode === 'paused' && performance.now() - pausedAt > 400) resume();
   });

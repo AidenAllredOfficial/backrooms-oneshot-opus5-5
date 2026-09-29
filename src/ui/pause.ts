@@ -1,5 +1,5 @@
 // src/ui/pause.ts (WP14) — pause menu (Esc or pointer-lock loss): Resume, Settings, Controls, Fullscreen, Copy
-// location link, New tape, Quit to title. R2 (B7): the location line uses display names (coordinates on a small
+// location link, Load location link, Debug menu, New tape, Quit to title. R2 (B7): the location line uses display names (coordinates on a small
 // second line) and a tape log (zones / landmarks / storeys found, metres walked, tape time) sits on the right.
 
 import { el, menuItem, navigable, timecode } from './dom.ts';
@@ -17,6 +17,8 @@ export interface PauseCallbacks {
   onResume(): void;
   onSettings(): void;
   onControls(): void;
+  onDebug(): void;
+  onLoadLocation(): void;
   onFullscreen(): void;
   onNewTape(): void;
   /** returns the link to copy */
@@ -71,9 +73,11 @@ export function createPause(cb: PauseCallbacks): PauseScreen {
   const controls = menuItem('Controls');
   const fullscreen = menuItem('Fullscreen', 'off');
   const copy = menuItem('Copy location link');
+  const load = menuItem('Load location link');
+  const debug = menuItem('Debug menu', 'teleport');
   const newTape = menuItem('New tape', 'random seed');
   const quit = menuItem('Quit to title');
-  const items = [resume.btn, settings.btn, controls.btn, fullscreen.btn, copy.btn, newTape.btn, quit.btn];
+  const items = [resume.btn, settings.btn, controls.btn, fullscreen.btn, copy.btn, load.btn, debug.btn, newTape.btn, quit.btn];
   menu.append(...items);
   // tape log (right column)
   const log = el('div', 'br-tapelog');
@@ -89,6 +93,8 @@ export function createPause(cb: PauseCallbacks): PauseScreen {
   resume.btn.addEventListener('click', () => { cb.sound('close'); cb.onResume(); });
   settings.btn.addEventListener('click', () => { cb.sound('open'); cb.onSettings(); });
   controls.btn.addEventListener('click', () => { cb.sound('open'); cb.onControls(); });
+  load.btn.addEventListener('click', () => { cb.sound('open'); cb.onLoadLocation(); });
+  debug.btn.addEventListener('click', () => { cb.sound('open'); cb.onDebug(); });
   fullscreen.btn.addEventListener('click', () => { cb.sound('click'); cb.onFullscreen(); });
   newTape.btn.addEventListener('click', () => { cb.sound('click'); cb.onNewTape(); });
   quit.btn.addEventListener('click', () => { cb.sound('click'); cb.onQuit(); });

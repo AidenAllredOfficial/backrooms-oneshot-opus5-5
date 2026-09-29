@@ -17,6 +17,7 @@ export interface TitleCallbacks {
   randomSeed(): string;
   onSettings(): void;
   onControls(): void;
+  onLoadLocation(): void;
   /** camcorder OSD setting (read for the row label, toggled by the row) */
   camcorder(): boolean;
   onCamcorder(): void;
@@ -71,8 +72,9 @@ export function createTitle(seedText: string, cb: TitleCallbacks, storeyName = '
   const camcorder = menuItem('Camcorder', cb.camcorder() ? 'on' : 'off');
   const settings = menuItem('Settings');
   const controls = menuItem('Controls');
+  const load = menuItem('Load location link');
   const fullscreen = menuItem('Fullscreen', 'off');
-  menu.append(cont.btn, enter.btn, seedRow, camcorder.btn, settings.btn, controls.btn, fullscreen.btn);
+  menu.append(cont.btn, enter.btn, seedRow, camcorder.btn, settings.btn, controls.btn, load.btn, fullscreen.btn);
 
   const warning = el('div', 'br-warning',
     'Photosensitivity: this contains flickering lights and brief flashes. Reduce or switch them off in Settings › Comfort.');
@@ -94,7 +96,7 @@ export function createTitle(seedText: string, cb: TitleCallbacks, storeyName = '
   tickDate();
   setInterval(() => { if (visible) tickDate(); }, 15000);
 
-  const buttons = (): (HTMLButtonElement | HTMLInputElement)[] => [cont.btn, enter.btn, seed, camcorder.btn, settings.btn, controls.btn, fullscreen.btn];
+  const buttons = (): (HTMLButtonElement | HTMLInputElement)[] => [cont.btn, enter.btn, seed, camcorder.btn, settings.btn, controls.btn, load.btn, fullscreen.btn];
   const nav = navigable(buttons, () => visible && interactive, cb.sound);
 
   cont.btn.hidden = true;
@@ -102,6 +104,7 @@ export function createTitle(seedText: string, cb: TitleCallbacks, storeyName = '
   enter.btn.addEventListener('click', () => { cb.sound('click'); cb.onEnter(); });
   settings.btn.addEventListener('click', () => { cb.sound('open'); cb.onSettings(); });
   controls.btn.addEventListener('click', () => { cb.sound('open'); cb.onControls(); });
+  load.btn.addEventListener('click', () => { cb.sound('open'); cb.onLoadLocation(); });
   camcorder.btn.addEventListener('click', () => {
     cb.sound('click');
     cb.onCamcorder();

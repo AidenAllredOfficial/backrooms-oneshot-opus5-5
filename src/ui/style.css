@@ -313,3 +313,33 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
   .br-screen, .br-screen.is-open { transition-duration: 0.01s; }
   .br-rec-tl i, .br-phase-name.is-active::after, .br-press span, .br-caption.is-on .br-caption-title, .br-caption.is-on .br-caption-sub { animation: none; }
 }
+
+/* Location loading and debug travel share the existing menu panel. */
+.br-location-panel { text-transform: none; letter-spacing: 0.04em; }
+.br-location-panel .br-panel-title { letter-spacing: 0.12em; }
+.br-location-body { padding: 8px 26px 26px; overflow-y: auto; }
+.br-location-note { color: var(--br-dim); font-size: 13px; line-height: 1.6; margin: 12px 0 22px; }
+.br-location-destinations { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.br-location-field { display: flex; flex-direction: column; gap: 10px; color: var(--br-fg); font-size: 13px; }
+.br-location-input {
+  box-sizing: border-box; min-width: 0; width: 100%; min-height: 44px; padding: 10px 12px;
+  border: 1px solid var(--br-faint); border-radius: 0; background: #14130e; color: var(--br-fg);
+  font: inherit; letter-spacing: 0; color-scheme: dark;
+}
+.br-location-input::placeholder { color: var(--br-dim); }
+.br-location-input:focus-visible { outline: 2px solid var(--br-amber); outline-offset: 2px; }
+.br-location-input:disabled, .br-location-panel button:disabled { opacity: 0.6; cursor: wait; }
+.br-location-panel .br-btn { min-height: 28px; text-align: center; }
+.br-location-status { letter-spacing: 0.02em; line-height: 1.5; overflow-wrap: anywhere; }
+@media (max-width: 540px) {
+  .br-location-destinations { grid-template-columns: 1fr; }
+  .br-location-panel .br-panel-title { padding: 16px; gap: 12px; }
+  .br-location-panel .br-panel-title small { white-space: nowrap; letter-spacing: 0; }
+  .br-location-body { padding: 8px 16px 20px; }
+  .br-location-panel .br-panel-foot { padding: 12px 16px; flex-wrap: wrap; }
+  .br-location-status { flex-basis: 100%; }
+}
+@media (max-height: 680px) {
+  .br-title-head, .br-pause-head { top: 6vh; }
+  .br-title .br-menu, .br-pause .br-menu { max-height: 55vh; overflow-y: auto; }
+}
