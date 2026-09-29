@@ -47,6 +47,27 @@ const sstep = (e0: number, e1: number, x: number): number => {
   return u * u * (3 - 2 * u);
 };
 
+/** Seepage tongue edge falloff and tip length (m): the edge is at least one mask texel (CELL / 8). */
+export const SEEP_EDGE = 0.15, SEEP_TIP = 0.15;
+/**
+ * R of a seepage runnel zone at lateral offset du (m) from its centre line and dTop (m) below its top, for a zone of
+ * top half-width hw0 whose runnels run len metres: a tongue that narrows down the wall (x (1 - 0.35 t^1.3), t = dTop /
+ * len), whose sides wander +-15 % by the caller's side noise nL / nR (0..1, sampled along the wall's height) and which
+ * ends in a rounded tip SEEP_TIP past len (with cap, it also starts with a rounded top SEEP_TIP above dTop = 0).
+ * Inside, R = SEEP_R0..1 encodes t; over the last SEEP_EDGE metres to the outline it falls smoothly to 0. So the
+ * shader's drying fronts (R 0.44-0.69) follow the tongue's wandering outline rather than a rectangle traced along the
+ * mask's texels, and a tip too narrow for the bilinear filter to keep above SEEP_R0 holds a stain but no runnels.
+ */
+export function seepZoneR(du: number, dTop: number, hw0: number, len: number, nL: number, nR: number, cap: boolean): number {
+  if (dTop >= len + SEEP_TIP || dTop < (cap ? -SEEP_TIP : 0)) return 0;
+  const t = Math.min(1, Math.max(0, dTop / len));
+  let hw = hw0 * (1 - 0.35 * t ** 1.3) * (0.85 + 0.3 * (nL + (nR - nL) * sstep(-0.05, 0.05, du)));
+  const k = dTop > len ? (dTop - len) / SEEP_TIP : dTop < 0 ? -dTop / SEEP_TIP : 0;
+  hw *= Math.sqrt(1 - k * k);
+  const d = hw - Math.abs(du);
+  return d <= 0 ? 0 : seepR(t) * sstep(0, SEEP_EDGE, d);
+}
+
 export const maskOut = { r: 0, g: 0, b: 0, a: 0 };
 
 /** Per-bake mask caches: corridor widths (-1 = unknown) and leak proximity (0 unknown, 1 none, 2 near) per cell,
@@ -327,17 +348,24 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
       let v = 0;
       if (depth < band) v = 1 - sstep(0.55 * band, band, depth);
       r = Math.max(r, STAIN_MAX * (0.45 + 0.55 * s) * v * Math.sqrt(fall));
-      // drips below it: hashed 0.3 m columns hold 20-28 cm seepage runnel zones (R SEEP_R0..1; at least ~2 mask texels
-      // wide, so the zone survives the bilinear filter; the shader draws the runnels)
+      // drips below it: hashed 0.3 m columns hold seepage tongues (seepZoneR) from inside the band, 0.4-0.48 m wide
+      // at the top (a runnel core of R >= SEEP_R0 at least ~2 mask texels wide; the shader draws the runnels)
       const along = Math.abs(nx) > 0.5 ? wz : wx;
-      const col = Math.floor(along / 0.3);
-      const h = hash3(col, g.leakId[k], SEED_RING ^ SALT.LEAK);
-      if (hash01(h) < 0.45 && fall > 0.2) {
-        const centre = (col + 0.4 + 0.2 * hash01(hash3(h, 1, 7))) * 0.3;
-        const width = 0.2 + 0.08 * hash01(hash3(h, 2, 9));
-        const top = 0.75 * band;
-        const len = band + (0.3 + 0.9 * hash01(hash3(h, 3, 11))) * s;
-        if (Math.abs(along - centre) < width * 0.5 && depth >= top && depth < len) r = Math.max(r, seepR((depth - top) / (len - top)));
+      if (fall > 0.2) {
+        const col0 = Math.floor(along / 0.3);
+        for (let dc = -1; dc <= 1; dc++) {
+          const col = col0 + dc;
+          const h = hash3(col, g.leakId[k], SEED_RING ^ SALT.LEAK);
+          if (hash01(h) >= 0.45) continue;
+          const centre = (col + 0.4 + 0.2 * hash01(hash3(h, 1, 7))) * 0.3;
+          const hw0 = 0.2 + 0.04 * hash01(hash3(h, 2, 9));
+          const top = 0.75 * band;
+          const len = band + (0.3 + 0.9 * hash01(hash3(h, 3, 11))) * s - top;
+          if (Math.abs(along - centre) >= hw0 * 1.15 || depth > top + len + SEEP_TIP) continue;
+          const nL = valueNoise2(SEED_SEEP + 5, col * 7.1 + g.leakId[k] * 3.3, depth / 0.25);
+          const nR = valueNoise2(SEED_SEEP + 6, col * 7.1 + g.leakId[k] * 3.3, depth / 0.25);
+          r = Math.max(r, seepZoneR(along - centre, depth - top, hw0, len, nL, nR, true));
+        }
       }
       if (v > 0 && hy > 0) a = Math.max(a, 0.5 * v * s * decay);
     } else if (isCeil && dh < 0.9) {
@@ -365,25 +393,29 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
       const tideH = (wetCell ? 0.35 : 0.08) + 0.5 * hum * (0.4 + 0.6 * valueNoise2(SEED_TIDE, along / 1.6, plane0 * 1.3)) + 0.07 * (valueNoise2(SEED_TIDE + 1, along / 0.35, 0) - 0.5);
       if (hy < tideH) r = Math.max(r, k * (0.52 + 0.12 * (1 - hy / tideH)));
     }
-    // old ceiling seepage: hashed 0.3 m world columns (a zone can overlap the neighbouring columns), 22-47 cm wide and
-    // 0.3-1.6 m long from the ceiling: runnel zones (R SEEP_R0..1 by the progress t; the shader draws the runnels, their
-    // teardrop ends and the damp halo under the ceiling)
+    // old ceiling seepage: hashed 0.3 m world columns (a zone can overlap the next two columns), tongues
+    // (seepZoneR) 0.44-0.68 m wide under the ceiling whose runnels run 0.3-1.6 m (R SEEP_R0..1 by the progress t; the
+    // shader draws the runnels, their teardrop ends and the damp halo under the ceiling)
     const depth = ceilY - y;
     const pSeep = 0.03 + 0.15 * hum * (0.5 + decay);
-    if (depth < 1.7 && depth >= 0) {
+    if (depth < 1.6 + SEEP_TIP && depth >= 0) {
       const plane = Math.round((alongX ? wx : wz) / CELL) * 2 + ((alongX ? nx : nz) > 0 ? 1 : 0);
       const col0 = Math.floor(along / 0.3);
-      for (let dc = -1; dc <= 1; dc++) {
+      for (let dc = -2; dc <= 2; dc++) { // a tongue reaches up to 0.41 m from its centre
         const col = col0 + dc;
         const h = hash3(col, plane, SEED_SEEP);
         if (hash01(h) >= pSeep) continue;
         const len = 0.3 + 1.3 * hash01(hash3(h, 3, 11));
-        if (depth > len) continue;
-        const w = 0.22 + 0.25 * hash01(hash3(h, 2, 9)); // at least ~2 mask texels: a narrower zone blurs below SEEP_R0
+        if (depth >= len + SEEP_TIP) continue;
+        // top half-width 0.22-0.34 m: the runnel core (R >= SEEP_R0, ~0.09 m inside the outline) is >= ~0.18 m wide
+        // under the ceiling (a narrower zone blurs below SEEP_R0)
+        const hw0 = 0.22 + 0.12 * hash01(hash3(h, 2, 9));
         const wob = 0.04 * (valueNoise2(SEED_SEEP + 3, along * 0.3 + col * 7.1, depth / 0.25) - 0.5);
         const centre = (col + 0.2 + 0.6 * hash01(hash3(h, 1, 7))) * 0.3 + wob;
-        if (Math.abs(along - centre) >= w * 0.5) continue;
-        r = Math.max(r, seepR(depth / len));
+        if (Math.abs(along - centre) >= hw0 * 1.15) continue;
+        const nL = valueNoise2(SEED_SEEP + 5, col * 7.1 + plane * 3.3, depth / 0.25);
+        const nR = valueNoise2(SEED_SEEP + 6, col * 7.1 + plane * 3.3, depth / 0.25);
+        r = Math.max(r, seepZoneR(along - centre, depth, hw0, len, nL, nR, false));
       }
     }
   }
