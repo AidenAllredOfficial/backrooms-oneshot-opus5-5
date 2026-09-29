@@ -67,7 +67,7 @@ void brcKerfTap( float x, float t, vec2 sw, bool filled, inout float a, inout ve
 		// spall: a fresh, paler fracture sloping down into the kerf (25-40 degrees), dirt collected at its bottom
 		float f = 1.0 - ( ax - BRC_KERF_HW ) / max( spw, 1e-5 );
 		a *= 1.15 * mix( 1.0, 0.75, f * f );
-		n += normalize( vec3( - sd * mix( 0.47, 0.84, fract( spw * 997.0 ) ), 0.0, 1.0 ) );
+		n += vec3( - sd * 0.55, 0.0, 0.84 ); // ~33 degrees (unit)
 		r += 0.85;
 		cav *= mix( 1.0, 0.7, f );
 		nw += 1.0;
@@ -196,7 +196,9 @@ float brcSlabCrack( vec2 s2, ivec2 pid, ivec2 pw, float p, float pf, out float h
 	// sub-pixel line: rendered at least 0.35 pixel wide with the darkness scaled by the true width (no shimmer)
 	float hr = max( hw, 0.35 * pf );
 	float core = ( 1.0 - smoothstep( hr - 0.5 * pf, hr + 0.5 * pf, d ) ) * ( hw / hr );
-	hal = 1.0 - smoothstep( 0.0, mix( 0.003, 0.006, float( h2 >> 30 ) / 3.0 ) + pf, d );
+	// the halo widened by the footprint with its darkening scaled to keep its integral (no darkening with distance)
+	float hh = mix( 0.003, 0.006, float( h2 >> 30 ) / 3.0 );
+	hal = hh / ( hh + pf ) * ( 1.0 - smoothstep( 0.0, hh + pf, d ) );
 	return core;
 }
 // The slab system of an up-facing CONCRETE_FLOOR (and FLOOR_PAINT stripes over it): joints, spalls, pours, panels and
@@ -238,8 +240,10 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 	float ka, kr, kc;
 	vec3 kn;
 	float cov = brcJoint( x, zl ? s2.x : s2.y, li, t, zl ? fw.y : fw.x, brU01( hl ) < 0.7, ka, kn, kr, kc );
-	// dirt collected beside the cut
-	a *= ka * ( 1.0 - 0.12 * ( 1.0 - smoothstep( 0.0, 0.025, abs( x ) ) ) );
+	// dirt collected beside the cut (2.5 cm each side), widened by the footprint with its darkening scaled to keep its
+	// integral: far away the band neither aliases into a dotted line nor darkens the joint more
+	float dw = 0.025 + ( zl ? fw.y : fw.x );
+	a *= ka * ( 1.0 - 0.12 * ( 0.025 / dw ) * ( 1.0 - smoothstep( 0.0, dw, abs( x ) ) ) );
 	ormh.r *= kc;
 	if ( cov > 0.0 ) {
 		ormh.g = mix( ormh.g, kr, cov );
