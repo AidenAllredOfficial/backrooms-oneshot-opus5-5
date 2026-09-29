@@ -1,13 +1,54 @@
 // src/materials/chunks/pom.ts — package B: parallax occlusion mapping of the shell (BR_POM = 1 steps only, 2 with
-// self-shadow) and the directional-light visibility terms (the cavity's visibility cone, POM self-shadow).
-// The view march itself sits in chunks/surface.ts FRAG_MAP_GLSL (it moves brUv before the base sampling); this file
-// holds its height lookup and FRAG_DIRVIS_GLSL, which chunks/lighting.ts inlines inside `if ( brW > 0.0 )`, after the
-// contact shadow and before RE_Direct: it may only multiply `float brDirVis` (brLv, brNg, brNgL in scope).
+// self-shadow) and the directional-light visibility terms (the texture cavity's visibility of the baked light, POM
+// self-shadow). The view march itself sits in chunks/surface.ts FRAG_MAP_GLSL (it moves brUv before the base
+// sampling); this file holds its height lookup and FRAG_DIRVIS_GLSL, which chunks/lighting.ts inlines inside
+// `if ( brW > 0.0 )`, after the contact shadow and before RE_Direct: it may only multiply `float brDirVis` (brLv, brNg,
+// brNgL, brW in scope).
 
 import { f } from './params.ts';
 
-/** Half-width (in N.L) of the soft edge of the cavity's visibility cone (FRAG_DIRVIS_GLSL). */
+/**
+ * Visibility of the baked directional light in the texture cavity (texture realism v2, 0b; FRAG_DIRVIS_GLSL, TS twin
+ * dirVis). The light is modelled as a cap of half-angle beta around its direction L, with cos(beta) = 2 R_d - 1 (a
+ * uniform cap's mean resultant length is (1 + cos beta) / 2); R_d, the direct light's resultant length, is estimated
+ * from the baked directionality as w / RD_W (the bake does not store it yet). The cavity V (ormh.r) is the
+ * cosine-weighted visibility of the hemisphere, V = 1 - mean sin^2(horizon), so a light whose cosine-weighted mean
+ * sin^2(theta) is m loses (1 - V) 2m of itself (the hemisphere's m is 1/2):
+ *   vis = 1 - (1 - V) g,  g = K (2 - (1 + cb^2) c^2 - 1.5 (1 - cb^2) (1 - c^2)),  c = N_g.L,
+ * the closed form of 2m for a cap above the horizon, with cb = max(cos beta, min(sin theta_L, CB_LOW)): the part of a
+ * wide cap around a low light that would lie below the horizon is not light the surface receives (the exact clipped
+ * cap within 0.1 in g). Linear in V, so the mip-filtered cavity gives the filtered visibility (no brightening with
+ * distance). Fitted against a ray-marched height-field reference (grooves, tooled joints, pits, rough fields; caps of
+ * 25-85 degrees at 0-75 degrees from the normal): rms error 0.066 in visibility, bias +0.003 (the plan's cone-scaled
+ * form: 0.123); tests/materials/brdf.test.ts re-runs a reduced version. Skipped on pile layers (BR_L_PILE.x > 0: the
+ * textile family's view-dependent pile visibility carries it).
+ */
+export const DIRVIS = {
+  /** false: the legacy smoothstep cone (N.L against sqrt(1 - V)), kept for A/B checks */
+  LINEAR: true,
+  /** R_d = clamp(w / RD_W, 0, 1): the baked directionality w mixes the lamps' spread with the indirect share */
+  RD_W: 0.8,
+  /** cos(beta) floor once the light leaves the normal (fitted, see above) */
+  CB_LOW: 0.55,
+  /** scale of the closed-form 2m (fitted: zero mean bias against the reference) */
+  K: 1.04,
+} as const;
+
+/** Half-width (in N.L) of the soft edge of the legacy cavity cone (DIRVIS.LINEAR false). */
 export const CAV_CONE_SOFT = 0.15;
+
+/** The cavity's share of the baked light's occlusion g for directionality w and geometric cosine c = N_g.L (TS twin of
+ * FRAG_DIRVIS_GLSL; vis = 1 - (1 - V) g). */
+export function dirVisG(w: number, c: number): number {
+  const rd = Math.min(1, Math.max(0, w / DIRVIS.RD_W));
+  const cc = Math.min(1, Math.max(0, c));
+  const cb = Math.max(Math.min(1, Math.max(0, 2 * rd - 1)), Math.min(Math.sqrt(1 - cc * cc), DIRVIS.CB_LOW));
+  const cb2 = cb * cb, c2 = cc * cc;
+  return DIRVIS.K * (2 - (1 + cb2) * c2 - 1.5 * (1 - cb2) * (1 - c2));
+}
+
+/** Visibility of the baked directional light for the texture cavity V (TS twin of FRAG_DIRVIS_GLSL). */
+export const dirVis = (v: number, w: number, c: number): number => Math.max(0, 1 - (1 - Math.min(1, Math.max(0, v))) * dirVisG(w, c));
 
 /** Appended to the fragment common block. */
 export const POM_PARS_GLSL = /* glsl */ `
@@ -44,16 +85,30 @@ float brPomH( vec2 uv, vec2 cells, uint salt, float lf, float lod, inout vec2 ce
 #endif
 `;
 
+const DIRVIS_LINEAR_GLSL = /* glsl */ `
+	// the texture cavity's visibility of the baked light (DIRVIS, TS twin dirVis), linear in V (mip-safe): the light
+	// as a cap around brLv with cos(beta) = 2 R_d - 1, R_d ~ w / RD_W; g = K 2m, m the cap's cosine-weighted mean
+	// sin^2 (hemisphere: 1/2), its part below the horizon cut (cb >= min(sin theta_L, CB_LOW)). Not on pile layers.
+	if ( BR_L_PILE[ brL ].x <= 0.0 ) {
+		float brVc = min( brNgL, 1.0 );
+		float brVc2 = brVc * brVc;
+		float brVcb = max( clamp( 2.0 * brW / ${f(DIRVIS.RD_W)} - 1.0, 0.0, 1.0 ), min( sqrt( 1.0 - brVc2 ), ${f(DIRVIS.CB_LOW)} ) );
+		float brVcb2 = brVcb * brVcb;
+		float brVg = ${f(DIRVIS.K)} * ( 2.0 - ( 1.0 + brVcb2 ) * brVc2 - 1.5 * ( 1.0 - brVcb2 ) * ( 1.0 - brVc2 ) );
+		brDirVis *= max( 1.0 - ( 1.0 - clamp( brOrmh.r, 0.0, 1.0 ) ) * brVg, 0.0 );
+	}
+`;
+
+const DIRVIS_CONE_GLSL = /* glsl */ `
+	// legacy (DIRVIS.LINEAR false): the cavity's visibility cone, N.L > cos(alpha) = sqrt(1 - V) with a soft edge
+	float brCosA = sqrt( 1.0 - clamp( brOrmh.r, 0.0, 1.0 ) );
+	brDirVis *= smoothstep( brCosA - ${f(CAV_CONE_SOFT)}, brCosA + ${f(CAV_CONE_SOFT)}, dot( normal, brLv ) );
+`;
+
 /** Inline block in FRAG_LIGHTS_GLSL: multiplies brDirVis (the baked directional light's visibility). */
 export const FRAG_DIRVIS_GLSL = /* glsl */ `
 #ifndef BR_LITE
-	// the cavity's visibility cone (ambient aperture): the texture cavity V (ormh.r: grout, joints, pile gaps,
-	// fissures) is the cosine-weighted visibility of a cone around the normal, V = sin^2(alpha), so the baked
-	// directional light is seen while it stands inside the cone, N.L > cos(alpha) = sqrt(1 - V), with a soft edge.
-	// (Chan's clamp(|N.L| + 2V^2 - 1) never fired: every layer's cavity p5 is >= 0.9, where it is 1 for N.L >= 0.38.)
-	float brCosA = sqrt( 1.0 - clamp( brOrmh.r, 0.0, 1.0 ) );
-	brDirVis *= smoothstep( brCosA - ${f(CAV_CONE_SOFT)}, brCosA + ${f(CAV_CONE_SOFT)}, dot( normal, brLv ) );
-#endif
+${DIRVIS.LINEAR ? DIRVIS_LINEAR_GLSL : DIRVIS_CONE_GLSL}#endif
 #if defined( BR_POM ) && BR_POM >= 2
 	if ( brPomOn ) {
 		// POM self-shadow: from the parallax hit toward the light up to the relief top (the same faded depth as the
