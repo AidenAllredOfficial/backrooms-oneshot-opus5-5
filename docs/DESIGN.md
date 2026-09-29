@@ -4228,6 +4228,12 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
   slab's D12 speckle under the film (the decal variant samples the detail array: 16 units at high / ultra).
 - **v2 shading parameters** (active with the 0b block): σ CONCRETE_WALL / CONCRETE_CEIL 0.35, CONCRETE_FLOOR 0.25,
   TERRAZZO 0; dirt on the slab, walls, soffits and terrazzo.
+- **Costs** (`__backrooms.gpuBench(20)`, whole frame, medians of interleaved rounds against a5c03e1 on gallery 04,
+  07, 15 and 25): high 1600 × 900 +0.06 to +0.14 ms, ultra 2560 × 1440 +0.3 to +0.9 ms (ultra rounds vary by
+  ±0.3 ms). Bisection: the doubled CONCRETE_FLOOR texel density is ~+0.08 / +0.3 ms (the hex blend's nine fetches
+  over twice the texels; a hex blend that skips vertices of negligible weight would win back ~0.09 ms at high), the
+  slab system ~+0.05 ms at high, the other hooks ~+0.03 ms; the SSR share of the burnished lanes is ≤ 0.02 ms, so no
+  roughness clamp was needed. textures.genMs +9 ms (207 → 216), detail genMs ±0.
 
 #### Lane C: masonry and tile
 
