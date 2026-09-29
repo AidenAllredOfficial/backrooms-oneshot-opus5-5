@@ -4525,24 +4525,29 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
     were. At σ 0.45 the single scattering over Lambert is 0.885 at L = V = N and 1.48 at L = V, 60° off the normal:
     under a torch at the eye the hot spot flattens and the oblique floor lifts.
   - *Cavity visibility of the baked light* (`chunks/pom.ts` `DIRVIS`, TS twin `dirVis`):
-    `vis = 1 − (1 − V)·g`. The light is a cap of half-angle β around L, with `cos β = 2R_d − 1`. R_d, the direct
-    light's resultant length, is estimated as `w / 0.8` (the bake does not store it). `g = 1.04·(2 − (1 + cb²)c² −
-    1.5(1 − cb²)(1 − c²))` is twice the cap's cosine-weighted mean sin²θ, the hemisphere's being ½, with
-    `c = N_g·L` and `cb = max(cos β, min(sin θ_L, 0.55))` (the part of a wide cap below the horizon is cut).
+    `vis = 1 − (1 − V)·g`. The light is a cap of half-angle β around L, with `cos β = 2R_d − 1`. `g = 1.04·(2 −
+    (1 + cb²)c² − 1.5(1 − cb²)(1 − c²))` is twice the cap's cosine-weighted mean sin²θ, the hemisphere's being ½,
+    with `c = N_g·L` and `cb = max(cos β, min(sin θ_L, 0.55))` (the part of a wide cap below the horizon is cut).
     Against a ray-marched height-field reference of grooves, tooled joints, pits and rough fields under caps of
     25-85° at 0-75° from the normal, the rms error is 0.066 and the bias +0.003 (tests/materials/brdf.test.ts
-    re-runs a reduced set). Being linear in V, it gives the same wall patch the same mean at 1.5 m and at 6 m
-    (−1.32 % and −1.36 % against no term; the old cone: −0.77 % and −0.15 %). A collimated light along the normal
-    reaches the bottom of any open cavity; grazing and wide light lose most.
-    - A narrow light near the horizon (`cos β > 0.8`) takes at least `n²(1/c − 1)`, where
-      `n = (cos β − 0.8)/0.2`, because shallow relief there shadows like cot(elevation). On rough fields 70-84°
-      from the normal this cuts the rms error from 0.217 to 0.177; the old cone's was 0.37, with a bias of −0.23.
+    re-runs a reduced set). A collimated light along the normal reaches the bottom of any open cavity; grazing and
+    wide light lose most.
+    - R_d, the direct light's own resultant length, is not baked. The baked w is R_d times the direct share of the
+      irradiance, and full bakes of nine zones (all terms against direct only, per texel) show that share swinging
+      from 0.25 on grazing-lit walls to 0.95 on floors under a lamp, while R_d stays at 0.85-1.0. The plan's
+      `R_d ≈ w / 0.8` therefore read grazing walls as a hemisphere-wide cap and gave their joints and pits about
+      twice the light the cap model gives at the baked R_d. The estimate is `R_d = clamp(0.95 + 0.15·w − 0.2·c)`,
+      fitted to those bakes: rms 0.055 in visibility against 0.097 for `w / 0.8`, weighted by the directional energy
+      (a sweep test re-checks it on two zones).
+    - `g ≤ 2`, so the clamp at 0 never engages above V = 0.5. The term stays linear in V over faces, joints and pits,
+      and the same wall patch has the same mean at 1.5 m and at 6 m (−1.75 % and −1.80 % against no term; the old
+      cone: −0.77 % and −0.15 %). A narrow light near the horizon would ask for more (shallow relief shadows like
+      cot(elevation) there), but only 1 % of the baked directional energy falls there.
     - Skipped where `BR_L_PILE.x > 0`: the textile family carries pile visibility itself.
-    - Known limit: the model sees only L and w. Corridor lamps at both ends, or light spread along the horizon, read
-      as a wide cap around a steep L. Under raking light, CMU pits then keep about 40 % of the direct light, where
-      the cone kept none (crisper, but 0.23 too dark on average against the reference). The remedy is a bake change:
-      store the direct light's cosine-weighted mean sin²θ (g = 2m) in dir-map layer 1's reserved byte, instead of
-      the R_d the plan deferred.
+    - Known limit: V is a scalar. The shadow of a pit or joint under a narrow light is a threshold in the horizon
+      angle, which a term linear in V can only average, so pits under raking light are softer than under the old
+      cone (PIPEWORKS corridor, joint / face 0.74 with the cone, 0.85 now), and a light spread along the horizon
+      (corridor lamps at both ends) still reads as one cap. Darker joints are the lanes' dirt (`BR_L_DIRT`).
   - *Relief-aware dirt and wear* (`chunks/surface.ts`, inside the grime block after the profile chain; compiled in
     by `BR_RELIEF_GRIME` once any layer sets an amount). Dirt is
     `amt·conc^1.5·clamp(0.35 + 1.2·mask.G + 0.4·foot, 0, 1)`, where `conc = 1 − ormh.r` and `foot` falls from the

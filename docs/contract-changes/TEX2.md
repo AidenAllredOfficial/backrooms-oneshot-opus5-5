@@ -49,19 +49,20 @@ v2 conventions").
   `float brDiffSigma` > 0. It covers the baked lobe and the flashlight. `brDiffSigma` is set in material post from
   `BR_L_SIGMA` and the detail / Toksvig variance; family matPost hooks may rescale it. EON keeps the directional
   albedo at ρ (ρ_ms = ρ).
-- **`FRAG_DIRVIS_GLSL`** (`chunks/pom.ts`): `vis = 1 − (1 − V)·g(w, N_g·L)`, linear in the cavity. g is twice the
-  light cap's cosine-weighted mean sin²θ, with a cot(elevation) floor for narrow lights near the horizon. It replaces
-  the smoothstep cone and skips layers with `BR_L_PILE.x > 0`. POM self-shadow is unchanged, and lighting.ts is not
-  edited.
-  - Measured against a5c03e1, as the median joint / face luminance over 120-880 cavity components per framing:
-    CMU in WAREHOUSE g08 0.890 → 0.804, CMU at the CONCRETE spawn 0.941 → 0.925, the POOLROOMS near floor
-    0.928 → 0.913. The plan's ≤ 0.75 is not met: joints under overhead and near-overhead light keep most of it,
-    which is physical, so darker joints are for the lanes' dirt (BR_L_DIRT).
-  - Flat-face means move +0.1 to +0.7 %.
-  - The same wall patch at 1.5 m and 6 m changes by −1.32 % and −1.36 % (no mip bias; the old cone: −0.77 % and
+- **`FRAG_DIRVIS_GLSL`** (`chunks/pom.ts`): `vis = 1 − (1 − V)·g`, linear in the cavity. g is twice the cosine-weighted
+  mean sin²θ of a light cap whose resultant length R_d is estimated from w and N_g·L (fitted to full bakes, see DESIGN
+  WP9), capped at 2 so the term stays linear down to V = 0.5. It replaces the smoothstep cone and skips layers with
+  `BR_L_PILE.x > 0`. POM self-shadow is unchanged, and lighting.ts is not edited.
+  - Median joint / face luminance (a5c03e1 → this, cavity components from the relief view): WAREHOUSE CMU g08
+    0.884 → 0.789, PIPEWORKS corridor CMU g09 0.743 → 0.851, CONCRETE spawn g05 0.908 → 0.884, POOLROOMS g12
+    0.953 → 0.940, RESTROOM tile g13 0.879 → 0.869. The plan's ≤ 0.75 is not met: overhead light reaches most of a
+    joint, and a term linear in V cannot draw a pit's hard shadow under raking light. Darker joints are for the
+    lanes' dirt (BR_L_DIRT).
+  - Flat-face means move 0 to +0.7 %.
+  - The same wall patch at 1.5 m and 6 m changes by −1.75 % and −1.80 % (no mip bias; the old cone: −0.77 % and
     −0.15 %).
-  - SERVER_ROOM (g20): the perforated rack doors get 28 % brighter, because the cone had blacked out their
-    mid-cavity texels under grazing light. Auto exposure then darkens the rest of that frame by 4 %.
+  - SERVER_ROOM (g20): the perforated rack doors get 14 % brighter than under the cone, which had blacked out their
+    holes; auto exposure darkens the rest of that frame by about 1 %.
 - **Grime block:** relief-aware dirt / wear after the profile chain, inside `if ( brGrime != 0 )`, compiled in by
   `#define BR_RELIEF_GRIME` (1 once a row sets `dirt[3]` or `wear[3]` > 0). Dirt raises ormh.g by 0.12 × dirt. Wear
   reads `brRel`, the relief above the layer's mean plane, which is not local convexity.
@@ -76,9 +77,10 @@ v2 conventions").
 - **Harness:** `stats().auxRange` gives, per layer, the aux kind and the min / p2 / p98 / max of ormh.a's 32² cell means
   (checks=range).
 - **Tests:** `tests/materials/brdf.test.ts` covers the EON twin and white furnace, the override text, the visibility
-  against a ray-marched reference, and the grime helpers. samplerBudget pins the high / ultra units (16 / 16 / 15 / 13)
-  and adds a fragment uniform-vector census: at most +10 vec4 over a5c03e1, packed ≤ 224. High and ultra pack to
-  218-219, so 5 vec4 of headroom is left, and nothing in v2 may add a uniform. params.test covers the wiring points.
+  against a ray-marched reference and its R_d estimate against two full bakes (sweep), and the grime helpers.
+  samplerBudget pins the high / ultra units (16 / 16 / 15 / 13) and adds a fragment uniform-vector census: at most
+  +10 vec4 over a5c03e1, packed ≤ 224. High and ultra pack to 218-219, so 5 vec4 of headroom is left, and nothing in
+  v2 may add a uniform. params.test covers the wiring points.
 - **Cost** (`__backrooms.gpuBench`, whole frame, 3 interleaved rounds against 0a):
   - At the defaults: +0.01 / −0.02 ms at high (1600x900, g05 / g08), and +0.05 to +0.14 ms at ultra (2560x1440,
     within round-to-round noise).

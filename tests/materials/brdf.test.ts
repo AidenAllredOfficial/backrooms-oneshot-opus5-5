@@ -1,7 +1,7 @@
 // tests/materials/brdf.test.ts — texture realism v2 (0b) shading maths: the EON rough diffuse (chunks/brdf.ts TS twin,
 // white furnace, the published single-scattering ratios, the RE_Direct override text), the linear cavity visibility of
-// the baked light (chunks/pom.ts dirVis) against a ray-marched height-field reference, and the grime helpers
-// (chunks/grimeLib.ts).
+// the baked light (chunks/pom.ts dirVis) against a ray-marched height-field reference and its R_d estimate against full
+// bakes, and the grime helpers (chunks/grimeLib.ts).
 
 import { describe, expect, it } from 'vitest';
 import { ShaderChunk, ShaderLib } from 'three';
@@ -9,7 +9,7 @@ import {
   brdfParsGlsl, brDirectSource, EON_C1, EON_C2, EON_G, eonAlbedo, eonBrdf, eonDelta, eonSingleRatio, fonAlbedo, fonAlbedoExact,
   physicalDirectSource,
 } from '../../src/materials/chunks/brdf.ts';
-import { DIRVIS, dirVis, dirVisG, FRAG_DIRVIS_GLSL } from '../../src/materials/chunks/pom.ts';
+import { DIRVIS, dirVis, dirVisG, dirVisRd, FRAG_DIRVIS_GLSL } from '../../src/materials/chunks/pom.ts';
 import { f } from '../../src/materials/chunks/params.ts';
 import { GRIME_LIB_GLSL, heightBlend, STAIN_FRONT, stainFront } from '../../src/materials/chunks/grimeLib.ts';
 import { buildSurfaceFragment } from '../../src/materials/SurfaceMaterial.ts';
@@ -151,26 +151,6 @@ function feature(kind: 'groove' | 'tooled' | 'pit', size: number, depth: number)
   return { h, pts };
 }
 
-/** A periodic smooth value-noise height field (amplitude a texels, cells per N) and sample points on it. */
-function roughField(a: number, cells: number, seed: number): { h: Float64Array; pts: [number, number][] } {
-  let st = seed;
-  const rnd = (): number => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
-  const g = Array.from({ length: cells * cells }, rnd);
-  const h = new Float64Array(N * N);
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const xx = (x * cells) / N, yy = (y * cells) / N, x0 = Math.floor(xx), y0 = Math.floor(yy);
-      let fx = xx - x0, fy = yy - y0;
-      fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
-      const x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
-      h[y * N + x] = a * (g[y0 * cells + x0] * (1 - fx) * (1 - fy) + g[y0 * cells + x1] * fx * (1 - fy) + g[y1 * cells + x0] * (1 - fx) * fy + g[y1 * cells + x1] * fx * fy - 0.5);
-    }
-  }
-  const pts: [number, number][] = [];
-  for (let i = 0; i < 24; i++) pts.push([Math.floor(rnd() * N), Math.floor(rnd() * N)]);
-  return { h, pts };
-}
-
 describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', () => {
   it('fits a ray-marched reference better than the cone-scaled form, without bias', () => {
     const feats = [
@@ -186,10 +166,10 @@ describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', (
         for (const betaD of [30, 55, 80]) {
           const th = (thD * Math.PI) / 180, beta = (betaD * Math.PI) / 180;
           const cb = Math.cos(beta), c = Math.cos(th);
-          const w = DIRVIS.RD_W * (1 + cb) / 2; // the directionality whose R_d estimate is this cap
+          const g = dirVisG((1 + cb) / 2, c); // the cap model at this cap's own resultant length
           pts.forEach(([x, y], i) => {
             const ref = [0, Math.PI / 4, Math.PI / 2].reduce((s, p) => s + capVis(h, x, y, th, beta, p) / 3, 0);
-            const v = dirVis(V[i], w, c);
+            const v = Math.max(0, 1 - (1 - V[i]) * g);
             const vp = Math.max(0, 1 - (1 - V[i]) * planG(cb, c));
             e2 += (v - ref) ** 2; e2p += (vp - ref) ** 2; bias += v - ref; n++;
           });
@@ -202,44 +182,79 @@ describe('linear cavity visibility of the baked light (chunks/pom.ts dirVis)', (
     expect(rmse).toBeLessThan(0.8 * rmsePlan);
   });
 
-  it('a narrow light near the horizon shadows rough relief more than the cap model alone predicts (GRAZE term)', () => {
-    const fields = [roughField(2, 16, 7), roughField(3, 32, 11), roughField(4, 8, 13)];
-    let biasNew = 0, biasCap = 0, n = 0;
-    for (const { h, pts } of fields) {
-      const V = pts.map(([x, y]) => cavity(h, x, y));
-      for (const thD of [78, 84]) {
-        const th = (thD * Math.PI) / 180, beta = (8 * Math.PI) / 180, c = Math.cos(th);
-        const w = DIRVIS.RD_W * (1 + Math.cos(beta)) / 2;
-        const capOnly = DIRVIS.K * (2 - 2 * c * c); // the closed form at cos(beta) ~ 1
-        pts.forEach(([x, y], i) => {
-          const ref = [0, Math.PI / 3, (2 * Math.PI) / 3].reduce((acc, p) => acc + capVis(h, x, y, th, beta, p) / 3, 0);
-          biasNew += dirVis(V[i], w, c) - ref;
-          biasCap += Math.max(0, 1 - (1 - V[i]) * capOnly) - ref;
-          n++;
-        });
+  it('is linear in V down to 1 - 1 / G_MAX at every w and c (the mip-filtered cavity gives the filtered visibility)', () => {
+    const vs = [1 - 1 / DIRVIS.G_MAX, 0.6, 0.75, 0.9, 1];
+    for (const w of [0, 0.3, 0.6, 1]) {
+      for (const c of [0.2, 0.3, 0.5, 0.8, 1]) { // c >= NG_MIN in the shader
+        const mean = vs.reduce((s, v) => s + dirVis(v, w, c), 0) / vs.length;
+        expect(dirVis(vs.reduce((s, v) => s + v, 0) / vs.length, w, c), `w ${w} c ${c}`).toBeCloseTo(mean, 12);
+        expect(dirVis(1, w, c)).toBe(1); // a flat texel sees all of the light
       }
     }
-    expect(Math.abs(biasNew / n)).toBeLessThan(Math.abs(biasCap / n));
-    expect(biasCap / n).toBeGreaterThan(0); // the cap model alone leaves grazing relief too bright
+    // a collimated light along the normal reaches the bottom of any open cavity; a hemisphere sees the cavity's V
+    expect(dirVisG(1, 1)).toBeCloseTo(0, 12);
+    expect(dirVisG(0.5, 1)).toBeCloseTo(DIRVIS.K, 12);
+    // grazing light loses more than overhead light of the same spread, a narrow grazing light up to G_MAX
+    expect(dirVisG(0.8, 0.3)).toBeGreaterThan(dirVisG(0.8, 0.95));
+    expect(dirVisG(1, 0.2)).toBeCloseTo(DIRVIS.G_MAX, 1);
   });
 
-  it('is linear in V (the mip-filtered cavity gives the filtered visibility) and exact at the limits', () => {
-    for (const [w, c] of [[0.3, 1], [0.6, 0.9], [0.8, 0.5], [0.5, 0.2]]) {
-      const vs = [0.55, 0.7, 0.85, 1];
-      const mean = vs.reduce((s, v) => s + dirVis(v, w, c), 0) / vs.length;
-      expect(dirVis(vs.reduce((s, v) => s + v, 0) / vs.length, w, c)).toBeCloseTo(mean, 12);
-      expect(dirVis(1, w, c)).toBe(1); // a flat texel sees all of the light
+  it('the R_d estimate: a narrow light on grazing walls (low direct share), a wider one straight on (several lamps)', () => {
+    // the bake's walls lit at c < 0.35 have w ~ 0.3-0.5 (direct share 0.25-0.5) and R_d 0.9-1.0: w / 0.8 read them as
+    // a hemisphere
+    expect(dirVisRd(0.4, 0.25)).toBeGreaterThan(0.9);
+    expect(dirVisRd(0.5, 1)).toBeLessThan(dirVisRd(0.5, 0.3));
+    expect(dirVisRd(1, 0)).toBe(1);
+  });
+
+  it('the R_d estimate against full bakes: the cap model at the estimate is near the cap model at the baked R_d', { tags: ['sweep'] }, async () => {
+    // bake two zones' tiles with all terms and direct only: w_all / w_direct is the direct share, w_direct the direct
+    // light's own resultant R_d. Compare the visibility at V 0.5 / 0.7 / 0.9 per texel, weighted by the directional
+    // energy w E, for this estimate and the plan's w / 0.8 (the grazing walls carry the difference)
+    const { bakeTile } = await import('../../src/bake/index.ts');
+    const { Zone } = await import('../../src/core/ids.ts');
+    const { ChartKind } = await import('../../src/core/mesh.ts');
+    const { fromHalf } = await import('../../src/core/half.ts');
+    const { Q_HIGH, surfacesOf, zoneNeighborhood } = await import('../bake/helpers.ts');
+    const plan = (w: number): number => Math.min(1, w / 0.8);
+    let e2 = 0, e2p = 0, sw = 0, bw = 0, bwp = 0, sww = 0;
+    for (const zone of [Zone.LOBBY, Zone.PIPEWORKS]) {
+      const nb = zoneNeighborhood(zone, 0, 0, 0);
+      const tile = { s: 0, cx: 0, cz: 0, q: 0 } as const;
+      const s = surfacesOf(nb, tile, 12);
+      const all = bakeTile(nb, tile, s, 'full', Q_HIGH, 'all');
+      const dir = bakeTile(nb, tile, s, 'full', Q_HIGH, 'direct');
+      const lum = (a: Uint16Array, o: number): number => 0.2126 * fromHalf(a[o]) + 0.7152 * fromHalf(a[o + 1]) + 0.0722 * fromHalf(a[o + 2]);
+      for (const ch of s.charts) {
+        if (ch.kind !== ChartKind.WALL && ch.kind !== ChartKind.FLOOR_GRID && ch.kind !== ChartKind.CEIL_GRID) continue;
+        for (let v = 1; v < ch.h - 1; v++) {
+          for (let u = 1; u < ch.w - 1; u++) {
+            const o = ((ch.y + v) * s.atlasW + ch.x + u) * 4;
+            const w = all.dir[o + 3] / 255, rd = dir.dir[o + 3] / 255, e = lum(all.irr, o);
+            if (rd < 0.05 || !(e > 0)) continue;
+            const d = [dir.dir[o] / 127.5 - 1, dir.dir[o + 1] / 127.5 - 1, dir.dir[o + 2] / 127.5 - 1];
+            const c = Math.max((d[0] * ch.normal[0] + d[1] * ch.normal[1] + d[2] * ch.normal[2]) / (Math.hypot(d[0], d[1], d[2]) || 1), 0.2);
+            const wt = w * e, gt = dirVisG(rd, c), ge = dirVisG(dirVisRd(w, c), c), gp = dirVisG(plan(w), c);
+            for (const V of [0.5, 0.7, 0.9]) {
+              const t = Math.max(0, 1 - (1 - V) * gt);
+              const de = Math.max(0, 1 - (1 - V) * ge) - t, dp = Math.max(0, 1 - (1 - V) * gp) - t;
+              e2 += wt * de * de; e2p += wt * dp * dp; sw += wt;
+              if (ch.kind === ChartKind.WALL && c < 0.35) { bw += wt * de; bwp += wt * dp; sww += wt; }
+            }
+          }
+        }
+      }
     }
-    // a collimated light along the normal reaches the bottom of any open cavity; a hemisphere sees the cavity's V
-    expect(dirVisG(DIRVIS.RD_W, 1)).toBeCloseTo(0, 12);
-    expect(dirVisG(DIRVIS.RD_W / 2, 1)).toBeCloseTo(DIRVIS.K, 12);
-    // grazing light loses more than overhead light of the same spread
-    expect(dirVisG(0.6, 0.3)).toBeGreaterThan(dirVisG(0.6, 0.95));
+    // measured: rms 0.049 against the plan's 0.098; grazing walls -0.02 against +0.17
+    const rms = Math.sqrt(e2 / sw), rmsPlan = Math.sqrt(e2p / sw);
+    expect(rms).toBeLessThan(0.7 * rmsPlan);
+    expect(Math.abs(bw / sww)).toBeLessThan(0.05); // grazing walls: no systematic brightening of joints and pits
+    expect(bwp / sww).toBeGreaterThan(0.1);
   });
 
   it('the GLSL uses the DIRVIS constants and skips pile layers', () => {
     expect(DIRVIS.LINEAR).toBe(true);
-    for (const v of [DIRVIS.RD_W, DIRVIS.CB_LOW, DIRVIS.K, DIRVIS.GRAZE, DIRVIS.GRAZE_CB]) expect(FRAG_DIRVIS_GLSL).toContain(f(v));
+    for (const v of [DIRVIS.RD_0, DIRVIS.RD_W, DIRVIS.RD_C, DIRVIS.CB_LOW, DIRVIS.K, DIRVIS.G_MAX]) expect(FRAG_DIRVIS_GLSL).toContain(f(v));
     expect(FRAG_DIRVIS_GLSL).toContain('if ( BR_L_PILE[ brL ].x <= 0.0 ) {');
     expect(FRAG_DIRVIS_GLSL).not.toContain('smoothstep'); // the legacy cone is off
   });
