@@ -357,7 +357,9 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 			brDetSl *= brcDk;
 			brDetVar *= ( 1.0 + 1.5 * brcW ) * mix( 1.0, 0.5, brcDust );
 #endif
-			if ( BR_DETAIL == 1 && uBrReflPass < 0.5 ) {
+			// joints, pours and cracks belong to the slab (the FLOOR_AUX floor faces), not to stair treads and block tops
+			bool brcSlabOn = ( brF & BR_F_FLOOR_AUX ) != 0;
+			if ( brcSlabOn && BR_DETAIL == 1 && uBrReflPass < 0.5 ) {
 				vec3 brcAm, brcN;
 				float brcRm, brcNw, brcRt, brcRtw, brcCav;
 				vec3 brcV = normalize( ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz );
@@ -367,7 +369,7 @@ void brcSlab( vec2 s2, vec3 vw, bool paint, out vec3 am, out float rm, out vec3 
 				brOrmh.g = mix( brOrmh.g, brcRt, brcRtw );
 				brOrmh.r *= brcCav;
 				if ( brcNw > 0.0 ) brNrm.xyz = mix( brNrm.xyz, normalize( brcN ) * brNLen, brcNw );
-			} else {
+			} else if ( brcSlabOn ) {
 				// low quality and the planar mirror pass: the joints as their mean darkening only
 				vec2 brcJd = abs( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT;
 				vec2 brcFw = max( fwidth( brS2 ), vec2( 1e-4 ) );
