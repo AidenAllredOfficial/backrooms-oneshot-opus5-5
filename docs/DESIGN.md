@@ -4453,9 +4453,11 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   areas: three coarse C taps 3, 8 and 18 cm up the surface (the uv step of a world rise from the screen derivatives)
   times the drip field, blended from two world projections (no 45-degree seam on tanks and pipes). Rust is dielectric at 0.88-0.95 with EON sigma 0.5.
 - **WOOD** cuts each board (90-300 mm, packed across v) from its own log: the pith 2-25 cm under the face and to one
-  side, rings R = sqrt(d^2 + z^2) + t x with a per-board taper t (4-15 mm per m, either way) from the board's butt
-  joint, ring width 2-5 mm +-40 %, gradual earlywood into an abruptly ending latewood, hue +-3 %, value +-10 %, rings
-  finer than ~3 samples faded to their mean. The runtime wears the finish off (W: edges, the hand band, tops): lighter,
+  side, rings R = sqrt(d^2 + z^2) + t x with a per-board grain slope t (20-60 mm per m, either way; plus a +-3 mm
+  sweep of the pith over ~20 cm) from the board's butt joint, so 3-10 nested arches of irregular spacing point along a
+  board; ring width 3-8 mm +-40 % (at 2-5 mm the flank rings were finer than the 1.2 mm texels and faded to a plain
+  brown), gradual earlywood into an abruptly ending latewood, hue +-3 %, value +-10 %, rings finer than ~3 samples
+  faded to their mean. The runtime wears the finish off (W: edges, the hand band, tops): lighter,
   greyer, roughness 0.6; end-grain faces are 30 % darker and 0.2 rougher. Crates and pallets are sawn (override 0.85).
 - **PLASTIC**: flow-line gloss bands, sink marks, a scuff field (stress-whitened scuffs at edges and the kick zone,
   UV chalking of old up-facing parts); parts with an override below 0.12 (glass, screens) skip the haircell and scuffs.

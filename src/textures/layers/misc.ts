@@ -6,12 +6,13 @@ import { phys, type RecipeTable } from './types.ts';
 /** Finished flat-sawn wood (desks, doors, benches, crates; texture realism v2, lane E; frame 1.2 m, grain along u).
  * The frame is split across v into boards of hashed width 90-300 mm. Each board is cut from its own log: the pith
  * lies d = 2-25 cm under the face and off to one side, so the face cuts the near-coaxial ring cones along
- * R = sqrt(d^2 + z^2) + t x (z across the board, x along it from the board's butt joint, t the log's taper of 4-15 mm
- * of radius per metre, either way): nested cathedral arches pointing along the board where the rings surface, straight
- * grain on the flanks. Every board has a butt joint at a hashed u (the taper restarts there, so the frame tiles); ring
- * width 2-5 mm per board, +-40 % from ring to ring, earlywood grading into a darker latewood that ends abruptly at the
- * next ring; hue and value vary per board. Rings finer than ~3 samples fade to their mean (no moire). ormh.a = the finish-wear
- * threshold (runtime: lighter, less saturated, rougher where hands and objects wore the finish off). */
+ * R = sqrt(d^2 + z^2) + t x (z across the board, x along it from the board's butt joint, t the grain slope of 20-60 mm
+ * of radius per metre, either way, plus a +-3 mm sweep of the pith): nested cathedral arches pointing along the board
+ * where the rings surface, straight grain on the flanks. Every board has a butt joint at a hashed u (the slope restarts
+ * there, so the frame tiles); ring width 3-8 mm per board (finer rings fade out at 1.2 mm texels), +-40 % from ring to
+ * ring, earlywood grading into a darker latewood that ends abruptly at the next ring; hue and value vary per board.
+ * Rings finer than ~3 samples fade to their mean (no moire). ormh.a = the finish-wear threshold (runtime: lighter, less
+ * saturated, rougher where hands and objects wore the finish off). */
 const WOOD = /* glsl */ `
 float wn1(float x, int seed) {
   float i = floor(x), f = x - i;
@@ -37,13 +38,14 @@ void gen(vec2 uv, inout Surf s) {
   vec4 bh2 = hash4f(ivec2(bid, 6), 32);
   float d = 0.02 + 0.23 * bh.x * bh.x;          // pith depth under the face (m)
   float zc = (bh.y - 0.5) * 1.6 * bw;            // pith offset across the board
-  float w0 = 0.002 + 0.003 * bh.z;               // ring width
+  float w0 = 0.003 + 0.005 * bh.z;               // ring width
   float k = 6.2832 / FRAME.x;
-  float tr = (0.004 + 0.011 * bh.w) * (bh2.y < 0.5 ? 1.0 : -1.0); // taper (m of radius per m of length)
+  float tr = (0.02 + 0.04 * bh.w) * (bh2.y < 0.5 ? 1.0 : -1.0); // grain slope (m of radius per m of length)
   vec2 xw = m + 0.004 * vec2(0.0, fbm(uv, PMxy(3.0, 8.0), 3, 33)); // slight wander of the grain
   float z = xw.y - y0 - 0.5 * bw - zc;
   float xl = mod(xw.x - bh2.x * FRAME.x, FRAME.x); // along the board from its butt joint
-  float tap = tr * xl + 0.002 * sin(k * xw.x + 6.2832 * bh2.z);
+  // the grain slope, a slow wobble and the pith's sweep (+-3 mm over ~20 cm: the arch tips fall irregularly)
+  float tap = tr * xl + 0.002 * sin(k * xw.x + 6.2832 * bh2.z) + 0.006 * (wn1(xl * 5.0, 40 + bid) - 0.5);
   float R = sqrt(d * d + z * z) + tap;
   float t = R / w0;
   t += 2.2 * (wn1(t * 0.18, 34 + bid) - 0.5); // ring widths +-40 %
