@@ -4216,14 +4216,17 @@ Block walls read as concrete block at every distance, and the tile layers as fir
   and are tooled concave; chips, voids and lap bands are resolved at the base texel. The detail mask (ormh.a, 0.3 in the
   joints) keeps the tooled mortar smoother than the face. The base also carries 6-10 mm aggregate crowns, which are
   the whole face texture on medium and low, where no detail maps are bound.
-- **World block variation** (`chunks/family/masonry.ts` postSample / postDetail / normal): a key from the wall position
+- **World block variation** (`chunks/family/masonry.ts` postSample / postDetail): a key from the wall position
   follows the texture's third bond (wrapping at NOISE_WRAP / 0.4 m and 15 courses per storey, so it never jumps at a
-  tile edge) and gives every world block a paint lot (+-4 % value, +-1 % warmth; raw +-6 %), first-coat flashing
-  (+-0.1 roughness), a +-0.25 deg tilt, a texture class (6 % touch-up, 4 % heavily filled, 10 % open) and its own
-  patch of the aggregate (a detail-uv offset). Faces only: the joint share comes from the detail mask. The same hook
-  undoes the cotangent frame's u / v scaling on these walls (TEX2.md, lane C: a core issue on every layer with
-  repeatY != repeat), which had shaded head joints, tilts and chips at 42 % of their slope. Without detail maps, the
-  rough hook adds D14 / D15's unresolved slope variance (0.12 / 0.18) to alpha^2, so the walls keep their matte sheen.
+  tile edge) and gives every world block a paint lot (+-3.2 % value, +-1 % warmth; raw +-6 %), first-coat flashing
+  (+-0.05 roughness), a +-0.25 deg tilt, a texture class (6 % touch-up, 4 % heavily filled, 10 % open) and its own
+  patch of the aggregate (a detail-uv offset). Faces only: the joint share comes from the detail mask. The flashing is
+  kept small because the probe's roughness fade (0.5-0.65) turns sheen differences into lamp-reflection steps, and the
+  rough hook caps painted CMU at 0.67 so that no block straddles SSR's G-buffer eligibility cut (0.7), where blocks
+  popped between the two paths with distance. The same hook undoes the cotangent frame's u / v scaling on these walls
+  (TEX2.md, lane C: a core issue on every layer with repeatY != repeat), which had shaded head joints, tilts and chips
+  at 42 % of their slope. Without detail maps, the rough hook adds D14 / D15's unresolved slope variance (0.12 / 0.18)
+  to alpha^2, so the walls keep their matte sheen.
 - **CMU_RAW** is placed on PIPEWORKS walls, the transition service corridors and the loading bays; CONCRETE, WAREHOUSE
   and the towers stay painted.
 - **Masonry grime** (profile 8): in the damp band of painted block the paint flakes in ragged patches that show the raw

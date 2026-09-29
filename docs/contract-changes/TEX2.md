@@ -62,10 +62,15 @@ v2 conventions").
   (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. `world/content/decals.ts` places wall CRACK
   decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost theirs (not lane C's file; adding CMU_RAW to
   that filter restores them).
-- **Hooks (chunks/family/masonry.ts):** main-scope names `brMsOn`, `brMsJ`, `brMsDet`, `brMsTilt` (postSample; read by
-  postDetail, grime, normal); `brMsKey()` in pars. postDetail applies `brAux` as the detail strength on CMU while
-  `DETAIL_MASK_SHIM = 1`: **set it to 0 when 0b's detail block applies the 'detailMask' channel itself**, or the joints
-  get the mask twice. The rough hook adds D14 / D15's E[s^2] (0.12 / 0.18) to alpha^2 under `#ifndef BR_DETAIL_MAPS`.
+- **Hooks (chunks/family/masonry.ts):** main-scope names `brMsOn`, `brMsDet` (postSample; read by postDetail and
+  grime); `brMsKey()` and `BR_M_CMU_PAINTED` / `BR_M_CMU_RAW` in pars. postDetail applies `brAux` as the detail strength
+  on CMU while `DETAIL_MASK_SHIM = 1`: **set it to 0 when 0b's detail block applies the 'detailMask' channel itself**,
+  or the joints get the mask twice. The rough hook adds D14 / D15's E[s^2] (0.12 / 0.18) to alpha^2 under
+  `#ifndef BR_DETAIL_MAPS`, then caps painted CMU at `CMU_PAINTED_MAX_ROUGH` = SSR.ELIG_ROUGH - 0.03 (imported from
+  `post/ssr/ssrGlsl.ts`): blocks around the G-buffer eligibility cut switched paths per block with distance.
+- **Found for the SSR / probe owners:** the probe's roughness fade (ROUGH0 0.5 to ROUGH1 0.65) sits inside painted
+  CMU's range (0.52 close, 0.67 far), so small roughness steps become lamp-reflection steps (the inline fallback of a
+  0.65 lobe has no lamp reflection at all). Painted CMU's flashing is kept at +-0.05 for it.
 - **Core issue found (lane 0):** `FRAG_NORMAL_GLSL`'s cotangent frame keeps |T| : |B| = |grad u| : |grad v|, so on
   vertical faces of layers with repeatY != repeat every metric slope along u is scaled by repeatY / repeat (CMU 0.42,
   CONCRETE_WALL 0.63, CONCRETE_FLOOR / CEIL on walls 0.63, METAL_PAINTED 0.83). The masonry postSample undoes it for the
