@@ -4224,7 +4224,9 @@ through tone structure, dirty pores, joints with depth and specular lanes. Lane 
   is supersampled with 4 taps across the pixel footprint and fades to its mean darkening below ~1 pixel. 60 % of the
   panels carry one shrinkage crack between two panel edges (so every crack ends at a joint), warped at 0.4 m and
   5 cm, 0.2–1.2 mm wide along its length, 35 % branched, with a dirty halo; sub-pixel cracks keep a 0.35-pixel
-  rendered width with scaled contrast. Early-outs keep the cost to a few hashes away from joints and cracks.
+  rendered width with scaled contrast; the dirt band beside the cut and the crack halo widen with the pixel footprint
+  at a constant integral, and below a pixel the kerf's normal and roughness fade to fixed means (so which taps hit the
+  kerf cannot make a far joint flicker). Early-outs keep the cost to a few hashes away from joints and cracks.
 - **Traffic lanes:** WP7 mask A covers the hard floors (bake/mask.ts; TEX2.md). On concrete the lanes are burnished:
   roughness × 0.62, albedo × 0.88 and a little warmer, the detail stronger (exposed fines, LEAN micro-scratches),
   dust at their edges; every door wears an entry fan into its rooms and rack aisles get two wheel tracks. On terrazzo the lanes lose the polish (roughness × 3.5, the

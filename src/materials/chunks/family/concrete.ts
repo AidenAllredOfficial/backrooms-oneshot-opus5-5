@@ -109,8 +109,10 @@ vec2 brcSpall( float al, int li, uint salt ) {
 }
 // The joint of one axis: x = signed metres from the line, al = along-joint metres, li = line index, t = view slope,
 // fx = pixel footprint across the joint (m). 4 taps across the footprint while the kerf is at least ~1 pixel wide,
-// fading to the kerf's mean darkening (coverage) below that. Returns the joint coverage of the pixel.
-float brcJoint( float x, float al, int li, float t, float fx, bool filled, out float a, out vec3 n, out float r, out float cav ) {
+// fading to the kerf's mean darkening (coverage) below that. Returns the joint coverage of the pixel (the normal's
+// weight); r is the roughness of the kerf and spall taps and rc their share (the arris keeps the slab's roughness).
+// Below a pixel the normal and roughness fade to fixed means: which taps hit must not make them flicker.
+float brcJoint( float x, float al, int li, float t, float fx, bool filled, out float a, out vec3 n, out float r, out float rc, out float cav ) {
 	vec2 sw = brcSpall( al, li, 523u );
 	float a4 = 0.0, nw = 0.0, r4 = 0.0, rw = 0.0, c4 = 0.0;
 	vec3 n4 = vec3( 0.0 );
@@ -124,7 +126,8 @@ float brcJoint( float x, float al, int li, float t, float fx, bool filled, out f
 	a = a4 * 0.25;
 	cav = c4 * 0.25;
 	n = nw > 0.0 ? n4 / nw : vec3( 0.0, 0.0, 1.0 );
-	r = rw > 0.0 ? r4 / rw : 0.0;
+	r = rw > 0.0 ? r4 / rw : 0.7;
+	rc = rw * 0.25;
 	float cov = nw * 0.25;
 	// sub-pixel kerf: its mean darkening over the footprint (a line that neither vanishes nor crawls)
 	float wk = 2.0 * BRC_KERF_HW + sw.x + sw.y;
@@ -134,6 +137,9 @@ float brcJoint( float x, float al, int li, float t, float fx, bool filled, out f
 		a = mix( a, 1.0 - 0.7 * cl, k );
 		cav = mix( cav, 1.0 - 0.4 * cl, k );
 		cov = mix( cov, cl, k );
+		n = normalize( mix( n, vec3( 0.0, 0.0, 1.0 ), k ) );
+		r = mix( r, 0.7, k );
+		rc = mix( rc, cl, k );
 	}
 	return cov;
 }
@@ -237,16 +243,16 @@ float brcSlab( vec2 s2, bool paint, inout vec3 a, inout float rm, inout vec4 nrm
 	vec3 vw = ( vec4( normalize( vViewPosition ), 0.0 ) * viewMatrix ).xyz; // world direction to the eye
 	float t = - ( zl ? vw.z : vw.x ) / max( vw.y, 0.05 );
 	uint hl = brHash2u( brWrap( ivec2( li, zl ? 1 : 0 ), ivec2( BR_CONCRETE_JOINT_P, 2 ) ), 1627u );
-	float ka, kr, kc;
+	float ka, kr, krc, kc;
 	vec3 kn;
-	float cov = brcJoint( x, zl ? s2.x : s2.y, li, t, zl ? fw.y : fw.x, brU01( hl ) < 0.7, ka, kn, kr, kc );
+	float cov = brcJoint( x, zl ? s2.x : s2.y, li, t, zl ? fw.y : fw.x, brU01( hl ) < 0.7, ka, kn, kr, krc, kc );
 	// dirt collected beside the cut (2.5 cm each side), widened by the footprint with its darkening scaled to keep its
 	// integral: far away the band neither aliases into a dotted line nor darkens the joint more
 	float dw = 0.025 + ( zl ? fw.y : fw.x );
 	a *= ka * ( 1.0 - 0.12 * ( 0.025 / dw ) * ( 1.0 - smoothstep( 0.0, dw, abs( x ) ) ) );
 	ormh.r *= kc;
 	if ( cov > 0.0 ) {
-		ormh.g = mix( ormh.g, kr, cov );
+		ormh.g = mix( ormh.g, kr, krc );
 		// the across axis is the tangent y (world z) for z-lines
 		nrm.xyz = mix( nrm.xyz, normalize( zl ? vec3( 0.0, kn.x, kn.z ) : kn ) * nlen, cov );
 	}
