@@ -235,5 +235,8 @@ v2 conventions").
 - **World output:** light-well window band, copier platen and control panel RUBBER -> PLASTIC; children's playroom
   floor RUBBER -> VINYL_VCT; pool lane rope RUBBER -> PLASTIC. tests/world/golden.json is unchanged (the golden chunks
   hash the layout, which these landmarks do not reach at seed 1).
+- **Costs:** DESIGN.md lane E (high +0.05 to +0.16 ms whole frame across sessions, RenderPass +0.06 ms; ultra within
+  its +-0.5 ms noise; generation +18 to +41 ms). Over the lane budget; the EON sigma on METAL_RUST, RUBBER and kraft is
+  the shared presence cost lane B and C already pay.
 - **Consumers affected:** lane 0 / WP9 (the new anchor, the props lmUv no longer 0), WP6 (tint and lmUv encoding),
   the integrator.

@@ -4402,7 +4402,16 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
 - **Grime profile 6** (metal): rust run-off on painted and grating steel from the drips and the smooth tide field (not
   the speckle channel, which made leopard spots), none on bare metal; METAL_RUST uses its own run-off. Up-facing shell
   steel gathers dust (props get the anchor cell's).
-- **Costs:** see TEX2.md, lane E.
+- **Costs** (against tex-integ 3eb5d47, interleaved fresh boots, other agents capturing alongside). Whole frame
+  (`gpuBench(20)`, 1600 x 900 high): +0.05 to +0.16 ms on the LOCKER_ROOM landmark, the WAREHOUSE spawn, the locker
+  close-up and the rust tank across three sessions (a quiet session measured +0.04 ms on the warehouse and the locker
+  close-up); the high RenderPass (`gpuProfile(3)`, locker close-up) +0.06 ms. Ultra 2560 x 1440: RenderPass -0.05 to
+  +0.53 ms, whole frame -0.04 to +0.84 ms (run-to-run noise +-0.5 ms). Before the cuts the wear block cost +0.12-0.14 ms
+  at high: most of it was register pressure from main-scope wear state and the chip-step bump, now scoped or removed
+  (see the commit history). Texture generation 213-221 ms -> 231-260 ms at 1024 (+18 to +41 ms; the WOOD, PLASTIC,
+  RUBBER and METAL_BARE recipes run without supersampling), memory 0 MB beyond the reserved METAL_BARE layer and the
+  D18-D20 slots; prop mesh bytes unchanged (the lmUv stream existed). The budgets (+0.02 / +0.05 ms, +20 ms) are
+  exceeded.
 
 **Must NOT touch:** material shaders (WP9), except that you own the albedo *numbers* via contract-changes.
 
