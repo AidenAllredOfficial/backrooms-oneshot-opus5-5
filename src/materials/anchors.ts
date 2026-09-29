@@ -18,6 +18,8 @@ export const SURFACE_INJECTIONS: readonly ShaderAnchor[] = [
   { stage: 'fragment', include: 'roughnessmap_fragment', mode: 'replace' },
   { stage: 'fragment', include: 'metalnessmap_fragment', mode: 'replace' },
   { stage: 'fragment', include: 'normal_fragment_maps', mode: 'replace' },
+  // texture realism v2 lane E: the props clearcoat's normal (chunks/family/props.ts PROP_COAT_NORMAL_GLSL)
+  { stage: 'fragment', include: 'clearcoat_normal_fragment_begin', mode: 'after' },
   { stage: 'fragment', include: 'emissivemap_fragment', mode: 'replace' },
   // after three fills `material` and before lights_fragment_begin computes material.dfg (chunks/materialPost.ts)
   { stage: 'fragment', include: 'lights_physical_fragment', mode: 'after' },

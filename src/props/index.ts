@@ -54,7 +54,7 @@ export function emitPropInto(w: GeometryWriter | null, p: PropPlacement, ox: num
   if (!build) return 0;
   const s = p.scale > 0 ? p.scale : 1;
   w?.setTransform(p.yaw, s, p.x - ox, p.y, p.z - oz);
-  B.begin(w, (p.flags & PropFlag.CEILING) !== 0, auxBits, ceilByte, p.seed | 0);
+  B.begin(w, (p.flags & PropFlag.CEILING) !== 0, auxBits, ceilByte, p.seed | 0, s);
   build(B, variantIndex(p.variant), p.seed | 0);
   w?.resetTransform();
   return B.tris;

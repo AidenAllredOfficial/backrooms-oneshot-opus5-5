@@ -46,7 +46,7 @@ export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 12, name: 'CMU_PAINTED', repeat: 2.4, repeatY: 1.0, tileSize: 0, albedoMean: [0.5, 0.5, 0.46], roughness: 0.5, metal: 0, grime: 'masonry', sound: S.CONCRETE, absorption: 0.05, reflective: false },
   { id: 13, name: 'POOL_TILE', repeat: 1.2, tileSize: 0.15, albedoMean: [0.78, 0.79, 0.78], roughness: 0.08, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
   { id: 14, name: 'POOL_MOSAIC', repeat: 0.6, tileSize: 0.3, albedoMean: [0.35, 0.6, 0.65], roughness: 0.1, metal: 0, grime: 'tile', sound: S.TILE, absorption: 0.02, reflective: true },
-  { id: 15, name: 'METAL_PAINTED', repeat: 1.2, repeatY: 1.0, tileSize: 0, albedoMean: [0.4, 0.4, 0.38], roughness: 0.45, metal: 0.2, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
+  { id: 15, name: 'METAL_PAINTED', repeat: 1.2, repeatY: 1.0, tileSize: 0, albedoMean: [0.4, 0.4, 0.38], roughness: 0.36, metal: 0, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
   { id: 16, name: 'METAL_RUST', repeat: 1.2, tileSize: 0, albedoMean: [0.25, 0.14, 0.08], roughness: 0.75, metal: 0.4, grime: 'metal', sound: S.METAL, absorption: 0.03, reflective: false },
   { id: 17, name: 'METAL_GRATE', repeat: 1.2, tileSize: 0, albedoMean: [0.2, 0.2, 0.2], roughness: 0.55, metal: 0.8, grime: 'metal', sound: S.GRATE, absorption: 0.1, reflective: false },
   { id: 18, name: 'WOOD', repeat: 1.2, tileSize: 0, albedoMean: [0.35, 0.22, 0.12], roughness: 0.55, metal: 0, grime: 'none', sound: S.WOOD, absorption: 0.08, reflective: false },

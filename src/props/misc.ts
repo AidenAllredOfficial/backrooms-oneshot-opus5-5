@@ -180,7 +180,7 @@ export const doorLeaf: PropBuild = (b, v) => {
   else b.mat(Mat.METAL_PAINTED, c[0], c[1], c[2]);
   bevelBox(b, -0.44, 0.005, -0.0175, 0.44, 2.07, 0.0175, 0.004);
   // flush pull plates (a lever would not fit the 45 mm footprint) + latch plate
-  b.mat(Mat.METAL_PAINTED, CHROME[0], CHROME[1], CHROME[2], 0, 0.22);
+  b.mat(Mat.METAL_BARE, CHROME[0], CHROME[1], CHROME[2], 0, 0.3); // brushed stainless pull plates
   box(b, 0.33, 0.97, -0.0215, 0.37, 1.13, -0.0175, SKIP.PZ);
   box(b, 0.33, 0.97, 0.0175, 0.37, 1.13, 0.0215, SKIP.NZ);
   rect(b, 0.4405, 1.05, 0, 0, 0, 0.012, 0, 0.05, 0, 1, 0, 0);

@@ -39,11 +39,25 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
+/** D18 baked enamel (METAL_PAINTED; lane E): orange peel of 2-4 mm cells at +-6 um, the waviness that makes lamp
+ * reflections in satin paint crawl, plus faint buffing swirls (long arcs, slightly glossier and a little deeper). */
+const ENAMEL = /* glsl */ `
+#define SS 4
+void gen(vec2 uv, inout Surf s) {
+  vec2 w = warp(uv, PM(40.0), 2, 3, 0.004);
+  float peel = fbm(w, PM(330.0), 2, 4);
+  float sw = ridged(warp(uv, PM(5.0), 2, 5, 0.06), PMxy(2.0, 70.0), 2, 6);
+  float swirl = smoothstep(0.9, 0.99, sw) * smoothstep(0.35, 0.7, vnoise(uv, PM(8.0), 7));
+  s.height = 0.5 + peel - 0.1 * swirl;
+  s.albedo = vec3(1.0 + 0.02 * swirl);
+}
+`;
+
 export const PROP_DETAILS: DetailTable = {
   [Det.BRUSHED]: { name: 'BRUSHED', glsl: BRUSHED, heightScale: 0.00005, slope: 0.01, roughK: 0.05, cavity: 0 },
   [Det.WOOD_PORE]: { name: 'WOOD_PORE', glsl: WOOD_PORE, heightScale: 0.0002, slope: 0.08, roughK: 0.15, cavity: 0.5 },
   [Det.HAIRCELL]: { name: 'HAIRCELL', glsl: HAIRCELL, heightScale: 0.0001, slope: 0.07, roughK: 0.1, cavity: 0.5 },
-  [Det.ENAMEL]: neutralDetail('ENAMEL'),
+  [Det.ENAMEL]: { name: 'ENAMEL', glsl: ENAMEL, heightScale: 0.000012, slope: 0.02, roughK: 0, cavity: 0 },
   [Det.RUST_GRAIN]: neutralDetail('RUST_GRAIN'),
   [Det.KRAFT]: neutralDetail('KRAFT'),
 };

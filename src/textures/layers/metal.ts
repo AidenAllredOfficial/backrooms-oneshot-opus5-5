@@ -3,29 +3,62 @@
 import { Mat } from '../../core/ids.ts';
 import { phys, type RecipeTable } from './types.ts';
 
-/** Painted steel (frame 1.2 x 1.0 m): orange peel, chips through to red-oxide primer and bare steel, fine
- * horizontal scratches. Paint is dielectric; only exposed steel is metallic. */
+/** Shared by the wear-ready recipes: the logistic approximation of the normal CDF (max error ~0.01), which
+ * rank-normalises a sum of noises of known deviation into a threshold field with P(W < x) ~ x. */
+const CDF_N = /* glsl */ `
+float cdfN(float x) { return 1.0 / (1.0 + exp(-1.702 * x)); }
+`;
+
+/** Painted steel (frame 1.2 x 1.0 m), a wear-ready topcoat (texture realism v2, lane E). The colour is the neutral
+ * topcoat only: the prop tint colours it, and the runtime wear (chunks/family/props.ts) exposes primer and steel where
+ * the wear level passes W. Relief is oil-canning (sheet waviness that bends tube reflections); the orange peel is
+ * detail D18 ENAMEL. Channels: ormh.a = W, the wear threshold (17 cm clusters, angular 8 mm flakes that break first
+ * along their borders, fine grain; rank-normalised); albedo.a = S, the scratch field (0-2 segments of 8-80 mm per
+ * 60 mm cell, 60 % within 15 degrees of u, value = depth class 0.3-1). */
 const METAL_PAINTED = /* glsl */ `
+#define SS 4
+${CDF_N}
+float scratchField(vec2 uv) {
+  vec2 P = vec2(PM(16.7));
+  vec2 p = uv * P;
+  vec2 ci = floor(p);
+  vec2 m = uv * FRAME;
+  float S = 0.0;
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 c = ci + vec2(float(x), float(y));
+      ivec2 w = ivec2(wrapCell(c, P));
+      for (int k = 0; k < 2; k++) {
+        vec4 h = hash4f(w, 40 + 7 * k);
+        if (h.x > (k == 0 ? 0.5 : 0.22)) continue;
+        vec4 g = hash4f(w, 61 + 7 * k);
+        vec2 cen = (c + h.yz) / P * FRAME;
+        float len = 0.008 * pow(10.0, g.x);
+        float ang = g.y < 0.6 ? (g.z - 0.5) * 0.52 : g.z * PI;
+        vec2 d = vec2(cos(ang), sin(ang)) * (0.5 * len);
+        vec2 pa = m - (cen - d), ba = 2.0 * d;
+        float t = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        float dist = length(pa - ba * t);
+        float hw = (0.2 + 0.4 * g.w) * 0.001 * (1.0 - 0.6 * abs(2.0 * t - 1.0)); // tapered ends
+        S = max(S, lineM(dist, hw) * (0.3 + 0.7 * h.w));
+      }
+    }
+  }
+  return S;
+}
 void gen(vec2 uv, inout Surf s) {
-  float op = fbm(uv, PM(180.0), 3, 3);
-  vec2 wv = warp(uv, PM(6.0), 3, 4, 0.03);
-  float chipN = fbm(wv, PM(9.0), 5, 5) + 0.25 * fbm(uv, PM(60.0), 2, 6);
-  // R2 integration: fewer, smaller chips (was 0.4 / 0.5): scattered over pale locker / door paint, frequent red chips
-  // read as blood spatter under the camcorder grade
-  float chip = smoothstep(0.47, 0.5, chipN);
-  float bare = smoothstep(0.55, 0.58, chipN);
-  float scr = smoothstep(0.8, 0.92, ridged(warp(uv, PM(4.0), 2, 7, 0.01), PMxy(2.0, 70.0), 2, 8))
-            * smoothstep(0.45, 0.75, vnoise(uv, PM(5.0), 9));
-  vec3 paint = TABLE_ALBEDO * (1.0 + 0.02 * op + 0.035 * fbm(uv, PM(3.0), 3, 10));
-  vec3 primer = srgb8(112.0, 80.0, 62.0); // weathered oxide primer (was a saturated 122, 64, 46)
-  vec3 steel = srgb8(150.0, 150.0, 152.0);
-  float metalMask = max(bare, 0.8 * scr);
-  vec3 col = mix(paint, primer, chip);
-  col = mix(col, steel, metalMask);
-  s.albedo = col;
-  s.metal = metalMask;
-  s.rough = mix(mix(0.42 + 0.06 * op, 0.7, chip), 0.33, metalMask);
-  s.height = 0.6 + 0.05 * op - 0.14 * chip - 0.06 * bare - 0.05 * scr;
+  s.albedo = TABLE_ALBEDO * (1.0 + 0.1 * fbm(uv, PM(4.0), 3, 10)); // coat thickness +-3 %
+  s.height = 0.5 + 1.3 * fbm(uv, PM(3.0), 2, 3); // oil-canning, ~+-0.45 mm
+  s.rough = 0.36 + 0.15 * fbm(uv, PM(8.0), 3, 11) + 0.08 * fbm(uv, PM(40.0), 2, 15); // +-0.035 blotches, finer mottle
+  s.metal = 0.0;
+  vec2 wv = warp(uv, PM(3.0), 3, 4, 0.04);
+  float lf = fbm(wv, PM(6.0), 4, 5);
+  float mf = fbm(wv, PM(40.0), 3, 14);
+  Cell fc = worley(uv, PM(120.0), 1.0, 6);
+  float fl = hashf(fc.id, 7) - 0.5 - 0.3 * (1.0 - smoothstep(0.0, 0.1, fc.f2 - fc.f1));
+  float fine = fbm(uv, PM(250.0), 2, 8);
+  s.aux = cdfN((0.45 * lf / 0.18 + 0.35 * mf / 0.2 + 0.2 * fl / 0.3 + 0.05 * fine / 0.22) / 0.606);
+  s.alpha = scratchField(uv);
 }
 `;
 
@@ -109,18 +142,40 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** METAL_BARE (reserved, texture realism v2; not placed in the world yet): placeholder flat metal at the table
- * values. */
+/** METAL_BARE (texture realism v2, lane E; frame 0.6 m): bare metal of prop hardware, the albedo is F0 (the tint makes
+ * chrome, stainless, aluminium, brass; the part's roughness override scales the lobe). Brushing along u (F0 and
+ * roughness streaks; D8 carries the fine lines), a +-2 % low-frequency F0, water-spot rings (limescale: a dielectric
+ * film) and sparse dark pits. ormh.a = the smudge threshold field (15 x 20 mm sebum clusters: the runtime puts them in
+ * the hand band and near edges, rougher and a little darker). */
 const METAL_BARE = /* glsl */ `
+#define SS 4
+${CDF_N}
 void gen(vec2 uv, inout Surf s) {
+  float lo = fbm(uv, PM(3.0), 3, 3);
+  float br = gnoise(uv, PMxy(3.0, 350.0), 4) * 0.6 + gnoise(uv, PMxy(6.0, 170.0), 5) * 0.4;
+  // water spots: thin Worley rings (r 2-5 mm) in ~2 % of the cells, in clusters
+  Cell sp = worley(uv, PM(90.0), 0.9, 6);
+  float rr = (0.35 + 0.5 * hashf(sp.id, 7)) * 0.5;
+  float ring = (1.0 - smoothstep(0.0, 0.06, abs(sp.f1 - rr))) + 0.25 * (1.0 - smoothstep(0.0, rr, sp.f1));
+  float spot = ring * step(hashf(sp.id, 8), 0.05) * smoothstep(0.1, 0.5, fbm(uv, PM(4.0), 2, 9));
+  Cell pc = worley(uv, PM(400.0), 1.0, 10);
+  float pit = step(hashf(pc.id, 11), 0.02) * (1.0 - smoothstep(0.1, 0.35, pc.f1));
+  vec3 f0 = TABLE_ALBEDO * (1.0 + 0.06 * lo + 0.02 * br);
+  s.albedo = mix(mix(f0, vec3(0.5, 0.49, 0.47), 0.6 * spot), f0 * 0.25, pit);
+  s.metal = 1.0 - 0.7 * spot - 0.5 * pit;
+  s.rough = clamp(0.3 + 0.03 * br + 0.02 * lo + 0.35 * spot + 0.3 * pit, 0.2, 1.0);
+  s.height = 0.5 + 0.04 * br - 0.4 * pit + 0.05 * spot;
+  // smudge field: oval sebum clusters (15 x 20 mm) over a soft cloud, rank-normalised
+  float sm = fbm(uv, PMxy(55.0, 42.0), 3, 12);
+  s.aux = cdfN((0.6 * sm / 0.2 + 0.4 * fbm(uv, PM(6.0), 3, 13) / 0.2) / 0.72);
 }
 `;
 
 // trim: albedo calibration (layerAlbedoCheck at 1024); phys: SurfacePhys (types.ts)
 export const METAL_RECIPES: RecipeTable = {
   [Mat.METAL_PAINTED]: {
-    glsl: METAL_PAINTED, normalStrength: 1.0, heightScale: 0.0008, trim: [1.012, 1.017, 1.016],
-    phys: phys(0.05, { det: 3, detS: 0.6 }),
+    glsl: METAL_PAINTED, normalStrength: 1.0, heightScale: 0.0008, trim: [1.012, 1.017, 1.016], aux: 'wear', aux2: true,
+    phys: phys(0.05, { det: 18, detS: 1 }),
   },
   [Mat.METAL_RUST]: {
     glsl: METAL_RUST, normalStrength: 1.0, heightScale: 0.0015, trim: [1.116, 1.099, 0.991],
@@ -134,5 +189,7 @@ export const METAL_RECIPES: RecipeTable = {
     glsl: METAL_DECK, normalStrength: 1.0, heightScale: 0.038, trim: [1.018, 1.022, 1.024],
     phys: phys(0.02, { pomTop: 1, tok: 0.7, det: 8, detS: 0.6 }),
   },
-  [Mat.METAL_BARE]: { glsl: METAL_BARE, normalStrength: 1.0, heightScale: 0.0002, phys: phys(0) },
+  [Mat.METAL_BARE]: {
+    glsl: METAL_BARE, normalStrength: 1.0, heightScale: 0.0001, aux: 'wear', phys: phys(0, { det: 8, detS: 1 }),
+  },
 };

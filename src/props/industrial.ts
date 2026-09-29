@@ -29,7 +29,7 @@ function paint(b: PartBuilder, c: RGB, rusty: boolean, rough = 0): void {
 }
 
 // ---------------------------------------------------------------------------------------- CRATE
-const CRATE_WOOD: readonly RGB[] = [[0.42, 0.3, 0.17], [0.22, 0.17, 0.12], [0.36, 0.24, 0.13], [0.3, 0.28, 0.25]];
+const CRATE_WOOD: readonly RGB[] = [[0.42, 0.3, 0.17], [0.22, 0.17, 0.12], [0.36, 0.24, 0.13], [0.3, 0.28, 0.22]];
 export const crate: PropBuild = (b, v) => {
   const w = CRATE_WOOD[v];
   b.mat(Mat.WOOD, w[0] * 0.7, w[1] * 0.7, w[2] * 0.7);
