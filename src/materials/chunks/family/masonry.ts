@@ -4,7 +4,6 @@
 
 import { Mat } from '../../../core/ids.ts';
 import { NOISE_WRAP, STOREY_PITCH } from '../../../core/constants.ts';
-import { Det } from '../../../textures/detailRecipes/types.ts';
 import { CMU_BLOCK, CMU_BOND } from '../../../textures/layers/masonry.ts';
 import type { FamilyHooks } from './index.ts';
 
@@ -66,38 +65,39 @@ uint brMsKey( vec3 pw, vec3 n, vec2 duv, vec2 rep, float y ) {
 }
 `,
   postSample: /* glsl */ `
-// ---- CMU per-block world variation (shell walls; faces only: brMsJ is the joint share from the detail-mask channel,
-// 0.3 in the joints, 1 on faces, mip-filtered)
+// ---- CMU per-block world variation (shell walls; faces only: the joint share comes from the detail-mask channel,
+// 0.3 in the joints, 1 on faces, mip-filtered). Two hashes: eight 8-bit fields
 #ifdef BR_SHELL
 bool brMsOn = ( brL == BR_M_CMU_PAINTED || brL == BR_M_CMU_RAW ) && ! brHoriz;
 #else
 bool brMsOn = false;
 #endif
-float brMsJ = 0.0, brMsDet = 1.0;
-vec2 brMsTilt = vec2( 0.0 );
+float brMsDet = 1.0;
 if ( brMsOn ) {
 	// the base normal is a metric slope, but FRAG_NORMAL's cotangent frame keeps |T| : |B| = |grad u| : |grad v| =
 	// repeatY : repeat (u spans 2.4 m, v 1.0 m on walls), which shrank every slope along u (head joints, tilts, chips)
 	// to 0.42: undo it for these layers
 	brNrm.x *= brLB.x / brLB.y;
-	uint brMsH = brMsKey( brPW, brNWg, brUv - vBrUv, brLB.xy, vBrLocal.y );
-	brMsJ = clamp( ( 1.0 - brAux ) / 0.7, 0.0, 1.0 );
-	bool brMsRaw = brL == BR_M_CMU_RAW;
-	uint h1 = brPcg( brMsH ), h2 = brPcg( h1 ), h3 = brPcg( h2 ), h4 = brPcg( h3 ), h5 = brPcg( h4 );
-	float cls = brU01( h3 );
-	float val = ( brU01( brMsH ) * 2.0 - 1.0 ) * ( brMsRaw ? ${f(V.raw.value)} : ${f(V.painted.value)} );
-	float wrm = ( brU01( h1 ) * 2.0 - 1.0 ) * ( brMsRaw ? ${f(V.raw.warm)} : ${f(V.painted.warm)} );
-	float rgh = ( brU01( h2 ) * 2.0 - 1.0 ) * ( brMsRaw ? ${f(V.raw.rough)} : ${f(V.painted.rough)} );
-	if ( ! brMsRaw && cls < ${f(V.touchUp.p)} ) { val += ${f(V.touchUp.value)}; rgh += ${f(V.touchUp.rough)}; brMsDet = ${f(V.touchUp.detail)}; }
+	uint h = brMsKey( brPW, brNWg, brUv - vBrUv, brLB.xy, vBrLocal.y );
+	uint h2 = brPcg( h );
+	vec4 u = vec4( uvec4( h, h >> 8u, h >> 16u, h >> 24u ) & 255u ) * ( 2.0 / 255.0 ) - 1.0;
+	vec4 w = vec4( uvec4( h2, h2 >> 8u, h2 >> 16u, h2 >> 24u ) & 255u ) * ( 1.0 / 255.0 );
+	bool raw = brL == BR_M_CMU_RAW;
+	float val = u.x * ( raw ? ${f(V.raw.value)} : ${f(V.painted.value)} );
+	float wrm = u.y * ( raw ? ${f(V.raw.warm)} : ${f(V.painted.warm)} );
+	float rgh = u.z * ( raw ? ${f(V.raw.rough)} : ${f(V.painted.rough)} );
+	float cls = u.w * 0.5 + 0.5;
+	if ( ! raw && cls < ${f(V.touchUp.p)} ) { val += ${f(V.touchUp.value)}; rgh += ${f(V.touchUp.rough)}; brMsDet = ${f(V.touchUp.detail)}; }
 	else if ( cls < ${f(V.touchUp.p + V.filled.p)} ) brMsDet = ${f(V.filled.detail)};
 	else if ( cls < ${f(V.touchUp.p + V.filled.p + V.open.p)} ) brMsDet = ${f(V.open.detail)};
-	float fm = 1.0 - brMsJ;
+	float fm = clamp( ( brAux - 0.3 ) / 0.7, 0.0, 1.0 );
 	brA *= ( 1.0 + val * fm ) * vec3( 1.0 + wrm * fm, 1.0, 1.0 - wrm * fm );
 	brOrmh.g = clamp( brOrmh.g + rgh * fm, 0.03, 1.0 );
-	brMsTilt = ( vec2( brU01( h4 ), brU01( h5 ) ) * 2.0 - 1.0 ) * ${f(V.tilt)} * fm;
+	// the block's tilt, straight into the (metric) tangent normal
+	brNrm.xy += ( w.xy * 2.0 - 1.0 ) * ( ${f(V.tilt)} * fm * brNrm.z );
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 	// the unoffset derivatives stay (textureGrad), so the fetch footprint is continuous across the key's jump
-	brDetUv += vec2( brU01( brPcg( h5 ) ), brU01( brPcg( h5 ^ 0x9e3779b9u ) ) ) * ${f(V.detailOffset)};
+	brDetUv += w.zw * ${f(V.detailOffset)};
 #endif
 }
 `,
@@ -118,60 +118,58 @@ if ( brMsOn ) {
 		// scuffs; tops of block walls (horizontal): oil and dirt
 		float jM = clamp( ( 1.0 - brAux ) / 0.7, 0.0, 1.0 ); // joint share (detail-mask channel: 0.3 in the joints)
 		if ( ! brHoriz && brL == BR_M_CMU_PAINTED ) {
-			float fv = brMask.a + 0.3 * ( g2.r - 0.5 ) + 0.18 * ( g1.g - 0.5 ); // ragged, isotropic patches
+			// delamination field (ragged, isotropic patches) and its screen gradient, in uniform control flow
+			float fv = brMask.a + 0.3 * ( g2.r - 0.5 ) + 0.18 * ( g1.g - 0.5 );
 			vec2 fd = vec2( dFdx( fv ), dFdy( fv ) );
-			float fl = smoothstep( 0.5, 0.62, fv ); // flaked: the substrate shows
-			float rim = smoothstep( 0.4, 0.5, fv ) * ( 1.0 - fl ); // the lifted film edge around it
-			// blister lattice (12 mm cells in wall metres: along, y) and its footprint fade, in uniform control flow
-			vec2 bc = vec2( dot( brPW.xz, vec2( brNWg.z, - brNWg.x ) ), vBrLocal.y ) / ${f(BLISTER_CELL)};
-			float bfw = 1.0 - smoothstep( 0.25, 0.5, max( length( dFdx( bc ) ), length( dFdy( bc ) ) ) );
-			if ( fl > 0.0 ) {
-				float rl = float( BR_M_CMU_RAW );
-				vec3 ra = textureGrad( uBrAlbedo, vec3( brUv, rl ), brDx, brDy ).rgb;
-				vec3 rn = textureGrad( uBrNormal, vec3( brUv, rl ), brDx, brDy ).xyz * 2.0 - 1.0;
-				vec4 ro = textureGrad( uBrOrmh, vec3( brUv, rl ), brDx, brDy );
-				if ( brMsOn ) rn.x *= brLB.x / brLB.y; // the painted layer's frame fix (postSample)
-				float am = 1.0;
+			// the damp band only: one coherent branch on the smooth mask (unexecuted, this block cost 0.36 ms per ultra
+			// frame of close-up block wall while its fetches sat in a small inner branch)
+			if ( fv > 0.22 ) {
+				float fl = smoothstep( 0.5, 0.62, fv ); // flaked: the substrate shows
+				float rim = smoothstep( 0.4, 0.5, fv ) * ( 1.0 - fl ); // the lifted film edge around it
+				if ( fl > 0.0 ) {
+					// the raw block (CMU_RAW: the same blocks and joints) through the flake: its albedo and relief (trilinear:
+					// a small screen share), raw roughness, the painted aggregate's slopes roughened
+					float rl = float( BR_M_CMU_RAW );
+					float ts = float( textureSize( uBrAlbedo, 0 ).x );
+					float lod = 0.5 * log2( max( max( dot( brDx, brDx ), dot( brDy, brDy ) ) * ts * ts, 1.0 ) );
+					vec3 ra = textureLod( uBrAlbedo, vec3( brUv, rl ), lod ).rgb;
+					vec3 rn = textureLod( uBrNormal, vec3( brUv, rl ), lod ).xyz * 2.0 - 1.0;
+					if ( brMsOn ) rn.x *= brLB.x / brLB.y; // the frame fix of the painted layer (postSample)
+					// the salts that lifted the film bloom on the exposed block
+					brA = mix( brA, mix( ra, ${v3(EFFLORESCENCE)}, 0.35 * smoothstep( 0.3, 0.9, g1.g + 0.3 * g2.r ) ), fl );
+					brNrm.xyz = mix( brNrm.xyz, rn, fl );
+					brOrmh.g = mix( brOrmh.g, 0.9, fl );
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
-				if ( uBrReflPass < 0.5 ) {
-					// the raw aggregate (D15) in place of the painted face (D14)
-					vec4 dmu;
-					vec4 dt = brDetailFetch( brDetUv, ${f(Det.CMU_RAW)}, brDetDx, brDetDy, dmu );
-					float ds = BR_DETAIL_SLOPE[ ${Det.CMU_RAW} ];
-					vec2 sl = ( dt.rg * 2.0 - 1.0 ) * ds;
-					float k = brMsDet * brAux * uBrLayerD[ brL ].y;
-					brDetSl = mix( brDetSl, sl * k, fl );
-					brDetVar = mix( brDetVar, max( dt.a * 2.0 * ds * ds - dot( sl, sl ), 0.0 ) * k * k, fl );
-					am = dmu.b > 0.0 ? 1.0 + k * ( dt.b / dmu.b - 1.0 ) : 1.0;
-					ro.g += BR_DETAIL_ROUGH_K[ ${Det.CMU_RAW} ] * ( 1.0 - am );
-				}
+					brDetSl *= 1.0 + 0.4 * fl;
+					brDetVar *= 1.0 + 0.9 * fl;
 #endif
-				// the salts that lifted the film bloom on the exposed block
-				brA = mix( brA, mix( ra * am, ${v3(EFFLORESCENCE)}, 0.35 * smoothstep( 0.3, 0.9, g1.g + 0.3 * g2.r ) ), fl );
-				brNrm.xyz = mix( brNrm.xyz, rn, fl );
-				brOrmh.rg = mix( brOrmh.rg, ro.rg, fl );
-			}
-			// the film edge lifts toward the flake: it tilts away from it and catches the light
-			if ( rim > 0.0 ) {
-				mat2 brJ = mat2( brDx.x, brDy.x, brDx.y, brDy.y ); // brJ * grad_uv = screen derivatives
-				vec2 gm = ( abs( determinant( brJ ) ) > 1e-14 ? inverse( brJ ) * fd : vec2( 0.0 ) ) / brLB.xy; // per metre
-				float gl = length( gm );
-				if ( gl > 1e-6 ) brNrm.xy -= gm / gl * ( 0.9 * rim * brNrm.z );
-				brA *= 1.0 + 0.06 * rim;
-			}
-			// blisters: 2-8 mm domes of film lifted by the damp where it still holds
-			float bl = smoothstep( 0.22, 0.42, fv ) * ( 1.0 - fl ) * smoothstep( 0.55, 0.8, g1.g ) * bfw;
-			if ( bl > 0.0 ) {
-				vec2 bi = floor( bc );
-				uint bh = brHash2u( brWrap( ivec2( bi ), ivec2( ${Math.round(NOISE_WRAP / BLISTER_CELL)}, ${Math.round(STOREY_PITCH / BLISTER_CELL)} ) ), 1301u );
-				vec2 bo = 0.35 + 0.3 * vec2( brU01( brPcg( bh ) ), brU01( brPcg( bh ^ 0x51u ) ) );
-				float brr = mix( 0.08, 0.33, brU01( brPcg( bh + 7u ) ) );
-				vec2 bp = ( bc - bi - bo ) / brr;
-				float on = step( brU01( bh ), 0.4 ) * ( 1.0 - smoothstep( 0.8, 1.0, dot( bp, bp ) ) );
-				brNrm.xy += bp * ( 0.8 * on * bl * brNrm.z );
+				}
+				// the film edge lifts toward the flake: it tilts away from it and catches the light
+				if ( rim > 0.0 ) {
+					mat2 brJ = mat2( brDx.x, brDy.x, brDx.y, brDy.y ); // brJ * grad_uv = screen derivatives
+					vec2 gm = ( abs( determinant( brJ ) ) > 1e-14 ? inverse( brJ ) * fd : vec2( 0.0 ) ) / brLB.xy; // per metre
+					float gl = length( gm );
+					if ( gl > 1e-6 ) brNrm.xy -= gm / gl * ( 0.9 * rim * brNrm.z );
+					brA *= 1.0 + 0.06 * rim;
+				}
+				// blisters: 2-8 mm domes of film lifted by the damp where it still holds (12 mm cells in wall metres,
+				// faded out as a pixel's footprint approaches half a cell: from the uv footprint, no derivatives here)
+				float bfw = 1.0 - smoothstep( 0.25, 0.5, max( length( brDx * brLB.xy ), length( brDy * brLB.xy ) ) / ${f(BLISTER_CELL)} );
+				float bl = smoothstep( 0.22, 0.42, fv ) * ( 1.0 - fl ) * smoothstep( 0.55, 0.8, g1.g ) * bfw;
+				if ( bl > 0.0 ) {
+					vec2 bc = vec2( dot( brPW.xz, vec2( brNWg.z, - brNWg.x ) ), vBrLocal.y ) / ${f(BLISTER_CELL)};
+					vec2 bi = floor( bc );
+					uint bh = brHash2u( brWrap( ivec2( bi ), ivec2( ${Math.round(NOISE_WRAP / BLISTER_CELL)}, ${Math.round(STOREY_PITCH / BLISTER_CELL)} ) ), 1301u );
+					vec2 bo = 0.35 + 0.3 * vec2( brU01( brPcg( bh ) ), brU01( brPcg( bh ^ 0x51u ) ) );
+					float brr = mix( 0.08, 0.33, brU01( brPcg( bh + 7u ) ) );
+					vec2 bp = ( bc - bi - bo ) / brr;
+					float on = step( brU01( bh ), 0.4 ) * ( 1.0 - smoothstep( 0.8, 1.0, dot( bp, bp ) ) );
+					brNrm.xy += bp * ( 0.8 * on * bl * brNrm.z );
+				}
 			}
 		}
-		float oil = brHoriz ? max( smoothstep( 0.55, 0.8, g1.b * 0.6 + brMask.g * 0.7 ), brBlotch( brS2, true, 311u, 0.18, 0.15, 0.45, ( g2.b - 0.5 ) * 0.6 ) * 0.8 ) : 0.0;
+		float oil = 0.0;
+		if ( brHoriz ) oil = max( smoothstep( 0.55, 0.8, g1.b * 0.6 + brMask.g * 0.7 ), brBlotch( brS2, true, 311u, 0.18, 0.15, 0.45, ( g2.b - 0.5 ) * 0.6 ) * 0.8 );
 		brA *= mix( vec3( 1.0 ), vec3( 0.5, 0.48, 0.46 ), oil * 0.65 );
 		brA *= mix( vec3( 1.0 ), vec3( 0.62, 0.58, 0.52 ), clamp( brMask.g * ( 0.4 + g2.g ) * ( 1.0 + 0.6 * jM ), 0.0, 1.0 ) * 0.8 );
 		if ( ! brHoriz ) {
@@ -205,14 +203,7 @@ if ( brL == BR_M_CMU_PAINTED ) brRt = sqrt( sqrt( pow4( brRt ) + ${f(CMU_DET_VAR
 else if ( brL == BR_M_CMU_RAW ) brRt = sqrt( sqrt( pow4( brRt ) + ${f(CMU_DET_VAR_MEAN[Mat.CMU_RAW])} * brAux * brAux ) );
 #endif
 `,
-  normal: /* glsl */ `
-if ( brMsOn ) {
-	// per-block tilt in the wall plane's own axes (the uv cotangent frame, normalised: u spans 2.4 m, v 1.0 m)
-	vec3 brMsT = brTbn[ 0 ] * inversesqrt( max( dot( brTbn[ 0 ], brTbn[ 0 ] ), 1e-12 ) );
-	vec3 brMsB = brTbn[ 1 ] * inversesqrt( max( dot( brTbn[ 1 ], brTbn[ 1 ] ), 1e-12 ) );
-	normal = normalize( normal + brMsT * brMsTilt.x + brMsB * brMsTilt.y );
-}
-`,
+  normal: '',
   matPost: '',
   postLight: '',
   preFog: '',
