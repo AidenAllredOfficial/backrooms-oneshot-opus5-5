@@ -45,7 +45,7 @@ function tier(lm: Lm, y: number, lit: boolean): void {
   }
   // window band on the shaft walls between the tiers: dark glass boxes, a few lit from inside
   const wy0 = y + 0.9, wy1 = y + 2.2;
-  const glass = Mat.RUBBER;
+  const glass = Mat.PLASTIC; // dark glossy panes (RUBBER is rubber now: bloom, crazing)
   const inset = 0.02;
   for (let k = 0; k < 3; k++) {
     const t0 = A + 0.6 + k * 2.4, t1 = t0 + 1.6;

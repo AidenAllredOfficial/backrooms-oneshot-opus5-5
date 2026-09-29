@@ -10,9 +10,10 @@ import { bevelBox, box, cylinder, extrude, hexa, lathe, rect, SKIP, sweep, torus
 
 type RGB = readonly [number, number, number];
 const KRAFT: RGB = [0.4, 0.28, 0.15];
-/** Kraft board: the PLASTIC layer (smooth at every scale) at a paper's matte roughness. The DRYWALL layer's knockdown
- * spatter is wall texture: on a 0.5 m box it reads as stucco. */
-const kraft = (b: PartBuilder, r: number, g: number, bl: number): void => b.mat(Mat.PLASTIC, r, g, bl, 0, 0.85);
+/** Kraft board: PLASTIC part kind 1 (chunks/family/props.ts: the kraft detail's flutes and fibre floc, a matte liner,
+ * crushed edges and the top seam). The DRYWALL layer's knockdown spatter is wall texture: on a 0.5 m box it reads as
+ * stucco. */
+const kraft = (b: PartBuilder, r: number, g: number, bl: number): void => { b.mat(Mat.PLASTIC, r, g, bl, 0, 0.85); b.altKind(); };
 const RACK_BLUE: RGB = [0.04, 0.1, 0.3];
 const RACK_ORANGE: RGB = [0.55, 0.16, 0.02];
 
@@ -22,19 +23,23 @@ export const signSlot = (s: number): [number, number, number, number] => {
   return [u0, v0, u0 + 0.25, v0 + 0.25];
 };
 
-/** Material by decay-like variant: painted metal, or rust for "old" variants. */
+/** Material by decay-like variant: painted metal, or rust for "old" variants (the paint colour stays on its
+ * remnants). */
 function paint(b: PartBuilder, c: RGB, rusty: boolean, rough = 0): void {
-  if (rusty) b.mat(Mat.METAL_RUST);
+  if (rusty) b.mat(Mat.METAL_RUST, c[0], c[1], c[2]);
   else b.mat(Mat.METAL_PAINTED, c[0], c[1], c[2], 0, rough);
 }
 
 // ---------------------------------------------------------------------------------------- CRATE
+/** Roughness override of rough-sawn crate and pallet boards (a scale on the WOOD recipe's finished 0.35-0.4). */
+const SAWN = 0.85;
 const CRATE_WOOD: readonly RGB[] = [[0.42, 0.3, 0.17], [0.22, 0.17, 0.12], [0.36, 0.24, 0.13], [0.3, 0.28, 0.22]];
 export const crate: PropBuild = (b, v) => {
   const w = CRATE_WOOD[v];
-  b.mat(Mat.WOOD, w[0] * 0.7, w[1] * 0.7, w[2] * 0.7);
+  // rough-sawn softwood: the override scales the finished-wood recipe's roughness up to a sawn board's
+  b.mat(Mat.WOOD, w[0] * 0.7, w[1] * 0.7, w[2] * 0.7, 0, SAWN);
   box(b, -0.47, 0, -0.47, 0.47, 0.78, 0.47, SKIP.NY); // core (seen through the slat gaps)
-  b.mat(Mat.WOOD, w[0], w[1], w[2]);
+  b.mat(Mat.WOOD, w[0], w[1], w[2], 0, SAWN);
   for (let k = 0; k < 3; k++) {
     const y0 = 0.03 + k * 0.255, y1 = y0 + 0.22;
     box(b, -0.44, y0, -0.49, 0.44, y1, -0.47, SKIP.PZ);
@@ -42,7 +47,7 @@ export const crate: PropBuild = (b, v) => {
     box(b, -0.49, y0, -0.44, -0.47, y1, 0.44, SKIP.PX);
     box(b, 0.47, y0, -0.44, 0.49, y1, 0.44, SKIP.NX);
   }
-  b.mat(Mat.WOOD, w[0] * 0.9, w[1] * 0.9, w[2] * 0.9);
+  b.mat(Mat.WOOD, w[0] * 0.9, w[1] * 0.9, w[2] * 0.9, 0, SAWN);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
     const x0 = sx < 0 ? -0.5 : 0.44, z0 = sz < 0 ? -0.5 : 0.44;
     box(b, x0, 0, z0, x0 + 0.06, 0.8, z0 + 0.06, SKIP.NY);
@@ -56,7 +61,7 @@ const PALLET_WOOD: readonly RGB[] = [[0.45, 0.34, 0.2], [0.26, 0.23, 0.19], [0.0
 export const pallet: PropBuild = (b, v, seed) => {
   const w = PALLET_WOOD[v];
   if (v === 2) b.mat(Mat.METAL_PAINTED, w[0], w[1], w[2]); // painted (pooled) pallet
-  else b.mat(Mat.WOOD, w[0], w[1], w[2]);
+  else b.mat(Mat.WOOD, w[0], w[1], w[2], 0, SAWN);
   // top deck boards along x
   const nTop = v === 3 ? 4 : 5; // variant 3: a board missing
   const zs = [-0.44, -0.22, 0, 0.22, 0.44];
@@ -69,7 +74,7 @@ export const pallet: PropBuild = (b, v, seed) => {
   // stringer boards (across, along z), blocks, bottom boards
   const xs = [-0.55, 0, 0.55];
   for (const x of xs) box(b, x - 0.05, 0.1, -0.5, x + 0.05, 0.123, 0.5);
-  b.mat(v === 2 ? Mat.METAL_PAINTED : Mat.WOOD, w[0] * 0.85, w[1] * 0.85, w[2] * 0.85);
+  b.mat(v === 2 ? Mat.METAL_PAINTED : Mat.WOOD, w[0] * 0.85, w[1] * 0.85, w[2] * 0.85, 0, v === 2 ? 0 : SAWN);
   for (const x of xs) for (const z of [-0.45, 0, 0.45]) box(b, x - 0.05, 0.022, z - 0.05, x + 0.05, 0.1, z + 0.05, SKIP.NY | SKIP.PY);
   for (const z of [-0.45, 0, 0.45]) box(b, -0.6, 0, z - 0.05, 0.6, 0.022, z + 0.05, SKIP.NY);
 };
@@ -120,6 +125,10 @@ function beam(b: PartBuilder, len: number): void {
 function cardboardLoad(b: PartBuilder, x: number, y: number, z: number, sx: number, sy: number, sz: number, tone: number): void {
   kraft(b, KRAFT[0] * tone, KRAFT[1] * tone, KRAFT[2] * tone);
   box(b, x - sx / 2, y, z - sz / 2, x + sx / 2, y + sy, z + sz / 2, SKIP.NY);
+  // packing tape (PP film) along the lid seam, across the shorter top axis
+  b.mat(Mat.PLASTIC, 0.42, 0.36, 0.22, 0, 0.2);
+  if (sx >= sz) rect(b, x, y + sy + 0.0015, z, 0.024, 0, 0, 0, 0, sz / 2, 0, 1, 0);
+  else rect(b, x, y + sy + 0.0015, z, sx / 2, 0, 0, 0, 0, 0.024, 0, 1, 0);
 }
 const RACK_LEVELS = [1.2, 2.4, 3.6];
 export const shelfRack: PropBuild = (b, v, seed) => {

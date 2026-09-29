@@ -24,8 +24,8 @@ export function photocopier(lm: Lm, um: number, backV: number, scanOn: boolean):
   box(lm, um - w / 2 + 0.04, v0 + 0.04, um + w / 2 - 0.04, v1 - 0.04, 0, 0.05, Mat.RUBBER, SOLID_F); // plinth
   // the lid stands open against the wall; the platen glass shows, the scan bar lit across it
   box(lm, um - w / 2 + 0.02, v1 - 0.06, um + w / 2 - 0.2, v1 - 0.02, 0.92, 1.5, Mat.PLASTIC, THIN_F);
-  box(lm, um - w / 2 + 0.06, v0 + 0.08, um + w / 2 - 0.24, v1 - 0.1, 0.92, 0.925, Mat.RUBBER, THIN_F); // platen glass
-  box(lm, um + w / 2 - 0.2, v0 + 0.02, um + w / 2, v0 + 0.3, 0.92, 0.99, Mat.RUBBER, THIN_F); // control panel
+  box(lm, um - w / 2 + 0.06, v0 + 0.08, um + w / 2 - 0.24, v1 - 0.1, 0.92, 0.925, Mat.PLASTIC, THIN_F); // platen glass
+  box(lm, um + w / 2 - 0.2, v0 + 0.02, um + w / 2, v0 + 0.3, 0.92, 0.99, Mat.PLASTIC, THIN_F); // control panel
   box(lm, um - w / 2 - 0.35, v0 + 0.15, um - w / 2, v1 - 0.1, 0.62, 0.66, Mat.PLASTIC, THIN_F); // output tray
   for (let k = 0; k < 3; k++) box(lm, um - w / 2 + 0.06, v0 - 0.006, um + w / 2 - 0.06, v0, 0.12 + k * 0.24, 0.13 + k * 0.24, Mat.RUBBER, THIN_F); // drawer lines
   if (scanOn) {

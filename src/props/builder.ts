@@ -39,6 +39,11 @@ export const tintByte = (t: number): number => Math.max(1, byte(t / 2));
 /** The shader's decode of tintByte (chunks/family/props.ts: vBrTint.rgb x 2). */
 export const tintDecode = (b: number): number => (2 * b) / 255;
 
+/** METAL_RUST parts: the tint is the paint remnants' colour relative to this neutral paint (not the layer's rust-brown
+ * mean, against which a grey or blue paint would overflow the headroom); rust areas are untinted
+ * (chunks/family/props.ts). */
+export const RUST_PAINT_REF = 0.3;
+
 /** Directional layers: u runs along each face's longer side (wood grain, brushing, rolled-steel scratches). */
 export const GRAIN_LAYERS: ReadonlySet<number> = new Set<number>([Mat.WOOD, Mat.METAL_PAINTED, Mat.METAL_BARE]);
 /** Layers whose parts get a hashed uv offset (a repeat's worth), so siblings do not share one texture region. */
@@ -139,9 +144,10 @@ export class PartBuilder {
     const j = this.jitter;
     let tr = j, tg = j, tb = j;
     if (r >= 0) {
-      tr = (r / Math.max(d.albedoMean[0], 1e-3)) * j;
-      tg = (g / Math.max(d.albedoMean[1], 1e-3)) * j;
-      tb = (b / Math.max(d.albedoMean[2], 1e-3)) * j;
+      const ref = layer === Mat.METAL_RUST ? [RUST_PAINT_REF, RUST_PAINT_REF, RUST_PAINT_REF] : d.albedoMean;
+      tr = (r / Math.max(ref[0], 1e-3)) * j;
+      tg = (g / Math.max(ref[1], 1e-3)) * j;
+      tb = (b / Math.max(ref[2], 1e-3)) * j;
     }
     const tint = packRGBA(tintByte(tr), tintByte(tg), tintByte(tb), this.seedByte);
     const bits = (this.auxBits & ~2) | (coat ? 2 : 0);

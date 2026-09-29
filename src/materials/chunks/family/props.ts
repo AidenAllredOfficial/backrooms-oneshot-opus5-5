@@ -13,22 +13,24 @@
 // - the clearcoat (car paint only) covers the topcoat, on the base map's normal (orange peel and oil-canning).
 
 import { Mat } from '../../../core/ids.ts';
+import { RUST_PAINT_REF } from '../../../props/builder.ts';
+import { Det } from '../../../textures/detailRecipes/types.ts';
 import type { FamilyHooks } from './index.ts';
 
 /** Reference topcoat roughness of the 'wear' layers (the recipe's mean): a part's roughness override scales the
  * texture by override / ref, so the recipe's structure survives. */
-export const PROP_REF_ROUGH = { METAL_PAINTED: 0.36, WOOD: 0.4, PLASTIC: 0.4, METAL_BARE: 0.3 } as const;
+export const PROP_REF_ROUGH = { METAL_PAINTED: 0.4, WOOD: 0.36, PLASTIC: 0.4, METAL_BARE: 0.3 } as const;
 
 /** Wear level terms (millimetres and metres). The level is the expected exposed share (W is uniform): a clean
- * interior (base, < 2 %), edges and corners (EDGE_*: ~40 % on the arris, ~10 % at 1 cm), the kick zone near the floor
+ * interior (base, < 2 %), edges and corners (EDGE_*: ~30 % on the arris, ~4 % at 5 mm, ~2 % at 1 cm), the kick zone near the floor
  * and a trace in the hand band; the edge / kick / hand terms scale with the prop's age (the anchor cell's decay, dust
  * bits) and a per-prop hash. */
 export const PROP_WEAR = {
   BASE: 0.003, BASE_HASH: 0.006, BASE_DECAY: 0.01,
-  EDGE_NEAR: 0.24, EDGE_NEAR_MM: 2.5, EDGE_FAR: 0.1, EDGE_FAR_MM: 20,
+  EDGE_NEAR: 0.24, EDGE_NEAR_MM: 2.5, EDGE_FAR: 0.05, EDGE_FAR_MM: 12,
   KICK: 0.14, KICK_Y0: 0.05, KICK_Y1: 0.35, // kick and trolley scrapes near the floor (vertical faces)
   HAND: 0.015, HAND_Y: 1.15, HAND_W: 0.22, // hand band around 0.9-1.4 m (scratches and grease use it more)
-  AGE0: 0.55, AGE_DECAY: 0.9, AGE_HASH: 0.5, // age factor of the contact terms: AGE0 + AGE_DECAY decay + AGE_HASH (hash - 0.5)
+  AGE0: 0.6, AGE_DECAY: 0.5, AGE_HASH: 0.5, // age factor of the contact terms: AGE0 + AGE_DECAY decay + AGE_HASH (hash - 0.5)
   CORE: 0.06, // W band between the exposed primer and the steel core
 } as const;
 
@@ -53,6 +55,12 @@ export const PROP_HOOKS: FamilyHooks = {
 #define BR_M_METAL_BARE ${Mat.METAL_BARE}
 // props edge coordinate (props/builder.ts edgeEncode): millimetres to the face's nearer edge along one axis, 1e4 where the
 // axis has none (0: a tube's circumference, and every non-prop face). The sign bits are flags (end grain, part kind)
+// ...and the axis' half extent (mm) and the position s in [-1, 1] across it
+vec2 brPropEdgeHS( float x ) {
+	float a = abs( x );
+	float h = floor( a * 0.25 );
+	return vec2( h, clamp( a - 4.0 * h - 1.0, - 1.0, 1.0 ) );
+}
 float brPropEdgeD( float x ) {
 	float a = abs( x );
 	float h = floor( a * 0.25 );
@@ -128,6 +136,86 @@ if ( brWpOn ) {
 		brOrmh.g = brWpTr * brWpTop + 0.7 * brWpPrim + mix( 0.3, 0.75, 1.0 - brWpStM ) * brWpCore;
 		brOrmh.b = brWpStM * brWpCore;
 		brWpScr *= brWpTop;
+	} else if ( brL == BR_M_METAL_RUST ) {
+		// corrosion: paint remnants where C is above a threshold that rises with age, on pipe undersides (condensation)
+		// and at joints and flanges (crevices); below it the recipe's rust shows. The paint takes the part's colour
+		// (props/builder.ts: METAL_RUST tints are relative to the neutral RUST_PAINT_REF paint)
+		float brWpRt = 0.62 + 0.1 * ( brWpDec - 0.5 ) + ( brWpProp ? 0.25 * smoothstep( -0.3, -0.8, brNWg.y ) : 0.0 )
+			+ 0.3 * ( 1.0 - smoothstep( 20.0, 80.0, brWpEd ) );
+		float brWpPt = 1.0 - brWpExpose( brAux, brWpA, brWpRt );
+		// the paint: chalked and stained brown where rust bleeds under it (the band above the threshold)
+		vec3 brWpPc = vec3( ${f(RUST_PAINT_REF)} ) * mix( vec3( 1.0 ), vec3( 0.78, 0.62, 0.48 ), 0.6 * ( 1.0 - smoothstep( brWpRt, brWpRt + 0.12, brAux ) ) );
+		brA = mix( brA, brWpPc, brWpPt );
+		brOrmh.g = mix( brOrmh.g, 0.6, brWpPt );
+		brWpTop = brWpPt;
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+		brDetL.y *= 1.0 - 0.8 * brWpPt; // the rust grain is on the rust
+#endif
+		// run-off: world drips (the grime texture's drip channel, two projections blended by the normal: no 45-degree seam
+		// on pipes and tanks) below rusty areas, found with two coarse taps of C 3 and 8 cm up the surface
+		// (derivatives and implicit-LOD fetches outside any per-pixel condition: the branch is per face)
+		if ( uBrReflPass < 0.5 ) {
+			vec3 brWpQx = dFdx( vBrLocal ), brWpQy = dFdy( vBrLocal );
+			float brWpG11 = dot( brWpQx, brWpQx ), brWpG12 = dot( brWpQx, brWpQy ), brWpG22 = dot( brWpQy, brWpQy );
+			vec2 brWpAb = vec2( brWpG22 * brWpQx.y - brWpG12 * brWpQy.y, brWpG11 * brWpQy.y - brWpG12 * brWpQx.y ) / max( brWpG11 * brWpG22 - brWpG12 * brWpG12, 1e-24 );
+			vec2 brWpUp = brWpAb.x * brDx + brWpAb.y * brDy; // uv per metre of rise
+			float brWpC1 = textureLod( uBrOrmh, vec3( brUv + 0.03 * brWpUp, brLayerF ), 4.0 ).a;
+			float brWpC2 = textureLod( uBrOrmh, vec3( brUv + 0.08 * brWpUp, brLayerF ), 4.5 ).a;
+			float brWpSrc = 1.0 - smoothstep( 0.3, 0.55, min( brWpC1, brWpC2 ) );
+			float brWpNx = abs( brNWg.x ) / max( abs( brNWg.x ) + abs( brNWg.z ), 1e-4 );
+			float brWpDr = mix( texture( uBrGrime, vec2( brPW.x / BR_GRIME_A, brPW.y / BR_GRIME_YA ) ).a,
+				texture( uBrGrime, vec2( brPW.z / BR_GRIME_A, brPW.y / BR_GRIME_YA ) ).a, brWpNx );
+			float brWpRun = brWpSrc * ( 0.35 + 0.65 * smoothstep( 0.2, 0.7, brWpDr ) ) * ( 0.5 + 0.5 * brWpPt )
+				* ( 1.0 - smoothstep( 0.6, 0.8, abs( brNWg.y ) ) ); // vertical and sloped faces only
+			brA *= mix( vec3( 1.0 ), vec3( 0.75, 0.55, 0.4 ), 0.85 * brWpRun );
+			brOrmh.g = min( brOrmh.g + 0.1 * brWpRun, 1.0 );
+		}
+	} else if ( brL == BR_M_WOOD ) {
+		// finish wear (W = ormh.a): where hands and objects wore the finish off, the wood is lighter, a little greyer and
+		// rough; edges, the hand band and up-facing tops (things slid over them) go first
+		float brWpWd = brWpExpose( brAux, brWpA, brWpLvl + brWpAge * 0.05 * smoothstep( 0.7, 0.95, brNWg.y ) );
+		brA = mix( brA, mix( vec3( brLuma( brA ) ), brA, 0.9 ) * 1.25, brWpWd );
+		brOrmh.g = mix( brOrmh.g, 0.6, brWpWd );
+		brWpExp = brWpWd;
+		// end grain (the edge coordinate x's sign on props): the open cells soak up stain and dirt, unfinished and rough
+		if ( brWpProp && vBrLmUv.x < 0.0 ) {
+			brA *= 0.7;
+			brOrmh.g = min( brOrmh.g + 0.2, 1.0 );
+		}
+	} else if ( brL == BR_M_PLASTIC ) {
+		if ( brWpProp && vBrLmUv.y < 0.0 ) {
+			// part kind 1: kraft board. The kraft detail (D20: flutes, floc) replaces the haircell; the liner is matte;
+			// crushed, darker and fuzzier within ~6 mm of the edges; the top flaps meet in a dark seam
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+			brDetL.x = ${f(Det.KRAFT)};
+			brDetL.y = 1.0;
+#endif
+			float brWpCr = exp( - brWpEd * 0.2 ) * ( 0.6 + 0.8 * brAux );
+			brA *= 1.0 - 0.2 * brWpCr;
+			brOrmh.g = mix( 0.85, 0.95, brWpCr );
+			if ( brNWg.y > 0.9 ) {
+				vec2 brWpA0 = brPropEdgeHS( vBrLmUv.x ), brWpA1 = brPropEdgeHS( vBrLmUv.y );
+				// mm off the centre line across the long axis (the flaps' seam, under the tape where there is one)
+				float brWpSm = brWpA0.x > brWpA1.x ? brWpA0.x * abs( brWpA0.y ) : brWpA1.x * abs( brWpA1.y );
+				// (only on faces with edge coordinates on both axes: a crushed box's hexahedron has none)
+				if ( min( brWpA0.x, brWpA1.x ) > 1.5 ) brA *= 1.0 - 0.6 * ( 1.0 - smoothstep( 0.6, 1.6, brWpSm ) );
+			}
+			brWpExp = 0.0;
+		} else if ( brWpOvr > 0.0 && brWpOvr < 0.12 ) {
+			// glossy clear parts (glass, lenses, screens on PLASTIC): no haircell, no scuffs
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+			brDetL.y = 0.0;
+#endif
+			brWpExp = 0.0;
+		} else {
+			// moulded plastic: stress-whitened scuffs where edges and the kick zone wear (whitened after the tint, postWet);
+			// UV chalking of up-facing faces on old parts: greyer, lighter, rough
+			brWpScr = 0.85 * brWpExp;
+			brOrmh.g = min( brOrmh.g + 0.15 * brWpExp, 1.0 );
+			float brWpCh = smoothstep( 0.7, 0.95, brNWg.y ) * brWpDec * brWpAge;
+			brA = mix( brA, mix( vec3( brLuma( brA ) ), brA, 0.85 ) * 1.08, brWpCh );
+			brOrmh.g = mix( brOrmh.g, min( brOrmh.g + 0.2, 1.0 ), brWpCh );
+		}
 	} else if ( brL == BR_M_METAL_BARE ) {
 		// bare metal: sebum smudges and fingerprints (W = the smudge field) in the hand band and a faint film elsewhere:
 		// a duller, rougher film
@@ -137,13 +225,20 @@ if ( brWpOn ) {
 		brWpExp = 0.0;
 	}
 }
+// rubber bloom: a waxy antiozonant film (the recipe's mottle, ormh.a) that greys up-facing faces, more on old parts
+if ( BR_DETAIL == 1 && brL == BR_M_RUBBER ) {
+	float brWpBl = smoothstep( 0.3, 0.8, brNWg.y ) * brAux
+		* ( brWpProp ? 0.25 + 0.75 * float( ( int( brAuxB.z ) >> 2 ) & 63 ) / 63.0 : 0.6 );
+	brA += vec3( 0.06, 0.058, 0.055 ) * brWpBl;
+	brOrmh.g = min( brOrmh.g + 0.15 * brWpBl, 1.0 );
+}
 `,
   postDetail: '',
   grime: /* glsl */ `
 	else if ( brGrime == BR_G_METAL ) {
 		// metal: rust run-off streaks (drips g1.a where the WP7 mask holds grime; the smooth tide field g2.r, not the
 		// speckle channel: speckle made leopard spots) on steel that can rust; stainless and chrome only dull
-		if ( brL != BR_M_METAL_BARE ) {
+		if ( brL != BR_M_METAL_BARE && brL != BR_M_METAL_RUST ) { // (METAL_RUST: its own run-off, postSample)
 			float rust = smoothstep( 0.5, 0.85, brMask.g * 0.8 + g1.a * 0.6 + g2.r * 0.2 );
 			brA = mix( brA, BR_RUST * ( 0.8 + 0.4 * g2.r ), rust * 0.75 );
 			brMetal *= 1.0 - rust;
@@ -193,6 +288,8 @@ material.clearcoatRoughness = min( max( max( BR_COAT_ROUGH, 0.0525 ), 0.35 * brW
 material.clearcoatF0 = vec3( 0.04 );
 material.clearcoatF90 = 1.0;
 #endif
+// kraft board (PLASTIC part kind 1): a fibrous liner, rough diffuse (EON sigma 0.5)
+if ( brWpProp && brL == BR_M_PLASTIC && vBrLmUv.y < 0.0 ) brDiffSigma = 0.5;
 `,
   postLight: '',
   preFog: '',

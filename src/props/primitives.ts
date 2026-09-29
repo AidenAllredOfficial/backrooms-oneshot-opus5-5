@@ -177,7 +177,15 @@ export function hexa(b: PartBuilder, c: readonly number[], skip = 0): void {
     const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
     const uvOf = (p: [number, number, number]): [number, number] =>
       ax >= ay && ax >= az ? [p[2], p[1]] : ay >= az ? [p[0], p[2]] : [p[0], p[1]];
-    const V = (p: [number, number, number]): number => { const t = uvOf(p); return b.v(p[0], p[1], p[2], nx, ny, nz, t[0], t[1]); };
+    // edge coordinates over the face's bounding box in its uv projection (exact for rectangular faces)
+    const ts = ps.map(uvOf);
+    const ua = Math.min(...ts.map((t) => t[0])), ub = Math.max(...ts.map((t) => t[0]));
+    const va = Math.min(...ts.map((t) => t[1])), vb = Math.max(...ts.map((t) => t[1]));
+    const hu = (ub - ua) / 2, hv = (vb - va) / 2;
+    const V = (p: [number, number, number]): number => {
+      const t = uvOf(p);
+      return b.v(p[0], p[1], p[2], nx, ny, nz, t[0], t[1], b.ec(hu, rel(t[0] - ua - hu, hu)), b.ec(hv, rel(t[1] - va - hv, hv)));
+    };
     b.quad(V(p0), V(p1), V(p2), V(p3));
   }
 }

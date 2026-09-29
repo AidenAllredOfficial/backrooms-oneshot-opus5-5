@@ -213,7 +213,7 @@ export const handrail: PropBuild = (b, v) => {
   const c = RAIL[v];
   const railMat = (): void => {
     if (v === 1) b.mat(Mat.WOOD, c[0], c[1], c[2], 0, 0.45);
-    else if (v === 3) b.mat(Mat.METAL_RUST);
+    else if (v === 3) b.mat(Mat.METAL_RUST, c[0], c[1], c[2]);
     else b.mat(Mat.METAL_PAINTED, c[0], c[1], c[2], 0, v === 0 ? 0.25 : 0);
   };
   railMat();

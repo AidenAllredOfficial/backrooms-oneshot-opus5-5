@@ -49,7 +49,7 @@ float scratchField(vec2 uv) {
 void gen(vec2 uv, inout Surf s) {
   s.albedo = TABLE_ALBEDO * (1.0 + 0.1 * fbm(uv, PM(4.0), 3, 10)); // coat thickness +-3 %
   s.height = 0.5 + 1.3 * fbm(uv, PM(3.0), 2, 3); // oil-canning, ~+-0.45 mm
-  s.rough = 0.36 + 0.15 * fbm(uv, PM(8.0), 3, 11) + 0.08 * fbm(uv, PM(40.0), 2, 15); // +-0.035 blotches, finer mottle
+  s.rough = 0.4 + 0.15 * fbm(uv, PM(8.0), 3, 11) + 0.08 * fbm(uv, PM(40.0), 2, 15); // +-0.035 blotches, finer mottle
   s.metal = 0.0;
   vec2 wv = warp(uv, PM(3.0), 3, 4, 0.04);
   float lf = fbm(wv, PM(6.0), 4, 5);
@@ -62,58 +62,105 @@ void gen(vec2 uv, inout Surf s) {
 }
 `;
 
-/** Rusted steel: rust mask from warped fbm plus downward (vertical) run streaks, flaking scale, pitting, remnants
- * of old grey-green paint and a little bare steel. */
+/** Corroding painted steel (texture realism v2, lane E; frame 1.2 m). Isotropic in uv: gravity comes from the world at
+ * runtime (run-off below rusty areas, pipe undersides and joints). ormh.a = C, the corrosion order (rank-normalised:
+ * warped clusters plus blister discs); the stages follow C downward: paint (C > 0.62, applied at runtime with the
+ * part's paint colour, so the recipe stores the rust it would show), blisters and their orange halo (0.55-0.62, a
+ * 0.3 mm dome with a cracked rim), lifted flakes (0.35-0.55: Voronoi plates of 8-30 mm, each tilted and lifted
+ * 0.2-1 mm at a hashed edge, with a fresh-orange gap along their borders) and deep rust (< 0.35: dark scale,
+ * tubercles and log-normally sized pits that crowd where C is lowest). Rust is a dielectric at roughness 0.88-0.95;
+ * the paint remnants' roughness is set at runtime. Albedo is the corrosion palette: fresh FeOOH (0.40, 0.12, 0.03),
+ * mid (0.20, 0.08, 0.03), old scale (0.07, 0.04, 0.025), pits (0.03, 0.02, 0.015). */
 const METAL_RUST = /* glsl */ `
+#define SS 4
+${CDF_N}
 void gen(vec2 uv, inout Surf s) {
-  vec2 wv = warp(uv, PM(4.0), 4, 3, 0.04);
-  float f = fbm(wv, PM(5.0), 5, 4);
-  float str = fbm(uv, PMxy(30.0, 2.0), 3, 5);
-  float str2 = gnoise(uv, PMxy(80.0, 4.0), 6);
-  float rustM = smoothstep(-0.25, 0.0, f + 0.35 * str + 0.1 * str2);
-  float heavy = smoothstep(0.1, 0.4, f + 0.2 * str);
-  float bareM = (1.0 - rustM) * smoothstep(0.1, 0.3, fbm(uv, PM(12.0), 3, 11) - 0.1);
-  Cell pt = worley(uv, PM(90.0), 0.9, 7);
-  float pit = step(hashf(pt.id, 8), 0.5) * (1.0 - smoothstep(0.1, 0.35, pt.f1)) * rustM;
-  float cv = fbmV(uv, PM(25.0), 4, 9);
-  vec3 orange = srgb8(166.0, 104.0, 64.0);
-  vec3 brown = srgb8(124.0, 88.0, 64.0);
-  vec3 dark = srgb8(70.0, 52.0, 42.0);
-  vec3 rust = mix(brown, orange, smoothstep(0.35, 0.7, cv));
-  rust = mix(rust, dark, heavy * 0.7);
-  rust *= 1.0 - 0.3 * pit;
-  vec3 paint = srgb8(112.0, 118.0, 110.0) * (1.0 + 0.03 * fbm(uv, PM(40.0), 2, 10));
-  vec3 steel = srgb8(140.0, 138.0, 136.0);
-  vec3 col = mix(paint, rust, rustM);
-  col = mix(col, steel, bareM);
-  // run-off stains over the paint
-  col = mix(col, col * vec3(0.8, 0.64, 0.52), smoothstep(0.1, 0.6, str) * (1.0 - rustM) * 0.6);
+  vec2 m = uv * FRAME;
+  vec2 wv = warp(uv, PM(3.0), 3, 3, 0.05);
+  float lf = fbm(wv, PM(3.0), 4, 4);
+  float mf = fbm(wv, PM(12.0), 3, 5);
+  // rust spots (r 5-25 mm, a third of the 4 cm cells) that coalesce where the fields corrode, and blisters (discs of
+  // r 3-10 mm in clusters, Worley 40/m where the mid field is corroding)
+  Cell sc = worley(wv, PM(25.0), 0.9, 22);
+  vec4 sh = hash4f(sc.id, 23);
+  float spot = (1.0 - smoothstep(0.2 + 0.4 * sh.x, 0.3 + 0.5 * sh.x, sc.f1)) * step(sh.y, 0.35);
+  Cell bc = worley(uv, PM(40.0), 0.9, 6);
+  vec4 bh = hash4f(bc.id, 7);
+  float br = 0.003 + 0.007 * bh.x;
+  float bd = bc.f1 / 40.0; // metres from the blister centre
+  float blister = (1.0 - smoothstep(br * 0.85, br, bd)) * step(bh.y, 0.55) * smoothstep(-0.1, 0.25, mf);
+  float C = cdfN((0.45 * lf / 0.18 + 0.55 * mf / 0.2 - 1.1 * spot - 0.9 * blister + 0.13) / 0.8);
+  s.aux = C;
+  float fresh = smoothstep(0.55, 0.62, C); // halo and just-exposed rust: the paint's edge
+  float flakeZ = smoothstep(0.33, 0.37, C) * (1.0 - smoothstep(0.53, 0.57, C));
+  float deep = 1.0 - smoothstep(0.33, 0.37, C);
+  // lifted flakes: Voronoi plates of ~8-30 mm, tilted +-4 deg about a hashed direction, lifted at their downhill edge
+  vec3 fe = worleyEdge(uv, PM(55.0), 1.0, 8);
+  vec4 fh = hash4f(ivec2(fe.yz), 9);
+  Cell fc = worley(uv, PM(55.0), 1.0, 8);
+  vec2 fdir = vec2(cos(fh.x * 6.2832), sin(fh.x * 6.2832));
+  float tilt = (0.3 + 0.7 * fh.y) * 0.07 * dot(fc.rel / 55.0, fdir); // metres (tan 4 deg ~ 0.07)
+  float lift = 0.0002 + 0.0008 * fh.z;
+  float gap = 1.0 - smoothstep(0.02, 0.07, fe.x); // the plate border: a 1-2 mm gap of fresh oxide
+  // deep rust: tubercles (1-3 mm) and pits in three log-spaced octaves, denser where C is lowest
+  Cell tc = worley(uv, PM(420.0), 1.0, 10);
+  float tub = (1.0 - smoothstep(0.0, 0.8, tc.f1)) * step(hashf(tc.id, 11), 0.6);
+  float pit = 0.0;
+  for (int k = 0; k < 3; k++) {
+    float d = k == 0 ? 150.0 : k == 1 ? 300.0 : 600.0;
+    Cell pc = worley(uv, PM(d), 0.9, 12 + k);
+    float dens = (0.03 + 0.15 * (1.0 - C)) * (k == 0 ? 0.35 : k == 1 ? 0.7 : 1.0);
+    float rr = 0.25 + 0.3 * hashf(pc.id, 20 + k);
+    pit = max(pit, (1.0 - smoothstep(rr * 0.6, rr, pc.f1)) * step(hashf(pc.id, 16 + k), dens));
+  }
+  float tone = fbm(uv, PM(30.0), 3, 21);
+  float crust = fbm(wv, PM(20.0), 3, 24); // thick scale crusts (dark) against looser oxide (orange-brown) in deep rust
+  vec3 cFresh = vec3(0.40, 0.12, 0.03), cMid = vec3(0.20, 0.08, 0.03), cOld = vec3(0.07, 0.04, 0.025);
+  vec3 col = mix(cMid, cFresh, clamp(0.5 + 1.5 * tone, 0.0, 1.0) * 0.5 + 0.5 * fresh);
+  col = mix(col, mix(cMid * (0.8 + 0.4 * fh.w), cOld, 0.3), flakeZ * (1.0 - gap));
+  col = mix(col, cFresh * (0.85 + 0.3 * tone), flakeZ * gap);
+  vec3 deepC = mix(mix(cMid, cFresh, 0.35 * clamp(0.5 + 2.0 * tone, 0.0, 1.0)), cOld, smoothstep(-0.05, 0.25, crust));
+  col = mix(col, mix(deepC, cMid * 1.2, 0.3 * tub), deep);
+  col = mix(col, vec3(0.03, 0.02, 0.015), pit * (0.4 + 0.6 * deep));
   s.albedo = col;
-  s.metal = bareM + 0.15 * (1.0 - rustM);
-  s.rough = mix(mix(0.5, 0.35, bareM), 0.85 + 0.1 * heavy, rustM);
-  s.height = 0.45 + 0.15 * heavy * rustM + 0.08 * rustM + 0.05 * f - 0.25 * pit;
+  s.metal = 0.0;
+  s.rough = 0.88 + 0.05 * deep + 0.02 * tone;
+  // relief (heightScale 3 mm per unit): paint flat, blister domes +0.3 mm with a cracked rim, flakes lifted and tilted,
+  // deep rust sunk with tubercles on it, pits
+  float h = 0.5 + 0.1 * blister * (1.0 - 0.6 * smoothstep(0.7, 1.0, bd / br)) * step(0.55, C);
+  h += flakeZ * (1.0 - gap) * (lift + tilt) / 0.003;
+  h += deep * (-0.05 + 0.04 * tub);
+  h -= 0.15 * pit;
+  s.height = h;
 }
 `;
 
-/** Close-mesh bar grating: bearing bars 5 mm @ 15 mm, cross bars 5 mm @ 50 mm; dark holes (alpha 0 for the
- * alpha-tested DECAL flag), walked-on bar tops polished. */
+/** Hot-dip galvanised bar grating (19-W-4; lane E): 5 mm bearing bars at 30 mm, 5 mm cross rods at 100 mm, under a
+ * dull zinc oxide (F0 ~0.36 at roughness ~0.6) with spangle-scale mottle, walked-on bar tops a little brighter, ~2 %
+ * white-rust flecks (zinc hydroxide: dielectric, chalky) and dirt packed at the junctions. The holes are dark (a pit
+ * or the cabinet behind: alpha 0 on alpha-tested faces). */
 const METAL_GRATE = /* glsl */ `
 void gen(vec2 uv, inout Surf s) {
   vec2 m = uv * FRAME;
-  float bearing = fillM(distLines(m.x, 0.015) - 0.0025);
-  float crossB = fillM(distLines(m.y, 0.05) - 0.0025);
+  float bearing = fillM(distLines(m.x, 0.03) - 0.0025);
+  float crossB = fillM(distLines(m.y, 0.1) - 0.0025);
   float bar = max(bearing, crossB);
+  float junction = bearing * crossB;
   float wear = fbmV(uv, PM(6.0), 3, 3);
   float polish = smoothstep(0.55, 0.8, wear);
-  vec3 steel = srgb8(150.0, 152.0, 152.0) * (0.9 + 0.2 * vnoise(uv, PM(120.0), 4));
-  steel = mix(steel, srgb8(182.0, 184.0, 184.0), polish * 0.5);
-  vec3 hole = srgb8(66.0, 64.0, 62.0);
-  s.albedo = mix(hole, steel, bar);
+  vec3 zinc = vec3(0.36, 0.36, 0.35) * (0.9 + 0.2 * vnoise(uv, PM(60.0), 4));
+  zinc = mix(zinc, vec3(0.45, 0.45, 0.44), polish * 0.4);
+  Cell wr = worley(uv, PM(40.0), 0.9, 5);
+  float white = step(hashf(wr.id, 6), 0.08) * (1.0 - smoothstep(0.15, 0.4, wr.f1));
+  zinc = mix(zinc, vec3(0.55, 0.55, 0.53), white);
+  zinc *= 1.0 - 0.45 * junction * smoothstep(0.3, 0.7, fbmV(uv, PM(20.0), 2, 7));
+  vec3 hole = srgb8(40.0, 39.0, 38.0);
+  s.albedo = mix(hole, zinc, bar);
   s.alpha = bar;
-  s.metal = 0.9 * bar;
-  s.rough = mix(0.9, 0.55 - 0.2 * polish, bar);
+  s.metal = 0.8 * bar * (1.0 - white);
+  s.rough = mix(0.95, mix(0.6 - 0.1 * polish, 0.9, white), bar);
   s.height = max(bearing, 0.85 * crossB);
-  s.ao = mix(0.35, 1.0, bar);
+  s.ao = mix(0.25, 1.0, bar);
 }
 `;
 
@@ -135,9 +182,14 @@ void gen(vec2 uv, inout Surf s) {
   vec3 rustCol = srgb8(120.0, 76.0, 46.0);
   vec3 col = zinc * mix(0.98, 1.05, dull);
   col = mix(col, rustCol, rust * 0.6);
+  // lane E: white-rust bloom (zinc hydroxide, chalky, ~5 %) and dark drip lines along the rib bottoms
+  float wr = smoothstep(0.62, 0.75, fbmV(warp(uv, PM(3.0), 2, 8, 0.03), PM(10.0), 4, 9));
+  col = mix(col, vec3(0.5, 0.5, 0.48), wr * 0.7);
+  float drip = bottom * smoothstep(0.55, 0.85, vnoise(uv, PMxy(60.0, 1.5), 10)) * (1.0 - smoothstep(0.004, 0.01, abs(x - 0.075)));
+  col *= 1.0 - 0.45 * drip;
   s.albedo = col;
-  s.metal = mix(0.8, 0.55, dull) * (1.0 - 0.8 * rust);
-  s.rough = mix(0.4 + 0.12 * sh, 0.58, dull) + 0.25 * rust;
+  s.metal = mix(0.8, 0.55, dull) * (1.0 - 0.8 * rust) * (1.0 - wr);
+  s.rough = mix(0.4 + 0.12 * sh, 0.58, dull) + 0.25 * rust + 0.35 * wr + 0.15 * drip;
   s.height = h;
 }
 `;
@@ -178,11 +230,11 @@ export const METAL_RECIPES: RecipeTable = {
     phys: phys(0.05, { det: 18, detS: 1 }),
   },
   [Mat.METAL_RUST]: {
-    glsl: METAL_RUST, normalStrength: 1.0, heightScale: 0.0015, trim: [1.116, 1.099, 0.991],
-    phys: phys(0.4, { det: 4, detS: 0.6 }),
+    glsl: METAL_RUST, normalStrength: 1.5, heightScale: 0.003, trim: [0.991, 1.0, 0.984], aux: 'wear',
+    phys: phys(0.4, { det: 19, detS: 1, sigma: 0.5 }),
   },
   [Mat.METAL_GRATE]: {
-    glsl: METAL_GRATE, normalStrength: 0.35, heightScale: 0.02, trim: [1.259, 1.246, 1.261],
+    glsl: METAL_GRATE, normalStrength: 0.35, heightScale: 0.02, trim: [1.02, 1.03, 1.06],
     phys: phys(0),
   },
   [Mat.METAL_DECK]: {
