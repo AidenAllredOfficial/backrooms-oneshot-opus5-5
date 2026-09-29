@@ -360,12 +360,13 @@ void gen(vec2 uv, inout Surf s) {
 `;
 
 /** Precast terrazzo tile, 0.6 m (2 x 2 per 1.2 m frame; the shader rotates / flips whole tiles): crushed marble
- * chips cover ~70-75 % of a grey cement matrix. Chips are angular polygons (Voronoi cells shrunk by a per-chip gap,
- * F2 - F1) at three sizes (15, 6 and 3 mm lattices; the smaller fill the matrix gaps), in a restrained palette
- * (white marble 50 %, light grey 24 %, buff 12 %, charcoal 8 %, rare muted accents) with their own value, a tone gradient across each
- * chip and veins in some white chips. The matrix has 1 mm sand speckle and 0.5-2 mm pits. The polish leaves the chips
- * glossier (0.07-0.1) than the matrix (0.16-0.22) and the matrix ~20 microns lower. 1.5 mm grout joints; each tile
- * sits with its own tilt (+-0.15 degrees) and lippage (+-0.1 mm), so the lamp reflections step at the joints. */
+ * chips cover ~73 % of a grey cement matrix. Chips are angular polygons (Voronoi cells shrunk by a per-chip gap,
+ * F2 - F1) at three sizes (15, 6 and 3 mm lattices; the smaller fill the matrix gaps), in a restrained palette (white
+ * marble 50 %, light grey 24 %, buff 12 %, charcoal 8 %, rare muted accents) with their own value, a tone gradient
+ * across each chip and veins in some white chips. The matrix has 1 mm sand speckle and 0.5-2 mm pits. The polish
+ * leaves the chips glossier (0.07-0.1) than the matrix (0.16-0.22) and the matrix ~20 microns lower. 1.5 mm grout
+ * joints; each tile sits with its own tilt (+-0.15 degrees) and lippage (+-0.1 mm), so the lamp reflections step at
+ * the joints. */
 const TERRAZZO = /* glsl */ `
 #define SS 4
 vec3 tzChip(float h) {
@@ -405,9 +406,10 @@ void gen(vec2 uv, inout Surf s) {
   vec3 matrixCol = srgb8(160.0, 158.0, 151.0) * (0.92 + 0.16 * vnoise(tuv, PM(420.0), 4)) * (1.0 + 0.03 * fbm(tuv, PM(8.0), 3, 5));
   vec4 h1, h2, h3;
   vec2 r1, r2, r3;
-  float c1 = tzChips(tuv, PM(60.0), 0.18, 0.46, 0.88, 10, h1, r1);
-  float c2 = tzChips(tuv + 0.37, PM(140.0), 0.16, 0.4, 0.8, 20, h2, r2) * (1.0 - c1);
-  float c3 = tzChips(tuv + 0.71, PM(300.0), 0.18, 0.42, 0.6, 30, h3, r3) * (1.0 - c1) * (1.0 - c2);
+  // gaps and shares measured for ~73 % chip cover (harness chip-mask A/B)
+  float c1 = tzChips(tuv, PM(60.0), 0.1, 0.34, 0.93, 10, h1, r1);
+  float c2 = tzChips(tuv + 0.37, PM(140.0), 0.12, 0.34, 0.85, 20, h2, r2) * (1.0 - c1);
+  float c3 = tzChips(tuv + 0.71, PM(300.0), 0.15, 0.38, 0.7, 30, h3, r3) * (1.0 - c1) * (1.0 - c2);
   vec3 col = matrixCol;
   col = mix(col, tzColor(h3, r3, tuv, 31), c3);
   col = mix(col, tzColor(h2, r2, tuv, 21), c2);
@@ -454,7 +456,7 @@ export const CONCRETE_RECIPES: RecipeTable = {
     phys: phys(0.15),
   },
   [Mat.TERRAZZO]: {
-    glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.002, trim: [1.088, 1.089, 1.117],
+    glsl: TERRAZZO, normalStrength: 1.0, heightScale: 0.002, trim: [1.02, 1.024, 1.053],
     phys: phys(0.1, { det: 13, detS: 0.6, glaze: 0.09, roughComp: 0.45, tok: 0.5, dirt: [0.6, 0.58, 0.52, 0.5] }),
   },
 };
