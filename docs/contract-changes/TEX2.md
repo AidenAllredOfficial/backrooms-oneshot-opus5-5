@@ -164,7 +164,10 @@ v2 conventions").
   wall (not used); EON on CMU (sigma 0.2) +0.65 ms on a full-screen CMU wall (g08), kept. The integrator budgets EON
   once for the union of layers that set sigma. Final lane head against tex-integ (RenderPass, 3 rounds): high +0.00 to
   +0.08 ms, ultra -0.05 to +0.27 ms on gallery 05, 08, 09 and 12; without the CMU sigma the head measures at or below
-  tex-integ, so the remainder is EON (+0.3-0.6 ms at ultra on CMU-filled frames).
+  tex-integ, so the remainder is EON (+0.3-0.6 ms at ultra on CMU-filled frames). Review re-measure (one session, 5
+  trees interleaved): gallery 08 ultra +0.63 ms against ff42a23 and +0.41-0.66 ms against 9b8a06f (lane B merged), not
+  lowered by dropping the CMU sigma or the block key once lane B's sigma has compiled EON in; gallery 09 within noise.
+  The integrator should profile the painted-CMU close-up.
 - **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
   (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. Raw block reflects three quarters of what the
   painted block did, so PIPEWORKS frames are darker: frame mean -24 % (gallery 09) and -27 % (gallery 10, a wall
@@ -186,8 +189,9 @@ v2 conventions").
   CONCRETE_WALL 0.63, CONCRETE_FLOOR / CEIL on walls 0.63, METAL_PAINTED 0.83). The masonry postSample undoes it for the
   CMU layers (`brNrm.x *= brLB.x / brLB.y`); **remove that line if the core frame gets normalised per axis.**
 - **Hooks (chunks/family/tile.ts):** pars defines `BR_M_POOL_MOSAIC`, `BR_M_VINYL_VCT`; postSample declares
-  `brTlWear` (read by rough). VCT lane wear reads mask A on up-facing VINYL_VCT: dormant until the hard-floor wear bake
-  (lane B) writes A there (`VCT_SYNTH_WEAR` is a development switch).
+  `brTlWear` (read by rough). VCT lane wear reads mask A on up-facing VINYL_VCT, which lane B's hard-floor wear bake
+  writes (entry fans and lanes at 0.8 x the carpet amplitude). It shows where A plus its noise passes 0.25, so mainly
+  in decayed areas; maintained floors keep their wax (`VCT_SYNTH_WEAR` is a development switch).
 - **Consumers affected:** lane 0 (the shim, the frame issue), lane B (mask A on VCT floors), the integrator (golden).
 
 ## Lane D: walls and ceilings

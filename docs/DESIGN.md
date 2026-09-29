@@ -4307,15 +4307,19 @@ Block walls read as concrete block at every distance, and the tile layers as fir
   coverage in ormh.a. The shader colours the grout along its lines in world space: per-tile rotation would split a
   texture-space variation down the middle of each line. Dry, up-facing pool deck glaze is dulled to 0.17 (art
   direction: no slip-resistant matte variant), and a splash film still turns it glossy. Up-facing VCT takes lane wear
-  from mask A (+0.22 roughness, a little lighter and greyer; dormant until the hard-floor wear bake writes A there),
-  an amber, glossier wax band 2-5 cm from the walls, and heel marks. D6 GLAZE is now long-wave waviness (25 and 12 mm,
+  from mask A (lane B's hard-floor wear: +0.22 roughness, a little lighter and greyer where A passes 0.25, so mostly in
+  decayed areas), an amber, glossier wax band 2-5 cm from the walls, and heel marks. D6 GLAZE is now long-wave waviness (25 and 12 mm,
   rms slope 0.0046) plus sparse pinholes. At detail strength 0.3 against 1, the ragged edges of the lamp reflections
   on the pool walls are unchanged (gallery 12), so D6 is not their cause.
 - **Costs** (gpuProfile RenderPass medians of 3 interleaved fresh boots against tex-integ ff42a23; run-to-run noise
   about +-0.2 ms at high and +-0.3 ms at ultra). High 1920x1080: gallery 05 +0.05, 08 +0.08, 09 +0.00, 12 +0.07 ms.
   Ultra 2560x1440: 05 -0.05, 08 +0.27, 09 +0.27, 12 +0.12 ms. The same tree without the CMU sigma measures at or below
   tex-integ everywhere, so the lane's recipes and hooks are within noise and EON is the cost: +0.3-0.6 ms at ultra
-  where CMU fills the frame (08, 09), shared with the other layers that set sigma. Texture generation +21 ms (200 ms
+  where CMU fills the frame (08, 09), shared with the other layers that set sigma. A later review (same method, 5
+  trees interleaved in one session) measured more on the painted close-up, gallery 08 at ultra: +0.63 ms against
+  ff42a23 and +0.66 / +0.41 ms against tex-integ 9b8a06f (lane B merged, so EON is already compiled in), +0.21 ms at
+  high; gallery 09 (raw block) -0.12 ms ultra and -0.09 ms high. With lane B merged, dropping the CMU sigma or the
+  per-block key does not lower it, so it is not EON. Texture generation +21 ms (200 ms
   against 179 ms, median of 6 fresh harness boots; the recipes evaluate only the part each output pass needs), detail
   maps +3 ms, no memory beyond the reserved CMU_RAW layer and the D14 / D15 slots.
 
