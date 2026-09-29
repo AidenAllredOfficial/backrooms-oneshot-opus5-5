@@ -84,7 +84,7 @@ void gen(vec2 uv, inout Surf s) {
   s.rough = mix(0.92 + 0.05 * cov + 0.02 * gran, 0.33, bar);
   // a slot narrower than a texel only half-deepens its texel's height, so the cavity pass sees a shallow dip; the rest
   // of its occlusion (a 1 x 2 mm slot's floor sees ~20 % of the sky) goes into the recipe AO
-  s.ao = 1.0 - 0.3 * cov * (1.0 - bar);
+  s.ao = 1.0 - 0.2 * cov * (1.0 - bar);
   s.metal = 0.0;
   s.aux = 1.0 - bar;
 }

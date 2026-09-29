@@ -3,8 +3,8 @@
 //
 // Water stains are capillary fronts (the walls family's brWlFronts, chunks/family/walls.ts): the WP7 mask R is the
 // wet extent around a leak (bake/mask.ts), and a few tiles carry an old stain of their own with a lobed outline. The
-// fine field that roughens the fronts is the tile's own relief (water wicks along the fissures), the D5 multiplier, the
-// grime speckle and two world noise octaves. Each 0.6 m tile absorbs a little differently and its front spacing is its
+// fine field that roughens the fronts is the tile's own relief (water wicks along the fissures), the D5 multiplier and
+// two world noise octaves. Each 0.6 m tile absorbs a little differently and its front spacing is its
 // own, so a stain steps at the T-bars (water does not cross them). A few tiles are displaced (a dark plenum wedge at a
 // lifted edge), sag or are replacements from another lot; their tilt is a world-space height gradient (brClBump) that
 // the normal hook adds.
@@ -16,7 +16,7 @@ import { WALL_STAIN } from './walls.ts';
 
 /** Ceiling stain colours (linear multipliers): the tide-line deposit and the pale tan halo; RELIEF: the weight of the
  * tile's relief in the fine field. */
-export const CEIL_STAIN = { TIDE: [0.58, 0.44, 0.26], HALO: [0.88, 0.8, 0.62], RELIEF: 0.1 } as const;
+export const CEIL_STAIN = { TIDE: [0.58, 0.44, 0.26], HALO: [0.88, 0.8, 0.62], RELIEF: 0.5 } as const;
 
 const v3 = (c: readonly number[]): string => `vec3( ${c.map(f).join(', ')} )`;
 
@@ -41,8 +41,8 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 		vec2 tfr = brS2 / 0.6 - vec2( cti );
 		float clipT = smoothstep( 0.012, 0.03, min( min( tfr.x, 1.0 - tfr.x ), min( tfr.y, 1.0 - tfr.y ) ) * 0.6 );
 		// fine field (low relief is wetter: the fissures steer the front) and the footprints, in uniform flow
-		// (the tile's fissures are deep and texel-sharp: a light share, or the front breaks into grains)
-		float clFine = clamp( ( brMuH - brNrm.w ) / 0.15, - 1.0, 1.0 ) * ${f(CEIL_STAIN.RELIEF)} + 0.5 * ( g1.g - 0.5 );
+		// (the tile's fissures are deep and texel-sharp: a light share)
+		float clFine = clamp( ( brMuH - brNrm.w ) / 0.15, - 1.0, 1.0 ) * ${f(CEIL_STAIN.RELIEF)};
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 		clFine += 1.6 * ( 1.0 - brAm );
 #endif
@@ -52,6 +52,7 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 		// leak stains: the mask's wet extent, each tile absorbing a little differently (the fronts step at the T-bars)
 		float cs = brMask.r * mix( 0.88, 1.12, brU01( brPcg( ht + 7u ) ) ) + 0.1 * ( g2.r - 0.5 ) * smoothstep( 0.02, 0.2, brMask.r );
 		float clW = ${f(STAIN_FRONT.W_PX)} * fwidth( cs );
+		float clGs = length( brWlMetricGrad( cs, brS2 ) );
 		// old water stains on a few tiles: an off-centre blotch with a lobed outline, clipped to the tile
 		if ( brHoriz && brU01( hs ) < BR_CEIL_STAIN_P ) {
 			vec2 ctr = 0.3 + 0.28 * vec2( brU01( brPcg( hs ) ), brU01( brPcg( hs + 1u ) ) ) - 0.14;
@@ -66,19 +67,20 @@ vec2 brClBump = vec2( 0.0 ); // world relief gradient (d h / d x, d h / d z) of 
 				// its screen footprint from the analytic gradient (anisotropic: a grazing view blurs only across)
 				vec2 gts = - 0.5 / Rl * sy * dv / max( length( dv ), 1e-5 );
 				clW = ${f(STAIN_FRONT.W_PX)} * ( abs( dot( gts, clDx ) ) + abs( dot( gts, clDy ) ) );
+				clGs = length( gts );
 			}
 		}
 		if ( cs > 0.02 ) {
 			float n12 = ( brClNoise( brS2, 0.012, 811u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, clFp / 0.012 ) );
 			float n40 = ( brClNoise( brS2, 0.04, 823u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, clFp / 0.04 ) );
-			float sp = cs + ${f(STAIN_FRONT.FINE)} * ( clFine + ${f(WALL_STAIN.FINE_12)} * n12 + ${f(WALL_STAIN.FINE_40)} * n40 );
+			float sp = cs + clGs * ( ${f(WALL_STAIN.M_TEX)} * clFine + ${f(2 * WALL_STAIN.M_12)} * n12 + ${f(2 * WALL_STAIN.M_40)} * n40 );
 			// per-tile front spacing (the hashed rings of brStainFront's spacing, one set per tile)
 			float L1 = BR_WL_L0 + ${f(STAIN_FRONT.A1)} + ${f(STAIN_FRONT.B1)} * brU01( brPcg( hs + 11u ) );
 			float L2 = L1 + ${f(STAIN_FRONT.A2)} + ${f(STAIN_FRONT.B2)} * brU01( brPcg( hs + 12u ) );
 			float inside, tide;
-			brWlFronts( sp, clW, BR_WL_L0, L1, L2, inside, tide );
+			brWlFronts( sp, BR_WL_TIDE_M * clGs, clW, BR_WL_L0, L1, L2, inside, tide );
 			brA *= mix( vec3( 1.0 ), BR_CL_HALO * mix( 0.93, 1.04, g2.r ), 0.4 * inside );
-			brA *= mix( vec3( 1.0 ), BR_CL_TIDE, 0.9 * tide * ( 0.65 + 0.35 * g2.g ) );
+			brA *= mix( vec3( 1.0 ), BR_CL_TIDE, tide * ( 0.75 + 0.25 * g2.g ) );
 			brRoughMul *= 1.0 + 0.05 * tide;
 			// chronic leaks: mould specks inside the innermost front
 			float mould = smoothstep( 0.65, 0.88, g1.g ) * smoothstep( L2, L2 + 0.08, sp );

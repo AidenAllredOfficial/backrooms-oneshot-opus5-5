@@ -4,7 +4,8 @@
 //
 // Water stains (both profiles) are capillary fronts, not thresholds: the WP7 mask R is the wet extent (bake/mask.ts:
 // stains at or below STAIN_MAX, seepage runnel zones SEEP_R0..1), perturbed by a fine field (the layer's own relief,
-// the detail multiplier, the grime speckle, and two world value-noise octaves at 12 mm and 40 mm), so the paper's
+// the detail multiplier and two world value-noise octaves at 12 mm and 40 mm; no speckle: it broke the fronts into
+// grains), so the paper's
 // formation and emboss steer the edge. brWlFronts draws 3 nested drying fronts whose spacing varies along the wall,
 // each a deposit darkest at its outer edge (brStainFront's profile, chunks/grimeLib.ts) that keeps its integral when the
 // pixel footprint widens it (no darkening with distance), a pale halo inside the outermost, mould specks inside the
@@ -29,8 +30,13 @@ import type { FamilyHooks } from './index.ts';
 export const WALL_STAIN = {
   TIDE: [0.55, 0.42, 0.26], HALO: [0.84, 0.74, 0.55], SALT: [0.78, 0.77, 0.72], RUNNEL: [0.5, 0.38, 0.22],
   L0: 0.44, // R of the outermost drying front
-  RELIEF: 0.3, // weight of the layer's relief (per 0.15 of height, clamped +-1) in the fine field
-  FINE_12: 1.2, FINE_40: 1.5, // amplitudes of the 12 mm and 40 mm world noise in the fine field (x STAIN_FRONT.FINE)
+  TIDE_M: 0.003, // m, width of a tide line's sharp outer edge (it fades inward over STAIN_FRONT.INNER times this)
+  NEST_FADE: 0.2, // deposit lost per nested front (the older, inner fronts are fainter)
+  RELIEF: 1.0, // weight of the layer's relief (per 0.15 of height, clamped +-1) in the fine field (x M_TEX)
+  // the fronts' raggedness is a metric displacement along the wet extent's gradient (so a front stays one coherent
+  // ragged line however gentle the extent is): up to +-M_TEX from the layer's relief, +-M_12 / +-M_40 m from the 12 mm
+  // and 40 mm world noise octaves (displacement slopes < 1: the level set never breaks into islands)
+  M_TEX: 0.004, M_12: 0.006, M_40: 0.015,
 } as const;
 
 const v3 = (c: readonly number[]): string => `vec3( ${c.map(f).join(', ')} )`;
@@ -42,19 +48,21 @@ const WALL_PARS = /* glsl */ `
 #define BR_WL_SALT ${v3(WALL_STAIN.SALT)}
 #define BR_WL_RUNNEL ${v3(WALL_STAIN.RUNNEL)}
 #define BR_WL_L0 ${f(WALL_STAIN.L0)}
+#define BR_WL_TIDE_M ${f(WALL_STAIN.TIDE_M)}
 #define BR_WL_STAIN_MAX ${f(STAIN_MAX)}
 #define BR_WL_SEEP_R0 ${f(SEEP_R0)}
 #define BR_WL_M_DRYWALL ${Mat.DRYWALL}
 #define BR_WL_M_TRIM ${Mat.TRIM_PAINT}
 // nested drying fronts at the levels L0 < L1 < L2 of the field sp: brStainFront's deposit profile (a half Gaussian of
-// width w on the dry side, an exponential of ${f(STAIN_FRONT.INNER)} w inside, each inner front weaker) at its physical width
-// w = ${f(STAIN_FRONT.W_MIN)} (s units). The pixel footprint wAA (the caller's fwidth of the field's smooth part, taken in
-// uniform flow) widens both sides in quadrature and lowers the peak so the deposit keeps its integral
-// (0.886 w + ${f(STAIN_FRONT.INNER)} w): a front neither darkens nor brightens a wall with distance, and it stays a thin line
-// wherever it is resolved. The fine field's noise is left out of wAA: it only moves the front, and its octaves fade
-// before they could alias. Callable in per-pixel branches
-void brWlFronts( float sp, float wAA, float L0, float L1, float L2, out float inside, out float tide ) {
-	const float wp = ${f(STAIN_FRONT.W_MIN)};
+// width wp on the dry side, an exponential of ${f(STAIN_FRONT.INNER)} wp inside, each inner front ${f(WALL_STAIN.NEST_FADE)} weaker). wp
+// is the deposit's physical width in s units: the caller converts BR_WL_TIDE_M metres with the field's metric
+// gradient, so the line is ~3 mm wide however steep or gentle the wet extent is. The pixel footprint wAA (the caller's fwidth of the field's
+// smooth part, taken in uniform flow) widens both sides in quadrature and lowers the peak so the deposit keeps its
+// integral (0.886 wp + ${f(STAIN_FRONT.INNER)} wp): a front neither darkens nor brightens a wall with distance, and it stays a
+// thin line wherever it is resolved. The fine field's noise is left out of wAA: it only moves the front, and its
+// octaves fade before they could alias. Callable in per-pixel branches
+void brWlFronts( float sp, float wpIn, float wAA, float L0, float L1, float L2, out float inside, out float tide ) {
+	float wp = max( wpIn, 1e-5 );
 	float wo = sqrt( wp * wp + wAA * wAA );
 	float li = sqrt( ${f(STAIN_FRONT.INNER * STAIN_FRONT.INNER)} * wp * wp + wAA * wAA );
 	float amp = ${f(0.886 + STAIN_FRONT.INNER)} * wp / ( 0.886 * wo + li );
@@ -62,10 +70,18 @@ void brWlFronts( float sp, float wAA, float L0, float L1, float L2, out float in
 	for ( int k = 0; k < 3; k ++ ) {
 		float d = sp - ( k == 0 ? L0 : k == 1 ? L1 : L2 );
 		float t = d < 0.0 ? exp( - ( d / wo ) * ( d / wo ) ) : exp( - d / li );
-		tide = max( tide, t * ( 1.0 - ${f(STAIN_FRONT.NEST_FADE)} * float( k ) ) );
+		tide = max( tide, t * ( 1.0 - ${f(WALL_STAIN.NEST_FADE)} * float( k ) ) );
 	}
 	tide *= amp;
 	inside = smoothstep( L0 - wo, L0 + wo, sp );
+}
+// the gradient (per metre) of a field on the surface's 2D coordinate s2, from its screen derivatives (uniform control
+// flow only)
+vec2 brWlMetricGrad( float v, vec2 s2 ) {
+	vec2 dp = vec2( dFdx( v ), dFdy( v ) );
+	vec2 sx = dFdx( s2 ), sy = dFdy( s2 );
+	float det = sx.x * sy.y - sx.y * sy.x;
+	return abs( det ) > 1e-14 ? vec2( sy.y * dp.x - sx.y * dp.y, sx.x * dp.y - sy.x * dp.x ) / det : vec2( 0.0 );
 }
 // world value noise on a wall (along, storey-relative y), cell c metres (c divides NOISE_WRAP and STOREY_PITCH)
 float brWlNoise( vec2 s2, float c, uint salt ) {
@@ -81,29 +97,26 @@ float brWlDot( vec2 q, float r, float fp ) { return brWlLine( q.x, 0.886 * r, fp
 // only); the caller's fine offset ragM (metres) roughens the edge. (A fine field added to pfS before the division
 // crossed T wherever pfS lay near it with a small gradient: thin false edges in long streaks.)
 float brWlEdgeDist( float pfS, float ragM, float T, vec2 s2, out vec2 dir ) {
-	vec2 dp = vec2( dFdx( pfS ), dFdy( pfS ) );
-	vec2 sx = dFdx( s2 ), sy = dFdy( s2 );
-	float det = sx.x * sy.y - sx.y * sy.x;
-	vec2 g = abs( det ) > 1e-14 ? vec2( sy.y * dp.x - sx.y * dp.y, sx.x * dp.y - sy.x * dp.x ) / det : vec2( 0.0 );
+	vec2 g = brWlMetricGrad( pfS, s2 );
 	float gl = length( g );
 	dir = gl > 1e-6 ? g / gl : vec2( 0.0, - 1.0 );
 	return ( pfS - T ) / max( gl, 0.05 ) + ragM;
 }
 // the shared wall stain block: fronts, halo, mould, efflorescence and runnels on the albedo a and the roughness
-// multiplier; fine: the texture part of the fine field, w: the front footprint from the caller, fp the metric pixel
-// footprint, yLoc the storey-relative height
-void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2, float fine, float w, vec2 s2, float fp, float yLoc ) {
+// multiplier; fine: the texture part of the fine field, w: the front footprint and gs the smooth field's metric
+// gradient (1/m) from the caller, fp the metric pixel footprint, yLoc the storey-relative height
+void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2, float fine, float w, float gs, vec2 s2, float fp, float yLoc ) {
 	// the fine field's world octaves, faded out as they shrink below ~2 pixels (the texture terms are mip-filtered)
 	float n12 = ( brWlNoise( s2, 0.012, 811u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, fp / 0.012 ) );
 	float n40 = ( brWlNoise( s2, 0.04, 823u ) - 0.5 ) * ( 1.0 - smoothstep( 0.2, 0.5, fp / 0.04 ) );
 	float R = mask.r;
 	float sp = min( R, BR_WL_STAIN_MAX ) + 0.12 * ( g2.r - 0.5 )
-		+ ${f(STAIN_FRONT.FINE)} * ( fine + ${f(WALL_STAIN.FINE_12)} * n12 + ${f(WALL_STAIN.FINE_40)} * n40 );
+		+ gs * ( ${f(WALL_STAIN.M_TEX)} * fine + ${f(2 * WALL_STAIN.M_12)} * n12 + ${f(2 * WALL_STAIN.M_40)} * n40 );
 	// front spacing varies smoothly along the wall (0.6 m noise): no per-cell jumps
 	float L1 = BR_WL_L0 + ${f(STAIN_FRONT.A1)} + ${f(STAIN_FRONT.B1)} * brWlNoise( s2, 0.6, 839u );
 	float L2 = L1 + ${f(STAIN_FRONT.A2)} + ${f(STAIN_FRONT.B2)} * brWlNoise( s2 + 0.3, 0.6, 853u );
 	float inside, tide;
-	brWlFronts( sp, w, BR_WL_L0, L1, L2, inside, tide );
+	brWlFronts( sp, BR_WL_TIDE_M * gs, w, BR_WL_L0, L1, L2, inside, tide );
 	// runnel zones (R >= SEEP_R0): the halo and fronts stay at the zone's rim, the runnels are drawn inside
 	float zone = smoothstep( BR_WL_SEEP_R0 - 0.035, BR_WL_SEEP_R0 + 0.015, R );
 	float halo = inside * ( 1.0 - 0.5 * zone );
@@ -112,7 +125,7 @@ void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2,
 	roughMul *= 1.0 + 0.08 * tide - 0.05 * halo;
 	// mould specks inside the innermost front where the wall stays damp
 	float mould = smoothstep( 0.62, 0.85, g1.g ) * smoothstep( L1, L2, sp ) * clamp( 0.4 + mask.b * 1.5, 0.0, 1.0 );
-	a *= mix( vec3( 1.0 ), vec3( 0.3, 0.33, 0.25 ), 0.8 * mould );
+	a *= mix( vec3( 1.0 ), vec3( 0.3, 0.33, 0.25 ), 0.5 * mould );
 	// efflorescence: salts crystallise just above a rising-damp front (5-20 mm on the dry side), in patches
 	if ( yLoc < 1.3 ) {
 		float eb = smoothstep( BR_WL_L0 - 0.1, BR_WL_L0 - 0.06, sp ) * ( 1.0 - smoothstep( BR_WL_L0 - 0.025, BR_WL_L0 - 0.005, sp ) );
@@ -147,11 +160,11 @@ void brWlStain( inout vec3 a, inout float roughMul, vec4 mask, vec4 g1, vec4 g2,
 
 // the fine field's texture part and the metric footprint, shared by every block of the two profile branches (uniform
 // control flow). Low relief is wetter (the paper's formation, emboss and joints steer a front), the detail's dark
-// pores too, plus the grime speckle
+// pores too
 const WALL_FIELDS = /* glsl */ `
 		float wlFp = max( 0.5 * ( fwidth( brS2.x ) + fwidth( brS2.y ) ), 1e-5 );
 		float wlFade = 1.0 - smoothstep( 0.004, 0.012, wlFp ); // analytic relief below a few pixels would only sparkle
-		float wlFine = clamp( ( brMuH - brNrm.w ) / 0.15, - 1.0, 1.0 ) * ${f(WALL_STAIN.RELIEF)} + 0.5 * ( g1.g - 0.5 );
+		float wlFine = clamp( ( brMuH - brNrm.w ) / 0.15, - 1.0, 1.0 ) * ${f(WALL_STAIN.RELIEF)};
 #if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
 		wlFine += 1.6 * ( 1.0 - brAm );
 #endif
@@ -161,8 +174,10 @@ const WALL_FIELDS = /* glsl */ `
 // world noise octaves only move the fronts (the one is mip-filtered, the others fade out before they could alias)
 const WALL_STAIN_CALL = /* glsl */ `
 		{
-			float wlW = ${f(STAIN_FRONT.W_PX)} * fwidth( min( brMask.r, BR_WL_STAIN_MAX ) + 0.12 * ( g2.r - 0.5 ) );
-			if ( brMask.r > 0.02 ) brWlStain( brA, brRoughMul, brMask, g1, g2, wlFine, wlW, brS2, wlFp, vBrLocal.y );
+			float wlS0 = min( brMask.r, BR_WL_STAIN_MAX ) + 0.12 * ( g2.r - 0.5 );
+			float wlW = ${f(STAIN_FRONT.W_PX)} * fwidth( wlS0 );
+			float wlGs = length( brWlMetricGrad( wlS0, brS2 ) );
+			if ( brMask.r > 0.02 ) brWlStain( brA, brRoughMul, brMask, g1, g2, wlFine, wlW, wlGs, brS2, wlFp, vBrLocal.y );
 		}
 `;
 
