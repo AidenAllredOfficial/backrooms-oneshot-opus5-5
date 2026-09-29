@@ -9,7 +9,7 @@ import { DECAL_PAINT_STRIPE, Mat, VFlag } from '../../src/core/ids.ts';
 import type { ChunkLayout, DecalPlacement } from '../../src/core/layout.ts';
 import type { MeshBuffers } from '../../src/core/mesh.ts';
 import { buildTile } from '../../src/mesh/buildTile.ts';
-import { decalFrame, digitRect, parkingNumber } from '../../src/mesh/decals.ts';
+import { decalFrame, digitRect, parkingNumber, stripeV0 } from '../../src/mesh/decals.ts';
 import { Scene } from './fixtures.ts';
 import { asciiNb, tileKey } from './helpers.ts';
 
@@ -97,12 +97,15 @@ describe('decal buffer contents', () => {
       expect(m.lmUv[v * 2] * 512).toBeCloseTo(m.position[v * 3] / t + 1, 4);
     }
   });
-  test('signage layer, paint stripes in metres, decals split at cell lines and clipped to the tile', () => {
+  test('signage layer, paint stripes in stripe-local metres, decals split at cell lines and clipped to the tile', () => {
     let m = onlyDecal(D({ sign: true, kind: 3 }));
     expect(m.layer[0]).toBe(Mat.SIGNAGE);
+    // rot 0: the stripe's width runs along +x (u), from the edge at px - w / 2; aux.x = the width in mm (clamped)
     m = onlyDecal(D({ kind: DECAL_PAINT_STRIPE, w: 2.0, h: 0.1, px: 6.0 }));
     expect(m.layer[0]).toBe(Mat.FLOOR_PAINT);
-    for (let v = 0; v < m.vertexCount; v++) expect(m.uv[v * 2]).toBeCloseTo(m.position[v * 3] / 1.2, 6);
+    for (let v = 0; v < m.vertexCount; v++) expect(m.uv[v * 2]).toBeCloseTo((m.position[v * 3] - 5.0) / 1.2, 6);
+    expect(m.aux[0]).toBe(255);
+    expect(onlyDecal(D({ kind: DECAL_PAINT_STRIPE, w: 0.12, h: 2.0, px: 6.0 })).aux[0]).toBe(120);
     // a 2 m stripe centred on a cell line is split into pieces that never cross x = k * CELL
     for (let t = 0; t < m.indexCount / 3; t++) {
       const xs = [0, 1, 2].map((k) => m.position[m.index[t * 3 + k] * 3]);
@@ -126,6 +129,19 @@ describe('decal buffer contents', () => {
       return s;
     };
     expect(area(a) + area(b)).toBeCloseTo(0.4, 6);
+  });
+  test('a stripe clipped at a chunk edge continues its v (mod the repeat); parallel lines get their own offset', () => {
+    // one line along x at z = 12.3, clipped by the layouts at x = 38.4 into [21.6, 38.4] and [38.4, 50] (rot PI/2: +v
+    // along -x, so each piece starts at its larger x)
+    const d = D({ kind: DECAL_PAINT_STRIPE, rot: Math.PI / 2, w: 0.12 });
+    const { n, u, v } = decalFrame(d);
+    const rep = 1.2, frac = (x: number): number => x - Math.floor(x);
+    const a0 = stripeV0(n, u, v, 30, 12.3, 0.002, 8.4), b0 = stripeV0(n, u, v, 44.2, 12.3, 0.002, 5.8);
+    const bEnd = b0 + 11.6 / rep; // piece B's v at x = 38.4, where piece A starts
+    expect(Math.min(frac(bEnd - a0), 1 - frac(bEnd - a0))).toBeLessThan(1e-9);
+    expect(a0).toBeGreaterThanOrEqual(0);
+    expect(a0).toBeLessThan(1);
+    expect(stripeV0(n, u, v, 30, 14.7, 0.002, 8.4)).not.toBeCloseTo(a0, 3);
   });
 });
 

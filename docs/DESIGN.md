@@ -4099,7 +4099,7 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
    1. Recipe with `uOut = HEIGHT` → scratch.
    2. Recipe with `uOut = ALBEDO` → `setRenderTarget(albedoRT, L)`. **Recipes output LINEAR albedo**: the target is SRGB8_ALPHA8 and the hardware encodes on write (three treats render-target output as linear working space). `Surf.albedo` is linear; recipe constants written as sRGB bytes go through `srgbToLinear()` in `glsl/common.ts`.
    3. Recipe with `uOut = ORMH` (cavity AO from the scratch height: horizon-based, along 8 azimuths the steepest rise over radii 1-16 texels, V = 1 − mean(sin² h), the cosine-weighted visibility) → `setRenderTarget(ormhRT, L)`.
-   4. Normal pass: a wrap-sampled Sobel over the scratch × `heightScale` × `normalStrength` → `setRenderTarget(normalRT, L)`. `normalStrength` > 1 where the authored height field is smoother than the real surface at its real depth (heightScale also drives POM, the cavity and the puddle shorelines): WALLPAPER_L0 / MANILA ×6, DRYWALL ×10, TRIM_PAINT ×4, CONCRETE_FLOOR ×6, CONCRETE_WALL ×5, CONCRETE_CEIL ×3, which brings their mip-0 slopes from 0.3-1.4° to the 3-5° of embossed vinyl, knockdown and board-formed concrete (tan θ mean ~0.06-0.08; the slab 0.02, manila and trim 0.015). These layers now carry visible wall and slab texture, so props that need a plain matte surface do not borrow them: kraft boxes and bottle labels use PLASTIC with a 0.85 roughness override (on DRYWALL the boxes read as stucco).
+   4. Normal pass: a wrap-sampled Sobel over the scratch × `heightScale` × `normalStrength` → `setRenderTarget(normalRT, L)`. `normalStrength` > 1 where the authored height field is smoother than the real surface at its real depth (heightScale also drives POM, the cavity and the puddle shorelines): WALLPAPER_L0 / MANILA ×6, DRYWALL ×10, TRIM_PAINT ×4 (the concrete layers use physical amplitudes since texture realism v2 lane B: CONCRETE_FLOOR ×1.75, CONCRETE_WALL ×2, CONCRETE_CEIL ×1.5), which brings their mip-0 slopes from 0.3-1.4° to the 3-5° of embossed vinyl, knockdown and board-formed concrete (tan θ mean ~0.06-0.08; the slab 0.02, manila and trim 0.015). These layers now carry visible wall and slab texture, so props that need a plain matte surface do not borrow them: kraft boxes and bottle labels use PLASTIC with a 0.85 roughness override (on DRYWALL the boxes read as stucco).
 4. **Before the final draw into each array target, set `texture.generateMipmaps = true`.** `renderer.render()` then calls `updateRenderTargetMipmap` for the current target: one `generateMipmap(TEXTURE_2D_ARRAY)` per target. Mutable storage was verified via `texImage3D`.
 5. `setRenderTarget(null)`. Yield to the main thread every 4 layers (`await new Promise(requestAnimationFrame)`) and report progress.
 6. **Signage and decals.**
@@ -4134,17 +4134,17 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 | CARPET_OFFICE | 0.6 m carpet tiles, pile direction rotated per tile (roughness and normal sheen), blue-grey speckle. |
 | DRYWALL | Roller stipple, eggshell. |
 | VINYL_VCT | 0.3 m tiles. Calendered vinyl chips in three populations (dark 30 %, light 25 %, accents and charcoal 12 %) stretched 3:1 along u (the per-tile rotation lays them quarter-turn) over faint marbling; 30–40 % of the face is > 6 % off the tile median. Tile tone ±3 %, 4 % other-lot tiles at ±6 %. Continuous 0.3 mm butt joints with a 1 mm dirt fillet, dirt-filled corner chips on 5 % of the tiles. Wax 0.2–0.28 (joints 0.6); glaze lobe 0.22, rough component 0.7. |
-| CONCRETE_FLOOR | Aggregate speckle, a few exposed pebbles, trowel swirls with burnished burns (darker, −0.14 roughness), Worley F2−F1 crack network, curing mottle, chalky laitance, a soft unimodal sheen field (roughness 0.44–0.6). (Oil spots are decals.) Isotropic enough to also serve stair risers (frame 4.8 × 3.0 m). |
-| CONCRETE_WALL | Frame 2.4 × 1.5 m: formwork seams every 1.2 m horizontally and 1.5 m vertically, tie holes. heightScale 20 mm with the face at 0.9 (POM top 0.92) and 18 mm deep conical tie holes. |
-| CONCRETE_CEIL | Board-form grain. |
+| CONCRETE_FLOOR | Square 2.4 m generator frame (2.34 mm texels, hex cell 1.2 m; the tower risers, v = y / 3.0, stretch it 1.25×). A hard-troweled slab is flat, so it reads through tone and sheen: soft clouds, lacy hydration mottle, flush aggregate shadows, dark specks and light / dark flecks, 4–8 mm pinholes with dirty cores (2 mm deep: pits, never beads), serpentine power-trowel passes (0.45–0.58 m discs, the last pass wins: fish-scale rims and partial blade arcs) with burnished zones (darker, glossier) and chalky laitance, dragged-load scratches, ±1 mm waviness; roughness 0.35–0.8, darker = glossier. ormh.a (`mask`) holds the trowel swirl outside the laitance. Detail D12 SLAB. Joints, spalls, cracks, pours, traffic lanes and finish classes are world-space (WP9, lane B). (Oil spots are decals.) |
+| CONCRETE_WALL | Frame 2.4 × 1.5 m, plywood-formed (`formFace`, shared with CONCRETE_CEIL): 1.2 × 1.5 m sheets with their own tone (±10 %), bleed toward the lift bottom, lippage and stud pillowing; clustered log-normal bug holes (0.6–7 mm, denser toward the top of each lift, taller than wide, 30 % half-skinned); fins intact or broken into scars, grout-leak lines, one-sided sand streaks; the rotary-cut plywood grain with boat patches; satin skin (0.72) with matte torn patches and satin form-oil blotches. heightScale 20 mm with the face at 0.9 (POM top 0.92; lippage only sets sheets back) and 18 mm deep snap-tie cones: open with a rusty rod end (60 %), grout plugs (25 %), plastic cones (15 %). The shader adds a per-sheet world tone and sheen. |
+| CONCRETE_CEIL | Square 2.4 m frame: the plywood-formed face at 1.2 × 2.4 m sheets, few bug holes, rebar ghosting on some sheets, tie-wire rust dots. |
 | CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses, third bond), from the `cmuBlock()` body it shares with CMU_RAW. Each block's face is inset 4–6 mm per side with a ±0.6 mm wavy arris (joints 8–12 mm), rounded over 2 mm; the mortar is tooled concave (7 mm jointer, 4.5 mm deep) with burrs on ~12 % of the joint length. Faces: lippage ±0.45 mm (each world block is tilted ±0.37° by the shader), 6–10 mm aggregate pits up to 1.6 mm deep and low crowns, an open-texture field per block that drives the ≥ 3 mm voids (painted: shallow, rim-rounded, albedo × 0.96), chips on 10 % of the edges and 25 % of the corners (≤ 8 mm, 65 % painted over), roller lap bands, joints × 0.86 (pooled paint and dust). Roughness: face 0.52, voids 0.72, joints 0.58, fresh chips 0.85. `ormh.a` is the detail mask (1 on faces, 0.3 in joints). Everything under 3 mm is D14 CMU_FACE's. heightScale 6 mm with the face at 0.79, POM top 0.95 (the relief fills the height range, so the march spends no steps above the faces). |
 | CMU_RAW | The same blocks unpainted: light natural grey, salt-and-pepper, sRGB (166, 164, 159), ±4 % per block (the shader adds ±6 %) and 20 % batch casts, voids × 0.5, fresh chips × 0.8, a lighter sandy mortar (the block colour × 1.16 / 1.15 / 1.12, sRGB (177, 175, 167)) with a faint efflorescence haze, roughness 0.9 / 0.92, detail D15 CMU_RAW. PIPEWORKS walls, service corridors and loading bays. |
 | POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.76. Hand-set joints: each face is inset 1.2–1.9 mm per side with a ±0.25 mm wobble. A fat-edge glaze ridge on the cushion; batch shade ±4 %, 5 % cream and 3 % blue-white tiles; crazing (a 0.8 mm net plus hairlines) on 12 %; conchoidal chips showing the buff bisque on 6 %; a hazy glaze rim at the joint. Sanded grout sRGB (176, 178, 170), concave, roughness 0.8. `ormh.a` is the grout coverage: the shader colours the grout along its lines in world space. |
 | POOL_MOSAIC | 2.5 cm glass mosaic on 0.3 m sheets, with wider joints at the sheet edges. Chips with 2 mm rounded corners (grout diamonds), a 1 mm edge round, a 0.15 mm dome, lippage ±0.25 mm and tilt ±0.5°. Five related hues (±6°, value 0.83–1.19) plus 5 % accents. The colour sits inside the glass: cloud (±8 %), streaks, bubbles in 5 % of the chips, a darker, more saturated edge band. Chip roughness 0.05–0.08, grout 0.8; `ormh.a` is the grout coverage. |
 | METAL_PAINTED, METAL_RUST, METAL_GRATE | Chipped paint; rust mask (fbm threshold plus downward streaks); grate with dark holes (albedo plus height). |
 | WOOD, PLASTIC, FABRIC_PARTITION, PLENUM, RUBBER | Standard recipes. |
-| FLOOR_PAINT | Yellow or white worn paint, alpha from threshold noise. |
-| TERRAZZO | Chips in a grey matrix, polished (roughness 0.13–0.2, pits and brass strips rougher). |
+| FLOOR_PAINT | A 0.25 mm film (yellow or white by tint). On stripes u runs across and v along (mesh/decals.ts): wheel-track bands with tyre dirt, wear that takes the slab's high points first (a pore stipple, not blobs), roughness 0.4 fresh to 0.6 worn. Edge flakes, joints, the slab's detail and wetness come from the shader. |
+| TERRAZZO | 0.6 m precast tiles (repeat 1.2, tileSize 0.6): polygonal crushed-marble chips (Voronoi cells shrunk by a per-chip gap at 15, 6 and 3 mm lattices, ~70–75 % coverage) in a restrained palette (white, light grey, buff, charcoal, rare muted accents) with per-chip value, a tone gradient and veins; chips 0.07–0.1, matrix 0.16–0.22 (and ~20 µm lower), pits 0.4, 1.5 mm grout 0.7; per-tile tilt ±0.15° and lippage, so reflections step at the joints. Detail D13 POLISH. |
 | METAL_DECK | Corrugated roof deck: trapezoidal ribs every 0.15 m in the height/normal map, galvanised grey, faint rust at rib bottoms. Frame 1.2 m. |
 | METAL_PAINTED | Frame 1.2 × 1.0 m. |
 
@@ -4214,6 +4214,52 @@ reports each layer's aux range (`stats().auxRange`).
 #### Lane A: textiles
 
 #### Lane B: concrete, terrazzo, floor paint
+Under overhead lamps a slab shows almost no diffuse relief (for Lambert, Σ n·Lᵢ = n·ΣLᵢ), so real concrete reads
+through tone structure, dirty pores, joints with depth and specular lanes. Lane B moves everything bigger than the
+2.4 m texture into world space (`chunks/family/concrete.ts`) and keeps the textures physical (the WP8 rows above):
+- **Slab system** (up-facing CONCRETE_FLOOR, the grime branch): pours of 4 × 2 panels and 4.8 m panels with their
+  own tone (±6 % / ±3 %), hue and sheen (× 0.85–1.15); saw-cut kerfs 4.4 mm wide with 1.5 mm arrises, filled 4 mm
+  down with dark polyurea (70 %) or open, where the view ray meets the far wall at depth
+  z = (W/2 − x·sgn t)/|t| (darkened by 0.5·e^(−z/6 mm)) or the bottom; spalls on 30 % of the 0.24 m joint segments
+  (5–25 mm long, 3–10 mm wide, a paler fracture sloping 25–40° into the kerf); a dirt band beside the cut. The kerf
+  is supersampled with 4 taps across the pixel footprint and fades to its exact box-filtered mean darkening once it
+  spans less than ~2/3 of a pixel (its integral stays the kerf's width at any footprint, so far joints neither fade
+  nor darken with distance; the taps, spalls and view ray are skipped there). 60 % of the panels carry one shrinkage
+  crack between two panel edges (so every crack ends at a joint), warped at 0.4 m and 5 cm, 0.2–1.2 mm wide along its
+  length, 35 % branched, with a dirty halo; sub-pixel cracks keep a 0.35-pixel rendered width with scaled contrast;
+  the dirt band beside the cut and the crack halo widen with the pixel footprint at a constant integral, and below a
+  pixel the kerf's normal and roughness fade to fixed means (so which taps hit the kerf cannot make a far joint
+  flicker). Early-outs keep the cost to a few hashes away from joints and cracks. Low quality and the planar mirror
+  pass draw the far field only (the box-filtered kerf and the dirt band).
+- **Traffic lanes:** WP7 mask A covers the hard floors (bake/mask.ts; TEX2.md). On concrete the lanes are burnished:
+  roughness × 0.62, albedo × 0.88 and a little warmer, the detail stronger (exposed fines, LEAN micro-scratches),
+  dust at their edges; every door wears an entry fan into its rooms and rack aisles get two wheel tracks, which fade
+  out over 2 m past the end of a rack row. On terrazzo the lanes lose the polish (roughness × 3.5, the rough lobe
+  covers 40 % more) and the edges by the walls keep yellowed wax.
+- **Finish class** per room (the FLOOR_AUX region key): sealed 35 % (roughness × 0.6, the trowel swirl stronger
+  through ormh.a), plain 45 %, dusty 20 % (roughness × 1.3, albedo × 1.06, detail × 0.7). Risers drop the swirl.
+- **Walls and soffits:** oil only drips onto floors; on walls and soffits the same grime fields are matte soot. Each
+  form sheet (1.2 × 1.5 m on walls, 1.2 × 2.4 m on soffits, world grid) gets its own tone and sheen, which breaks the
+  texture's 2.4 m ABAB. Rising damp has a ragged fringe (the tide field perturbed at 0.3 m) and efflorescence blooms
+  at the drying front (crystals from the detail speckle, matte, raised).
+- **Floor-paint stripes** (decal variant): the wet, film and puddle path of the slab (they carry NO_GRIME), edge
+  flakes from the stripe-local uv and width (only the chips' coverage lowers the alpha: the quad's own edges are the
+  geometry's, so far stripes keep their strength), v along the line world-anchored (the pieces of a stripe clipped at
+  chunk edges continue one wear pattern), the slab's joints through the stripe (the kerf stays unpainted) and the
+  slab's D12 speckle under the film (the decal variant samples the detail array: 16 units at high / ultra).
+- **v2 shading parameters** (the 0b block): σ CONCRETE_WALL / CONCRETE_CEIL 0.35, CONCRETE_FLOOR 0.25 × (1 − lane)
+  (the matPost hook: a burnished lane is polished paste, no longer porous), TERRAZZO 0; dirt on the slab, walls,
+  soffits and terrazzo.
+- **Costs** (`__backrooms.gpuBench(20)`, whole frame, medians of interleaved rounds against tex-integ with 0b merged,
+  on gallery 04, 07, 15 and 25). High 1600 × 900 (3 rounds, ±0.02 ms): +0.23 / +0.24 / +0.10 / +0.19 ms. Of that,
+  the 0b features the rows switch on are presence costs every surface program pays once any layer sets them (so
+  shared with the other lanes that set them): σ ~+0.02–0.07 ms and the relief dirt ~+0.06–0.09 ms. The lane's own
+  cost is +0.10 / +0.14 / +0.06 / +0.10 ms: the doubled CONCRETE_FLOOR texel density +0.04–0.07 (the hex blend's nine
+  fetches over twice the texels; a hex blend that skips vertices of negligible weight would win back ~0.09 ms), the
+  slab system ≤ 0.05, the soffit's 2.4 m repeat ≤ 0.04, the stripes and the other hooks ≤ 0.02 each. Ultra 2560 × 1440
+  renders 1.4x supersampled (7.2 Mpx, 5x high's pixels) and pays about 5x: +0.8 to +1.7 ms, the lane's own +0.65 to
+  +1.2 ms (2 rounds, ±0.5 ms). The SSR share of the burnished lanes is ≤ 0.016 ms, so no roughness clamp was needed.
+  textures.genMs +15 ms (200 → 215), detail genMs ±0. Both frame budgets (+0.03 / +0.07 ms) are exceeded.
 
 #### Lane C: masonry and tile
 Block walls read as concrete block at every distance, and the tile layers as fired, set and waxed tile.
