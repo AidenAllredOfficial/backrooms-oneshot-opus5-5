@@ -106,8 +106,10 @@ v2 conventions").
 ## Lane C: masonry and tile
 
 ### 2026-09-28 — C: CMU and tile recipes, D6 / D14 / D15, world block variation, CMU_RAW placement — APPLIED
-- **Status:** APPLIED by lane C on its branch. No `src/core/*` change: `LAYER_DEFS` rows 8, 12, 13, 14 and 28 keep
-  their numbers (the recipes are trimmed to them).
+- **Status:** APPLIED by lane C on its branch. `LAYER_DEFS` rows 8, 12, 13 and 14 keep their numbers (the recipes are
+  trimmed to them). Row 28 CMU_RAW `albedoMean` [0.22, 0.215, 0.2] -> [0.28, 0.274, 0.255] (sRGB 144, 143, 138): D15
+  folds the grain cavity into its albedo multiplier (mean 0.887), so the rendered face is ~0.25, the middle of natural
+  grey block; at 0.22 the PIPEWORKS walls rendered at ~0.195 and read near-black under the zone's bulbs.
 - **Channels:** CMU_PAINTED and CMU_RAW use aux `'detailMask'` (ormh.a 1 on faces, 0.3 in the joints; the masonry hooks
   also read it as the face / joint share). POOL_TILE and POOL_MOSAIC use aux `'mask'` = grout coverage (the tile hooks
   colour the grout along its lines in world space and the tile grime reads it instead of the roughness heuristic).
@@ -124,13 +126,16 @@ v2 conventions").
   wall (not used); EON on CMU (sigma 0.2) +0.65 ms on a full-screen CMU wall (g08), kept. The integrator budgets EON
   once for the union of layers that set sigma.
 - **World output:** PIPEWORKS' palette (`wallMat`, `trimMat`) and the transition service corridors / loading bays
-  (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. `world/content/decals.ts` places wall CRACK
+  (`transitions.ts`) use CMU_RAW; tests/world/golden.json regenerated. Raw block reflects about half of what the
+  painted block did, so PIPEWORKS frames are darker: frame mean luminance -35 % (gallery 09) and -46 % (gallery 10, a
+  wall close-up) at high. That is the material, not a bug; if the zone should keep its old brightness, its bulbs
+  (lighting, not lane C) are the knob. `world/content/decals.ts` places wall CRACK
   decals only on CONCRETE_WALL and CMU_PAINTED, so PIPEWORKS walls lost theirs (not lane C's file; adding CMU_RAW to
   that filter restores them).
 - **Hooks (chunks/family/masonry.ts):** main-scope names `brMsOn`, `brMsDet` (postSample; read by postDetail and
-  grime); `brMsKey()` and `BR_M_CMU_PAINTED` / `BR_M_CMU_RAW` in pars. postDetail applies `brAux` as the detail strength
-  on CMU while `DETAIL_MASK_SHIM = 1`: **set it to 0 when 0b's detail block applies the 'detailMask' channel itself**,
-  or the joints get the mask twice. The rough hook adds D14 / D15's E[s^2] (0.12 / 0.18) to alpha^2 under
+  grime); `brMsKey()` and `BR_M_CMU_PAINTED` / `BR_M_CMU_RAW` in pars. postDetail scales the detail by the block's
+  texture class only (0b's detail block applies the 'detailMask' channel; the pre-0b shim is gone). The rough hook adds
+  D14 / D15's E[s^2] (0.12 / 0.18) to alpha^2 under
   `#ifndef BR_DETAIL_MAPS`, then caps painted CMU at `CMU_PAINTED_MAX_ROUGH` = SSR.ELIG_ROUGH - 0.03 (imported from
   `post/ssr/ssrGlsl.ts`): blocks around the G-buffer eligibility cut switched paths per block with distance.
 - **Found for the SSR / probe owners:** the probe's roughness fade (ROUGH0 0.5 to ROUGH1 0.65) sits inside painted

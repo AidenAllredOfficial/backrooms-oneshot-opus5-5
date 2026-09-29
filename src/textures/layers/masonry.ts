@@ -203,7 +203,7 @@ export const MASONRY_RECIPES: RecipeTable = {
     phys: phys(0.3, { pomTop: 0.95, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.2 }),
   },
   [Mat.CMU_RAW]: {
-    glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.96, 0.965, 0.98], aux: 'detailMask',
+    glsl: cmuBlock(false), normalStrength: 1.0, heightScale: CMU_HS, trim: [0.984, 0.99, 1.0], aux: 'detailMask',
     phys: phys(0.6, { pomTop: 0.95, tok: 0.8, det: Det.CMU_RAW, detS: 1, sigma: 0.3 }),
   },
 };
