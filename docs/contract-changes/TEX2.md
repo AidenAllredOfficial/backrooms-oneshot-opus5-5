@@ -277,9 +277,10 @@ v2 conventions").
   `brPropEdgeD`, `brPropEdgeHS`, `brWpExpose` and `BR_M_*` for the prop layers; postWet divides the stored tint out.
   The rough hook replaces the override path for 'wear' layers (their ormh.g already holds the override-scaled topcoat
   and the exposed layers' roughness).
-- **World output:** light-well window band, copier platen and control panel RUBBER -> PLASTIC; children's playroom
-  floor RUBBER -> VINYL_VCT; pool lane rope RUBBER -> PLASTIC. tests/world/golden.json is unchanged (the golden chunks
-  hash the layout, which these landmarks do not reach at seed 1).
+- **World output:** children's playroom floor RUBBER -> VINYL_VCT; pool lane rope RUBBER -> PLASTIC. The light-well
+  window band and the copier platen and control panel stay RUBBER (shell solids are untinted, so PLASTIC made them light
+  grey). tests/world/golden.json is unchanged (the golden chunks hash the layout, which these landmarks do not reach
+  at seed 1).
 - **Costs:** DESIGN.md lane E (high +0.05 to +0.16 ms whole frame across sessions, RenderPass +0.06 ms; ultra within
   its +-0.5 ms noise; generation +18 to +41 ms). Over the lane budget; the EON sigma on METAL_RUST, RUBBER and kraft is
   the shared presence cost lane B and C already pay.

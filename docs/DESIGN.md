@@ -4465,8 +4465,9 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   +-18 um, fibre floc, specks) replaces the haircell, the liner is matte (0.85, EON sigma 0.5), crushed and darker within
   ~6 mm of the edges, with a dark lid seam; rack loads carry packing tape.
 - **RUBBER** (0.04): antiozonant bloom on up-facing and old parts, ozone crazing, rubbed glossier patches, roughness
-  0.62 +- 0.08, EON sigma 0.3. The light-well panes and the copier platen and panel are PLASTIC now, the children's
-  playroom floor VINYL_VCT, the pool lane rope polypropylene.
+  0.62 +- 0.08, EON sigma 0.3. The children's playroom floor is VINYL_VCT now and the pool lane rope polypropylene.
+  The light-well panes and the copier platen and panel stay RUBBER: shell solids take their layer's mean albedo with no
+  tint or roughness override, and as PLASTIC they turned into light grey panels.
 - **METAL_GRATE** is hot-dip galvanised 19-W-4 bar grating (5 mm bars at 30 x 100 mm, zinc 0.36 at roughness 0.6,
   white-rust flecks, dirt at the junctions, holes at 0.02; table 0.095); the server rack fronts that 0b's visibility
   term had lightened are dark behind the bars again. METAL_DECK gets white-rust blooms and drip lines in the rib bottoms.
