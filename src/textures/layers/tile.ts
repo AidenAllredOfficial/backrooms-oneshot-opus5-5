@@ -19,6 +19,27 @@ void gen(vec2 uv, inout Surf s) {
   vec4 r2 = tileRand4(t.id, 16); // seed picked for one other-lot and one chipped tile in the 16 of the frame
   float lot = step(r2.x, 0.04);
   vec3 base = TABLE_ALBEDO * (1.0 + mix(0.06, 0.12, lot) * (r.x - 0.5)) * mix(vec3(1.0), vec3(1.025, 1.0, 0.96), lot * r2.y);
+  // continuous butt joints (0.3 mm per side, filtered to a hairline) and the dirt / wax fillet beside them
+  float e = t.edge;
+  float joint = fillM(e - 0.0003);
+  float fillet = 1.0 - smoothstep(0.0003, 0.0013, e);
+  // one chipped corner on 5 % of the tiles, dirt-filled
+  vec2 cs = sign(r2.zw - 0.5);
+  float cr = mix(0.003, 0.007, fract(r2.y * 7.1));
+  float chip = step(fract(r2.x * 13.3), 0.05) * fillM(length(t.local - cs * 0.15) - cr);
+  // (each output pass evaluates only its own part: the chip populations are albedo only)
+  if (uOut == OUT_HEIGHT) {
+    s.height = 0.6 - 0.15 * fillet - 0.25 * joint - 0.4 * chip;
+    return;
+  }
+  if (uOut == OUT_ORMH) {
+    float wax = fbmV(uv, PM(4.0), 3, 16);
+    float scuff = smoothstep(0.55, 0.85, gnoise(warp(uv, PM(3.0), 2, 18, 0.03), PMxy(14.0, 90.0), 17))
+                * smoothstep(0.35, 0.7, fbmV(uv, PM(3.0), 2, 19));
+    s.rough = mix(mix(0.2, 0.28, wax) + 0.06 * scuff, 0.6, max(joint, 0.5 * fillet));
+    s.rough = mix(s.rough, 0.7, chip);
+    return;
+  }
   vec2 tuv = uv + floor(r.zw * 64.0) / 16.0; // per-tile pattern offset (keeps periodicity: multiples of 1/16)
   vec2 wv = warp(tuv, PM(8.0), 2, 11, 0.008);
   // chip populations: anisotropic Worley cells (11 x 3.7 mm, 8.3 x 2.8 mm, 4 x 2 mm), ragged outlines
@@ -35,23 +56,9 @@ void gen(vec2 uv, inout Surf s) {
   col = mix(col, base * vec3(0.8, 0.82, 0.86), dk);
   col = mix(col, base * vec3(1.13, 1.12, 1.09), lt * (1.0 - dk));
   col = mix(col, ah < 0.08 ? base * vec3(1.3, 1.27, 1.2) : base * 0.55, ac);
-  // continuous butt joints (0.3 mm per side, filtered to a hairline) and the dirt / wax fillet beside them
-  float e = t.edge;
-  float joint = fillM(e - 0.0003);
-  float fillet = 1.0 - smoothstep(0.0003, 0.0013, e);
-  // one chipped corner on 5 % of the tiles, dirt-filled
-  vec2 cs = sign(r2.zw - 0.5);
-  float cr = mix(0.003, 0.007, fract(r2.y * 7.1));
-  float chip = step(fract(r2.x * 13.3), 0.05) * fillM(length(t.local - cs * 0.15) - cr);
   col *= (1.0 - 0.45 * joint) * (1.0 - 0.07 * fillet);
   col = mix(col, col * 0.7, chip);
   s.albedo = col;
-  s.height = 0.6 - 0.15 * fillet - 0.25 * joint - 0.4 * chip + 0.01 * marb;
-  float wax = fbmV(uv, PM(4.0), 3, 16);
-  float scuff = smoothstep(0.55, 0.85, gnoise(warp(uv, PM(3.0), 2, 18, 0.03), PMxy(14.0, 90.0), 17))
-              * smoothstep(0.35, 0.7, fbmV(uv, PM(3.0), 2, 19));
-  s.rough = mix(mix(0.2, 0.28, wax) + 0.06 * scuff, 0.6, max(joint, 0.5 * fillet));
-  s.rough = mix(s.rough, 0.7, chip);
 }
 `;
 
@@ -79,22 +86,6 @@ void gen(vec2 uv, inout Surf s) {
   float e = -sdRoundBox(lp, fh, 0.0015); // metres into the tile face (< 0 in the grout)
   float w = 0.7 * aaM();
   float face = smoothstep(-w, w, e);
-  float cush = sat(e / 0.004);
-  float cushH = 1.0 - (1.0 - cush) * (1.0 - cush);
-  float ridge = gauss((e - 0.003) / 0.0012) * 0.00005 / 0.008; // fat edge: the glaze pools on the cushion
-  vec2 slope = (r.xy - 0.5) * 2.0 * 0.009;
-  float wav = fbm(uv, PM(22.0), 2, 4) * 0.00012;
-  float pillow = 0.012 * (1.0 - dot(t.local, t.local) / (2.0 * 0.075 * 0.075));
-  // glaze colour: batch shade, cream and blue-white odd tiles
-  vec3 glaze = TABLE_ALBEDO * (1.0 + 0.08 * (r.z - 0.5)) * (1.0 + 0.008 * fbm(uv, PM(40.0), 2, 5));
-  glaze *= r2.x < 0.05 ? vec3(0.985, 0.972, 0.935) : r2.x < 0.08 ? vec3(0.975, 0.985, 1.0) : vec3(1.0);
-  // crazing: a crack net (22 mm cells) and finer hairlines in the glaze of 12 % of the tiles, dirt in the cracks
-  vec2 co = floor(r.zw * 16.0) / 8.0;
-  vec3 cz = worleyEdge(uv + co, PM(45.0), 0.9, 30);
-  vec3 cz2 = worleyEdge(uv + co.yx, PM(110.0), 0.9, 31);
-  float crz = step(r.w, 0.12) * max(lineM(cz.x * FRAME.x / float(PM(45.0).x), 0.0004), 0.6 * lineM(cz2.x * FRAME.x / float(PM(110.0).x), 0.00025))
-            * smoothstep(0.002, 0.004, e);
-  glaze *= 1.0 - 0.1 * crz;
   // chip: one conchoidal scoop at an edge or a corner of 6 % of the tiles, 4-10 mm, 0.6-1.2 mm deep, bisque inside
   float chipD = 0.0;
   if (r2.y < 0.06) {
@@ -108,6 +99,36 @@ void gen(vec2 uv, inout Surf s) {
     float dd = length(lp - ctr) / R;
     chipD = dd < 1.0 ? mix(0.0006, 0.0012, fract(r2.z * 3.7)) * (1.0 - pow(dd, 1.5)) : 0.0;
   }
+  s.aux = 1.0 - face;
+  if (uOut == OUT_HEIGHT) {
+    // relief: cushion, fat-edge ridge, pillow, tilt, long-wave waviness, the chip; concave grout (0.14 at the tile edges,
+    // 0.10 in the middle of the joint, the cell border)
+    float cush = sat(e / 0.004);
+    float cushH = 1.0 - (1.0 - cush) * (1.0 - cush);
+    float ridge = gauss((e - 0.003) / 0.0012) * 0.00005 / 0.008; // the glaze pools on the cushion
+    vec2 slope = (r.xy - 0.5) * 2.0 * 0.009;
+    float wav = fbm(uv, PM(22.0), 2, 4) * 0.00012;
+    float pillow = 0.012 * (1.0 - dot(t.local, t.local) / (2.0 * 0.075 * 0.075));
+    float hTile = 0.3 + 0.25 * cushH + ridge + pillow + (dot(t.local, slope) + wav - chipD) / 0.008;
+    float a = sat(-e / max(t.edge - e, 1e-5));
+    float hGrout = 0.14 - 0.04 * a * a + 0.02 * vnoise(uv, PM(300.0), 8);
+    s.height = mix(hGrout, hTile, face);
+    return;
+  }
+  // glaze colour: batch shade, cream and blue-white odd tiles
+  vec3 glaze = TABLE_ALBEDO * (1.0 + 0.08 * (r.z - 0.5)) * (1.0 + 0.008 * fbm(uv, PM(40.0), 2, 5));
+  glaze *= r2.x < 0.05 ? vec3(0.985, 0.972, 0.935) : r2.x < 0.08 ? vec3(0.975, 0.985, 1.0) : vec3(1.0);
+  // crazing: a crack net (22 mm cells) and finer hairlines in the glaze of 12 % of the tiles, dirt in the cracks
+  // (evaluated on crazed tiles only: two exact Voronoi borders are the recipe's costliest part)
+  float crz = 0.0;
+  if (r.w < 0.12) {
+    vec2 co = floor(r.zw * 16.0) / 8.0;
+    vec3 cz = worleyEdge(uv + co, PM(45.0), 0.9, 30);
+    vec3 cz2 = worleyEdge(uv + co.yx, PM(110.0), 0.9, 31);
+    crz = max(lineM(cz.x * FRAME.x / float(PM(45.0).x), 0.0004), 0.6 * lineM(cz2.x * FRAME.x / float(PM(110.0).x), 0.00025))
+        * smoothstep(0.002, 0.004, e);
+  }
+  glaze *= 1.0 - 0.1 * crz;
   float chipM = smoothstep(0.0, 0.00015, chipD) * face;
   vec3 bisque = srgb8(196.0, 182.0, 160.0) * (0.85 + 0.15 * sat(chipD / 0.0008)); // buff body, dirtier toward the scoop
   // grout haze: the glaze rim next to the joint is filmed over (cement residue, cleaning chemicals)
@@ -118,12 +139,6 @@ void gen(vec2 uv, inout Surf s) {
   s.albedo = mix(groutCol, glaze, face);
   float rG = 0.06 + 0.06 * fbmV(uv, PM(10.0), 2, 7) + 0.06 * crz + 0.1 * haze;
   s.rough = mix(0.8, mix(rG, 0.85, chipM), face);
-  float hTile = 0.3 + 0.25 * cushH + ridge + pillow + (dot(t.local, slope) + wav - chipD) / 0.008;
-  // grout: concave, 0.14 at the tile edges and 0.10 in the middle of the joint (the cell border)
-  float a = sat(-e / max(t.edge - e, 1e-5));
-  float hGrout = 0.14 - 0.04 * a * a + 0.02 * vnoise(uv, PM(300.0), 8);
-  s.height = mix(hGrout, hTile, face);
-  s.aux = 1.0 - face;
 }
 `;
 
@@ -160,6 +175,20 @@ void gen(vec2 uv, inout Surf s) {
   float dome = 1.0 - dot(lp, lp) / (2.0 * 0.0115 * 0.0115);
   vec2 tilt = (r.yz - 0.5) * 2.0 * 0.009;
   float hChip = 0.3 + 0.35 * edgeH + (0.00015 * dome + (r2.z - 0.5) * 0.0005 + dot(lp, tilt)) / 0.004;
+  vec2 po = floor(r.zw * 32.0) / 8.0;
+  float bub = 0.0;
+  if (r2.w < 0.05) {
+    Cell bu = worley(uv + po, PM(250.0), 0.9, 11);
+    bub = step(hashf(bu.id, 12), 0.35) * (1.0 - smoothstep(0.08, 0.14, bu.f1)) * step(0.002, -d);
+  }
+  s.rough = mix(0.8, 0.05 + 0.03 * r.w, chip);
+  s.aux = 1.0 - chip;
+  if (uOut == OUT_HEIGHT) {
+    float a = sat(d / max(t.edge + d, 1e-5)); // 0 at the chip edge, 1 at the cell border (the joint's middle)
+    s.height = mix(0.14 - 0.04 * a * a, hChip - 0.03 * bub, chip);
+    return;
+  }
+  if (uOut != OUT_ALBEDO) return;
   // palette: five related hues and values, 5 % accents (a pale and a deep chip)
   vec3 T = TABLE_ALBEDO;
   float p = r.x;
@@ -172,21 +201,14 @@ void gen(vec2 uv, inout Surf s) {
            : hueRot(T, 0.3) * 0.84;
   col *= 1.0 + 0.06 * (r.w - 0.5);
   // inside the glass: cloud, streaks (per chip along u or v), the darker saturated edge band, bubbles
-  vec2 po = floor(r.zw * 32.0) / 8.0;
   col *= 1.0 + 0.3 * fbm(uv + po, PM(150.0), 3, 4);
   float stk = r2.w < 0.5 ? gnoise(uv + po, PMxy(60.0, 240.0), 9) : gnoise(uv + po, PMxy(240.0, 60.0), 10);
   col *= 1.0 + 0.08 * stk;
   float eb = 1.0 - smoothstep(0.0, 0.0015, -d);
   col = saturation(col, 1.0 + 0.1 * eb) * (1.0 - 0.1 * eb);
-  Cell bu = worley(uv + po, PM(250.0), 0.9, 11);
-  float bub = step(r2.w, 0.05) * step(hashf(bu.id, 12), 0.35) * (1.0 - smoothstep(0.08, 0.14, bu.f1)) * step(0.002, -d);
   col *= 1.0 + 0.15 * bub;
   vec3 groutCol = srgb8(168.0, 172.0, 168.0) * (0.94 + 0.12 * vnoise(uv, PM(400.0), 13));
   s.albedo = mix(groutCol, col, chip);
-  float a = sat(d / max(t.edge + d, 1e-5)); // 0 at the chip edge, 1 at the cell border (the joint's middle)
-  s.height = mix(0.14 - 0.04 * a * a, hChip - 0.03 * bub, chip);
-  s.rough = mix(0.8, 0.05 + 0.03 * r.w, chip);
-  s.aux = 1.0 - chip;
 }
 `;
 

@@ -51,11 +51,11 @@ vec2 cmuId(float x, float c, out float bx) {
   float blk = floor(bx / 0.4);
   return vec2(mod(blk, 6.0), mod(c, 5.0));
 }
-// a block's face inset on one side (m): 4-6 mm, plus the wavy arris (+-0.6 mm) along that side
+// a block's face inset on one side (m): 4-6 mm, plus the wavy arris (+-0.6 mm at 25 mm) along that side
 float cmuInset(vec2 id, int side, vec2 uv) {
   float w = 0.004 + 0.002 * hashf(id, 40 + side);
   int sd = int(hashf(id, 50 + side) * 997.0);
-  return w + 0.0005 * gnoise(uv, PM(40.0), sd) + 0.00025 * gnoise(uv, PM(120.0), sd + 1);
+  return w + 0.0006 * gnoise(uv, PM(40.0), sd);
 }
 // tooled concave joint: depth below the arris plane (height units) at d metres off the joint centre, half-width hw
 float cmuGroove(float d, float hw) {
@@ -76,48 +76,9 @@ void gen(vec2 uv, inout Surf s) {
   vec2 fc = vec2(iL - iR, iB - iT) * 0.5;
   vec2 fh = vec2(0.2, 0.1) - vec2(iL + iR, iB + iT) * 0.5;
   float e = -sdRoundBox(lp - fc, fh, 0.0015); // metres into the face (< 0 in the joint)
-  // ---- the neighbours across the nearest head and bed joints, and the joints' centres and half-widths
-  float sx = lp.x >= 0.0 ? 1.0 : -1.0, sy = lp.y >= 0.0 ? 1.0 : -1.0;
-  float nbx;
-  vec2 hId = cmuId(m.x + sx * 0.4, c, nbx);
-  float hIn = cmuInset(hId, sx > 0.0 ? 0 : 1, uv);
-  float aInX = sx > 0.0 ? iR : iL;
-  float dH = lp.x - sx * (0.2 + 0.5 * (hIn - aInX)), hwH = 0.5 * (aInX + hIn);
-  vec2 vId = cmuId(m.x, c + sy, nbx);
-  float vIn = cmuInset(vId, sy > 0.0 ? 2 : 3, uv);
-  float aInY = sy > 0.0 ? iT : iB;
-  float dB = lp.y - sy * (0.1 + 0.5 * (vIn - aInY)), hwB = 0.5 * (aInY + vIn);
-  // ---- mortar: head and bed grooves cut into each other (the deeper wins), squeezed burrs near the arrises
-  float rest = 0.79;
-  float groove = max(cmuGroove(dB, hwB), cmuGroove(dH, hwH));
-  // burrs: 25 mm cells along each joint, 12 % hold a 4-8 mm long lump 1.2 mm proud in the outer 2 mm of one side
-  // (cell ids: bed joints by course boundary and x cell, head joints by block boundary and y cell; frame-periodic)
-  bool bBed = abs(dB) < abs(dH);
-  float bAlong = bBed ? m.x : m.y - c * 0.2;
-  float bAcross = bBed ? dB : dH;
-  float bHw = bBed ? hwB : hwH;
-  float bCell = floor(bAlong / 0.025);
-  vec2 bId = bBed ? vec2(mod(bCell, 96.0), mod(c + max(sy, 0.0), 5.0))
-                  : vec2(mod(floor(bx / 0.4) + max(sx, 0.0), 6.0) + 6.0 * bCell, 5.0 + mod(c, 5.0));
-  vec4 bh = hash4f(bId, 60);
-  float bPos = (bAlong / 0.025 - bCell - 0.5 - 0.6 * (bh.x - 0.5)) * 0.025;
-  float bLen = mix(0.002, 0.004, bh.y);
-  float bSide = bh.z < 0.5 ? -1.0 : 1.0;
-  float burr = step(bh.w, 0.12) * (1.0 - smoothstep(0.4, 1.0, abs(bPos) / bLen))
-             * (1.0 - smoothstep(0.0, 0.0012, abs(bAcross - bSide * (bHw - 0.001)) - 0.0003));
-  float mortar = rest - groove + 1.2 * MM * burr + 0.15 * MM * fbm(uv, PM(90.0), 2, 61);
-  // ---- face: lippage, warp, the arris round-over
+  // per-block open texture (voids, aggregate): denser toward one bed face
   float bSgn = r2.w < 0.5 ? -1.0 : 1.0; // which bed face is the open (top as cast) one
   float open = sat(0.35 + 0.5 * fbm(uv, PM(8.0), 2, 62) + 0.4 * (r.z - 0.5) + 0.3 * bSgn * lp.y / 0.1);
-  // (the per-block tilt is the shader's, in world space: a baked tilt would raise the POM top for nothing)
-  float face = rest + (r.w - 0.5) * 0.9 * MM + 0.3 * MM * fbm(uv, PM(16.0), 2, 63);
-  // coarse aggregate the texels resolve (6-10 mm pits and lower crowns, rougher in open blocks): the whole face texture
-  // where no detail map is bound, the 'open' modulation under it where one is. Mostly pits, so the relief top (the
-  // POM start plane) stays close to the typical face
-  Cell ag = worley(uv, PM(120.0), 0.9, 69);
-  float agH = (0.4 + 0.6 * hashf(ag.id, 70)) * (1.0 - smoothstep(0.1, 0.55, ag.f1));
-  face += MM * ((0.4 + 0.3 * open) * agH * (hashf(ag.id, 72) < 0.6 ? -1.0 : 0.45) + 0.25 * fbm(uv, PM(150.0), 2, 71));
-  face -= 0.5 * MM * (1.0 - smoothstep(0.0, 0.002, e)) * (1.0 - smoothstep(0.0, 0.002, e));
   // ---- chips: one candidate per edge (10 %) and per corner (25 %), <= 8 mm, conchoidal
   float chip = 0.0, chipFresh = 0.0;
   for (int k = 0; k < 8; k++) {
@@ -151,13 +112,57 @@ void gen(vec2 uv, inout Surf s) {
   float vd = min(length(v.rel), 1.25 * length(v.rel + vo)) + 0.08 * vr * gnoise(uv, PM(300.0), 68);
   float voidM = step(vh.x, 0.06 + 0.22 * open) * (1.0 - smoothstep(0.75 * vr, vr, vd)) * smoothstep(0.003, 0.007, e);
   float voidDepth = mix(2.5, 4.0, fract(vh.y * 5.7)) * MM * ${painted ? '0.55' : '1.0'};
-  face -= voidDepth * voidM * ${painted ? 'smoothstep(0.0, 0.45, 1.0 - vd / vr)' : '1.0'};
-  face -= chip;
-  // ---- assemble
   float w = 0.7 * aaM();
   float fM = smoothstep(-w, w, e); // face coverage
-  s.height = mix(mortar, face, fM);
   s.aux = mix(0.3, 1.0, fM);
+  if (uOut == OUT_HEIGHT) {
+    // relief only (the albedo and ormh passes skip it: the generator runs the recipe once per output)
+    // the neighbours across the nearest head and bed joints, and the joints' centres and half-widths
+    float sx = lp.x >= 0.0 ? 1.0 : -1.0, sy = lp.y >= 0.0 ? 1.0 : -1.0;
+    float nbx;
+    vec2 hId = cmuId(m.x + sx * 0.4, c, nbx);
+    float hIn = cmuInset(hId, sx > 0.0 ? 0 : 1, uv);
+    float aInX = sx > 0.0 ? iR : iL;
+    float dH = lp.x - sx * (0.2 + 0.5 * (hIn - aInX)), hwH = 0.5 * (aInX + hIn);
+    vec2 vId = cmuId(m.x, c + sy, nbx);
+    float vIn = cmuInset(vId, sy > 0.0 ? 2 : 3, uv);
+    float aInY = sy > 0.0 ? iT : iB;
+    float dB = lp.y - sy * (0.1 + 0.5 * (vIn - aInY)), hwB = 0.5 * (aInY + vIn);
+    // ---- mortar: head and bed grooves cut into each other (the deeper wins), squeezed burrs near the arrises
+    float rest = 0.79;
+    float groove = max(cmuGroove(dB, hwB), cmuGroove(dH, hwH));
+    // burrs: 25 mm cells along each joint, 12 % hold a 4-8 mm long lump 1.2 mm proud in the outer 2 mm of one side
+    // (cell ids: bed joints by course boundary and x cell, head joints by block boundary and y cell; periodic)
+    bool bBed = abs(dB) < abs(dH);
+    float bAlong = bBed ? m.x : m.y - c * 0.2;
+    float bAcross = bBed ? dB : dH;
+    float bHw = bBed ? hwB : hwH;
+    float bCell = floor(bAlong / 0.025);
+    vec2 bId = bBed ? vec2(mod(bCell, 96.0), mod(c + max(sy, 0.0), 5.0))
+                    : vec2(mod(floor(bx / 0.4) + max(sx, 0.0), 6.0) + 6.0 * bCell, 5.0 + mod(c, 5.0));
+    vec4 bh = hash4f(bId, 60);
+    float bPos = (bAlong / 0.025 - bCell - 0.5 - 0.6 * (bh.x - 0.5)) * 0.025;
+    float bLen = mix(0.002, 0.004, bh.y);
+    float bSide = bh.z < 0.5 ? -1.0 : 1.0;
+    float burr = step(bh.w, 0.12) * (1.0 - smoothstep(0.4, 1.0, abs(bPos) / bLen))
+               * (1.0 - smoothstep(0.0, 0.0012, abs(bAcross - bSide * (bHw - 0.001)) - 0.0003));
+    float mortar = rest - groove + 1.2 * MM * burr + 0.15 * MM * fbm(uv, PM(90.0), 2, 61);
+    // face: lippage, warp, the arris round-over
+    // (the per-block tilt is the shader's, in world space: a baked tilt would raise the POM top for nothing)
+    float face = rest + (r.w - 0.5) * 0.9 * MM + 0.3 * MM * fbm(uv, PM(16.0), 2, 63);
+    // coarse aggregate the texels resolve (6-10 mm pits and lower crowns, rougher in open blocks): the whole face
+    // texture where no detail map is bound, the 'open' modulation under it where one is. Mostly pits, so the relief top
+    // (the POM start plane) stays close to the typical face
+    Cell ag = worley(uv, PM(120.0), 0.9, 69);
+    float agH = (0.4 + 0.6 * hashf(ag.id, 70)) * (1.0 - smoothstep(0.1, 0.55, ag.f1));
+    float agS = hashf(ag.id, 72) < 0.6 ? -1.0 : 0.45;
+    face += MM * ((0.4 + 0.3 * open) * agH * agS + 0.25 * fbm(uv, PM(150.0), 2, 71));
+    face -= 0.5 * MM * (1.0 - smoothstep(0.0, 0.002, e)) * (1.0 - smoothstep(0.0, 0.002, e));
+    face -= voidDepth * voidM * ${painted ? 'smoothstep(0.0, 0.45, 1.0 - vd / vr)' : '1.0'};
+    face -= chip;
+    s.height = mix(mortar, face, fM);
+    return;
+  }
 ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly edges)
   float bxw = m.x + 0.02 * fbm(uv, PMxy(2.0, 12.0), 2, 80);
   float band = floor(bxw / 0.24);
@@ -172,7 +177,9 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
   col = mix(col, mix(paint * 0.97, mix(blockGrey, paint * 1.05, edgeP * 0.5), chipFresh), chipM * fM);
   s.albedo = col;
   float rf = 0.52 + 0.08 * bv - 0.05 * lap + 0.2 * voidM;
-  s.rough = mix(0.58, mix(rf, mix(rf, 0.85, chipFresh), chipM), fM);` : `  // salt-and-pepper block grey (the detail map carries the grains), batch casts, sandy mortar, efflorescence haze
+  s.rough = mix(0.58, mix(rf, mix(rf, 0.85, chipFresh), chipM), fM);` : `  s.rough = mix(0.92, 0.9, fM);
+  if (uOut != OUT_ALBEDO) return;
+  // salt-and-pepper block grey (the detail map carries the grains), batch casts, sandy mortar, efflorescence haze
   vec3 batch = r2.y < 0.1 ? vec3(1.02, 1.0, 0.97) : r2.y < 0.2 ? vec3(0.98, 1.0, 0.99) : vec3(1.0);
   vec3 blk = TABLE_ALBEDO * (1.0 + 0.08 * (r2.x - 0.5)) * batch * (1.0 + 0.05 * fbm(uv, PM(30.0), 3, 83));
   blk *= 1.0 - 0.5 * voidM * fM;
@@ -181,8 +188,7 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
   float eff = smoothstep(0.3, 0.7, fbm(uv, PM(6.0), 3, 86)) * (1.0 - smoothstep(0.0, 0.015, e));
   vec3 col = mix(mort, blk, fM);
   col = mix(col, saturation(col, 0.6) * 1.15, 0.6 * eff);
-  s.albedo = col;
-  s.rough = mix(0.92, 0.9, fM);`}
+  s.albedo = col;`}
 }
 `;
 
