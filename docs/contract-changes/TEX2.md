@@ -83,7 +83,8 @@ v2 conventions").
   v2 may add a uniform. params.test covers the wiring points.
 - **Cost** (`__backrooms.gpuBench`, whole frame, 3 interleaved rounds against 0a):
   - At the defaults: +0.01 / −0.02 ms at high (1600x900, g05 / g08), and +0.05 to +0.14 ms at ultra (2560x1440,
-    within round-to-round noise).
+    within round-to-round noise). With the bake-fitted R_d estimate (review): +0.011 / +0.017 / −0.004 ms at high
+    (g05 / g08 / g15, 2 rounds; 0a itself moved 0.027 ms between rounds).
   - All-zero const arrays let the compiler drop a feature's code. Once any layer sets a parameter, every surface
     program carries that code, and the register pressure costs the whole shader even with no such pixel on
     screen. Presence-only cost at ultra, with the parameter set on the unplaced METAL_BARE: EON +0.16 to +0.28 ms,
