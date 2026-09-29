@@ -7,12 +7,12 @@ import { phys, type RecipeTable } from './types.ts';
 // CONCRETE_FLOOR and CONCRETE_CEIL are authored over square 2.4 m generator frames (RecipeBody.frame): their horizontal
 // faces are what counts; the vertical faces that borrow them (tower risers, beam sides: v = y / 3.0) stretch them 1.25x.
 
-/** Hard-troweled interior slab over a square 2.4 m generator frame (2.34 mm texels; the tower risers, v = y / 3.0,
- * stretch it 1.25x). A real slab is flat (micro-relief +-0.1-0.3 mm, waviness +-1 mm over metres) and reads through
- * tone and sheen, so nothing here is domed:
+/** Hard-troweled interior slab (2.34 mm texels). A real slab is flat (micro-relief +-0.1-0.3 mm, waviness +-1 mm over
+ * metres) and reads through tone and sheen, so nothing here is domed:
  * - tone: soft 0.8 m clouds, lacy 5-30 cm hydration mottle (darker in the burnished zones), faint flush aggregate
- *   shadows, dark mineral / dirt specks and 4-8 mm pinholes with dark dirty cores and a paler lip (2 mm deep: the
- *   cavity AO and the normal map see pits, not beads);
+ *   shadows, dark mineral / dirt specks, light and dark 3-6 mm flecks of the coarse fines, a sandy 1-4 cm paste tone
+ *   and 4-8 mm pinholes with dark dirty cores and a paler lip (2 mm deep: the cavity AO and the normal map see pits,
+ *   not beads);
  * - power-trowel passes: rotor discs (R 0.45-0.58 m) on a jittered 0.6 x 0.8 m lattice; where discs overlap the last
  *   pass (highest hashed key) wins and only its rim ridge and inner blade arcs (25-60 mm pitch) show: fish scales.
  *   About 40 % of the slab is burnished (darker, glossier), the rest keeps a chalky laitance (paler, rougher): darker
