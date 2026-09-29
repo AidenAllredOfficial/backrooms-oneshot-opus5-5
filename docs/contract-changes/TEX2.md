@@ -40,6 +40,40 @@ v2 conventions").
 - **Consumers affected:** every v2 lane (they code against these); `src/world/testScenes.ts` (the `materials` scene keeps
   its 28 layers); `tests/materials/factory.test.ts` (layer table length from MAT_COUNT).
 
+### 2026-09-28 — 0b: EON diffuse, linear cavity visibility, dirt / wear, detail controls, grime helpers — APPLIED
+- **Status:** APPLIED by lane 0 (0b). Every per-layer parameter stays at its neutral default. The one change at the
+  defaults is the visibility term (joints, grout, pits). With `DIRVIS.LINEAR = false` the 28 gallery framings (high) and
+  4 medium framings are bit-identical to 0a.
+- **`RE_Direct`** is `brRE_Direct` in every surface program (`chunks/brdf.ts`, defined in the clipping_planes_pars slot):
+  three's `RE_Direct_Physical` taken from ShaderChunk at build time, plus EON minus Lambert where the global
+  `float brDiffSigma` > 0. It covers the baked lobe and the flashlight. `brDiffSigma` is set in material post from
+  `BR_L_SIGMA` and the detail / Toksvig variance; family matPost hooks may rescale it. EON keeps the directional
+  albedo at ρ (ρ_ms = ρ).
+- **`FRAG_DIRVIS_GLSL`** (`chunks/pom.ts`): `vis = 1 − (1 − V)·g(w, N_g·L)`, linear in the cavity. It replaces the
+  smoothstep cone and skips layers with `BR_L_PILE.x > 0`. POM self-shadow is unchanged, and lighting.ts is not edited.
+- **Grime block:** relief-aware dirt / wear after the profile chain, inside `if ( brGrime != 0 )`, compiled in by
+  `#define BR_RELIEF_GRIME` (1 once a row sets `dirt[3]` or `wear[3]` > 0). Dirt raises ormh.g by 0.12 × dirt. Wear
+  reads `brRel`, the relief above the layer's mean plane, which is not local convexity.
+- **Detail block:**
+  - `BR_L_DETREP` scales brDetUv, brDetDx and brDetDy before the postSample hooks, and the ripple compensates for it.
+  - 'detailMask' layers multiply `brDetL.y` by brAux after postSample.
+  - `BR_L_DETTINT` is applied after the grey multiplier.
+  - `BR_L_DETSO` scales the inline indirectSpecular after FRAG_AO_REFL, before the postLight hooks.
+- **New helpers** (`chunks/grimeLib.ts`, in the common block before the family pars):
+  `float brHeightBlend(m, rel, K, E)` and `void brStainFront(s, fine, L0, out inside, out tide)`. brStainFront calls
+  fwidth, so use it only in quad-uniform control flow.
+- **Harness:** `stats().auxRange` gives, per layer, the aux kind and the min / p2 / p98 / max of ormh.a's 32² cell means
+  (checks=range).
+- **Tests:** `tests/materials/brdf.test.ts` covers the EON twin and white furnace, the override text, the visibility
+  against a ray-marched reference, and the grime helpers. samplerBudget pins the high / ultra units (16 / 16 / 15 / 13)
+  and adds a fragment uniform-vector census: at most +10 vec4 over a5c03e1, packed ≤ 224. High and ultra pack to
+  218-219, so 5 vec4 of headroom is left, and nothing in v2 may add a uniform. params.test covers the wiring points.
+- **Consumers affected:**
+  - Lanes A-E set `sigma`, `pile`, `dirt`, `wear`, `reliefM`, `detRep`, `detTint` and `detSO` in their rows.
+  - Lane A: a pile layer (`pile.x > 0`) loses the cavity visibility of the baked light, so its textile hooks must
+    carry it.
+  - The SSR agent: lighting.ts is untouched, but the RE_Direct macro it calls now resolves to `brRE_Direct`.
+
 ## Lane A: textiles
 
 ## Lane B: concrete, terrazzo, floor paint
