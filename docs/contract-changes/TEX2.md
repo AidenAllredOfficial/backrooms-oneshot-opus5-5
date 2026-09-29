@@ -53,10 +53,14 @@ v2 conventions").
 - **Detail maps:** D0, D1, D7 rewritten in place (ids, sizes and slots unchanged); their regular periods are 2, 4
   or 8 texels (other periods beat in the box-filtered mips).
 - **Shading (`chunks/family/textile.ts`), for the core owners:**
-  - postLight scales `reflectedLight.directDiffuse` and `indirectDiffuse` on layers with `pile.x > 0` and divides the
-    generic texture-cavity multiply (`brCav`) back out of the ambient;
+  - matPost scales `material.diffuseContribution` on layers with `pile.x > 0` (before `brDiffRoom` captures it, so the
+    punctual lights, the baked light and the ambient all see it) and postLight divides the generic texture-cavity
+    multiply (`brCav`) back out of `reflectedLight.indirectDiffuse`; the hooks read the pile rows through generated
+    layer compares, not the dynamically indexed `BR_L_PILE` (same data);
   - the Level 0 pile trap moved from `gl_FragColor` (preFog, now empty) to the diffuse (T 0.63 × chroma^0.3);
-  - postDetail sets `brAm = 1` on pile layers (their detail multiplier is applied as visibility in postLight);
+  - postDetail sets `brAm = 1` on pile layers (their detail multiplier is applied as visibility in matPost);
+  - a lane that wants to scale a punctual light's diffuse apart from the baked light's (the planned torch retro term)
+    needs a core hook between lights_fragment_begin and the baked light; none exists, so lane A left it out;
   - the carpet grime branch overrides `wet` / `brWet` with a narrow wicking front (the porosity model's absorption
     therefore follows it on carpets) and writes `brOrmh.r` in worn lanes;
   - `brPileLean` (surface.ts) is no longer written; the sheen roughness no longer follows the lean (TUNE
@@ -65,6 +69,8 @@ v2 conventions").
 - **Stale WP9 text (lane 0's paragraphs):** the WP9 sheen sentence ("colour = amount · sqrt(albedo) …, roughness
   from the pile lean") and the carpet grime bullet describe the old model; DESIGN.md WP8 "Lane A: textiles" has the
   current one.
+- **Budget:** the opaque pass measured +0.11-0.14 ms at high (noise ±0.1-0.2 ms), over the lane's +0.03 ms; ultra
+  not measured; generation times unchanged within noise; 0 MB (DESIGN.md WP8 lane A, Cost).
 - **Consumers affected:** lane 0b (EON: textile `sigma` to be set by lane A after the merge; FRAG_DIRVIS must skip
   `pile.x > 0` as planned, Dv replaces it); the integrator (gallery calibration: gallery 11 carpet / wall ratio is
   within 1 % of a5c03e1 at high and medium).

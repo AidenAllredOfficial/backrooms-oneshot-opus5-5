@@ -4236,6 +4236,12 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
   (94 tuft rows at 5.4 texels drew horizontal streaks 1-2 m away): the tuft rows, the loop pitch and the weave use 2, 4
   or 8 texels.
 - Debug view 25 `textile`: r = Dv, g = the nap diffuse factor / 2, b = 0.5 + 0.5 s.
+- **Cost** (RTX 5070 Ti laptop, shared with other agents' captures; tex-integ against lane A, `gpuProfile(4)` after
+  `waitForIdle`, median of 4 at high 1600 × 900): opaque pass +0.14 ms (gallery 00), +0.11 (gallery 11), +0.11 (Level 0
+  straight down), with ±0.1-0.2 ms between runs; SMAA +0.03-0.04 ms (the pile detail gives it more edges). The same
+  tree with the textile hooks reverted measured ±0.01 ms (the 1.2 m frame and the new textures cost nothing); the
+  textile shading is applied before the lighting so nothing of it is live across it. textures.genMs 210 against 213,
+  detail genMs 22.5 against 22.5 (noise ±20 ms), compile +2 ms, 0 MB.
 - Not done: the EON σ of the textiles (L0 0.75, office 0.5, fabric 0.4) waits for lane 0b; the torch retro term (it
   needs the punctual share of the direct diffuse, which the hooks do not see); lint / hair SDFs and buckling ripples.
 

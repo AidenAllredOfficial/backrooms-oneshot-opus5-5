@@ -102,7 +102,7 @@ void gen(vec2 uv, inout Surf s) {
 
 /** D7 basket weave (cubicle partition fabric; the base layer cannot hold it): a 2 x 2 basket of 1.17 mm threads (256
  * per 0.3 m), each thread a cosine section with a flattened crown that bulges mid-float. Every thread's float in a
- * block is spun from the darker or the lighter of two yarns (x 0.8 / x 1.15: crossing heather, not a clean graphic
+ * block is spun from the darker or the lighter of two yarns (x 0.87 / x 1.12: crossing heather, not a clean graphic
  * grid); 3 % of the weft carries slubs, 5-12 mm segments 40 % wider and higher. Fuzz of 1 mm cells, the interstices in
  * shadow (AO 0.6). */
 const WEAVE = /* glsl */ `
@@ -127,7 +127,8 @@ void gen(vec2 uv, inout Surf s) {
   float h = max(hWarp, hWeft);
   // crossing heather: the visible thread's yarn tone for this float
   vec2 key = hWarp >= hWeft ? vec2(ci.x, blk.y) : vec2(blk.x, ci.y + N);
-  float tone = hashf(key, 31) < 0.5 ? 0.8 : 1.15;
+  // two-tone yarn: each float leans to its thread's tone, speckled by the fibre blend (binary floats read as a mosaic)
+  float tone = mix(0.87, 1.12, sat(0.6 * step(0.5, hashf(key, 31)) + 0.4 * vnoise(uv, PM(500.0), 33)));
   float fuzz = vnoise(uv, PM(1000.0), 3);
   s.height = h + 0.05 * (fuzz - 0.5);
   s.ao = mix(0.6, 1.0, smoothstep(0.1, 0.5, h));
