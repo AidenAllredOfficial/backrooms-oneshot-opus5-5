@@ -123,6 +123,9 @@ v2 conventions").
     needs a core hook between lights_fragment_begin and the baked light; none exists, so lane A left it out;
   - the carpet grime branch overrides `wet` / `brWet` with a narrow wicking front (the porosity model's absorption
     therefore follows it on carpets) and writes `brOrmh.r` in worn lanes;
+  - postWet raises `brOrmh.r` to 1 on pile layers under standing water and a saturated film (`max( brPuddle, brFilm )`),
+    so `brCav`, the specular occlusion and the SSR weight see the water surface, not the tuft gaps; Dv reads the V
+    saved before it (`brTxVis`);
   - `brPileLean` (surface.ts) is no longer written; the sheen roughness no longer follows the lean (TUNE
     `CARPET_PILE_SHADE`, `CARPET_PILE_CELL`, `SHEEN_LEAN_ROUGH`, `CARPET_WEAR_LIGHTEN` are now unused);
   - debug view 25 `textile`: r = Dv, g = nap diffuse factor / 2, b = 0.5 + 0.5 s.

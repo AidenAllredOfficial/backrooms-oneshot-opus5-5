@@ -104,6 +104,23 @@ describe('textile GLSL', () => {
     expect(TEXTILE_HOOKS.postLight).toContain('reflectedLight.indirectDiffuse /= max( brCav, 1e-3 )');
   });
 
+  it('standing water and a film over the pile are not occluded by its gaps; Dv keeps the pile visibility', () => {
+    // the generic specular occlusion and the SSR weight read the texture cavity ormh.r (= V on pile layers, mean 0.61):
+    // a puddle over the carpet would reflect ~half and speckled with the tufts
+    expect(TEXTILE_HOOKS.postWet).toContain('float brTxVis = brOrmh.r;');
+    expect(TEXTILE_HOOKS.postWet).toContain('brOrmh.r = mix( brOrmh.r, 1.0, max( brPuddle, brFilm ) )');
+    expect(TEXTILE_HOOKS.matPost).toContain('pow( clamp( brTxVis, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs )');
+    expect(TEXTILE_HOOKS.matPost).not.toMatch(/pow\( clamp\( brOrmh\.r/);
+  });
+
+  it('thin world features widen to the pixel footprint (no crawl far away)', () => {
+    // spill edges and rims, the reversal-patch edge and the wicking front's 2.5 cm raggedness
+    expect(TEXTILE_HOOKS.pars).toContain('float rw = max( rimW, fp );');
+    expect(TEXTILE_HOOKS.grime).toContain('BR_TX_BLOT_RIM, brTxWob, brTxFp, brTxRim )');
+    expect(TEXTILE_HOOKS.grime).toContain('max( BR_TX_REV_W, fwidth( brTxRn ) )');
+    expect(TEXTILE_HOOKS.grime).toContain('1.0 - smoothstep( 0.25, 0.75, brTxFp / BR_TX_FRONT_CELL )');
+  });
+
   it('every world lattice period is a whole number of cells per NOISE_WRAP', () => {
     for (const name of ['NAP_P', 'OUTLINE_P', 'OUTLINE_P2', 'FRONT_P', 'OFFICE_P']) {
       const m = new RegExp(`#define BR_TX_${name} (\\S+)\\n`).exec(pars);

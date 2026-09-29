@@ -161,10 +161,13 @@ export const TEXTILE_HOOKS: FamilyHooks = {
 // the pile layers (BR_L_PILE rows) as compares: a dynamically indexed const array costs a local copy per use
 #define BR_TX_PILE_ON( l ) ( ${PILE_ON} )
 vec2 brTxPile( int l ) { return ${PILE_OF}; }
-// hashed discs on the 2.4 m feature lattice (pile-reversal patches, spills): 1 inside a disc of radius rr.x..rr.y whose
-// outline wobbles with wob (0..1, a smooth world noise), fading over an edge ee.x..ee.y metres wide; rim = a band rimW
-// wide just inside the outline (a stain's dried edge). Fixed widths in metres (no derivatives in the loop)
-float brTxDiscs( vec2 s2, uint salt, float prob, vec2 rr, vec2 ee, float rimW, float wob, out float rim ) {
+// hashed discs on the 2.4 m feature lattice (spills): 1 inside a disc of radius rr.x..rr.y whose outline wobbles with
+// wob (0..1, a smooth world noise), fading over an edge ee.x..ee.y metres wide; rim = a band rimW wide just inside the
+// outline (a stain's dried edge). Both widen to the pixel footprint fp (metres) and the rim keeps its coverage there, so
+// a thin rim far away fades instead of breaking up into crawling dots (no derivatives in the loop: fp is the caller's)
+float brTxDiscs( vec2 s2, uint salt, float prob, vec2 rr, vec2 ee, float rimW, float wob, float fp, out float rim ) {
+	float rw = max( rimW, fp );
+	float rk = rimW / rw;
 	ivec2 qi = ivec2( floor( s2 / BR_FEATURE_CELL ) );
 	float acc = 0.0;
 	rim = 0.0;
@@ -175,11 +178,11 @@ float brTxDiscs( vec2 s2, uint salt, float prob, vec2 rr, vec2 ee, float rimW, f
 			if ( brU01( h ) > prob ) continue;
 			vec2 ctr = ( vec2( c ) + vec2( brU01( brPcg( h ) ), brU01( brPcg( h + 1u ) ) ) ) * BR_FEATURE_CELL;
 			float r = mix( rr.x, rr.y, brU01( brPcg( h + 2u ) ) );
-			float e = mix( ee.x, ee.y, brU01( brPcg( h + 3u ) ) );
+			float e = max( mix( ee.x, ee.y, brU01( brPcg( h + 3u ) ) ), fp );
 			vec2 dv = ( s2 - ctr ) * vec2( 1.0, mix( 0.75, 1.25, brU01( brPcg( h + 4u ) ) ) );
 			float d = length( dv ) - r * ( 0.7 + 0.6 * wob ); // metres outside the (wobbly) outline
 			acc = max( acc, 1.0 - smoothstep( - e, 0.0, d ) );
-			rim = max( rim, 1.0 - smoothstep( 0.0, 0.5 * rimW, abs( d + 0.5 * rimW ) ) );
+			rim = max( rim, rk * ( 1.0 - smoothstep( 0.0, 0.5 * rw, abs( d + 0.5 * rw ) ) ) );
 		}
 	}
 	return acc;
@@ -236,10 +239,14 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 		// cast shadow); under water everything stays soaked. The front's width, its raggedness and the tide ring are
 		// metres: field units scaled by the field's slope per metre, so a shallow field crossing the threshold draws a
 		// contour, not a wide speckled band
-		float brTxG = length( vec2( dFdx( wetRaw ), dFdy( wetRaw ) ) ) / max( max( length( dFdx( brS2 ) ), length( dFdy( brS2 ) ) ), 1e-5 );
+		float brTxFp = max( max( length( dFdx( brS2 ) ), length( dFdy( brS2 ) ) ), 1e-5 ); // the pixel footprint, metres
+		float brTxG = length( vec2( dFdx( wetRaw ), dFdy( wetRaw ) ) ) / brTxFp;
 		float brTxFwW = fwidth( wetRaw );
-		float brTxWr = wetRaw; // the front raggedness, only near the front (no derivatives inside)
-		if ( abs( wetRaw - BR_TX_DAMP_AT ) < 0.15 ) brTxWr += ( brVNoise( brS2 / BR_TX_FRONT_CELL, ivec2( BR_TX_FRONT_P ), 367u ) * 2.0 - 1.0 ) * brTxG * BR_TX_FRONT_AMP;
+		// the front raggedness (no derivatives inside): only within 8 cm of the front, which holds the front and the tide
+		// ring at any field slope (a window in field units cut the ring's raggedness off where the field is steep), and
+		// faded out before its 2.5 cm cells get smaller than a pixel (they would alias into a crawling band)
+		float brTxWr = wetRaw;
+		if ( abs( wetRaw - BR_TX_DAMP_AT ) < 0.08 * brTxG ) brTxWr += ( brVNoise( brS2 / BR_TX_FRONT_CELL, ivec2( BR_TX_FRONT_P ), 367u ) * 2.0 - 1.0 ) * brTxG * BR_TX_FRONT_AMP * ( 1.0 - smoothstep( 0.25, 0.75, brTxFp / BR_TX_FRONT_CELL ) );
 		if ( brSubDepth <= 0.0 ) {
 			float brTxW = max( brTxG * BR_TX_FRONT_W, brTxFwW );
 			wet = smoothstep( BR_TX_DAMP_AT - brTxW, BR_TX_DAMP_AT + brTxW, brTxWr ) * mix( BR_TX_DAMP_EDGE, 1.0, smoothstep( BR_TX_DAMP_AT, BR_TX_DAMP_IN, wetRaw ) );
@@ -250,7 +257,7 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 			// two octaves of outline wobble (0.3 m and 0.1 m): stains and reversal patches are blotchy, not ellipses
 			float brTxWob = 0.65 * brVNoise( brS2 / 0.3, ivec2( BR_TX_OUTLINE_P ), 359u ) + 0.35 * brVNoise( brS2 / 0.1, ivec2( BR_TX_OUTLINE_P2 ), 361u );
 			float brTxRim;
-			float b = brTxDiscs( brS2, 301u, BR_TX_BLOT_P, BR_TX_BLOT_R, vec2( 0.008, 0.02 ), BR_TX_BLOT_RIM, brTxWob, brTxRim );
+			float b = brTxDiscs( brS2, 301u, BR_TX_BLOT_P, BR_TX_BLOT_R, vec2( 0.008, 0.02 ), BR_TX_BLOT_RIM, brTxWob, brTxFp, brTxRim );
 			float bs = clamp( 0.35 + brMask.g + brMask.a, 0.0, 1.0 );
 			brA *= mix( vec3( 1.0 ), BR_TX_BLOT_COL, b * bs * ( 0.55 + 0.45 * g2.g ) );
 			brA *= mix( vec3( 1.0 ), BR_TX_BLOT_RIM_COL, brTxRim * bs );
@@ -270,9 +277,10 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 				float brTxNs = brU01( brPcg( hl ^ 0x2545f491u ) ) < BR_TX_NAP_REV ? - 1.0 : 1.0;
 				float brTxWb = ( brVNoise( brS2 / BR_TX_NAP_CELL, ivec2( BR_TX_NAP_P ), 351u ) * 2.0 - 1.0 ) * BR_TX_NAP_WOBBLE;
 				// pile-reversal patches: where a blotchy field (a 0.96 m value noise plus the outline wobble) crosses its
-				// threshold: ~15 % of the floor in 0.3-1.2 m blotches with a crisp edge
+				// threshold: ~15 % of the floor in 0.3-1.2 m blotches with a crisp edge, no sharper than the footprint
 				float brTxRn = 0.75 * brVNoise( brS2 / BR_TX_REV_CELL, ivec2( BR_TX_REV_PER ), 353u ) + 0.25 * brTxWob;
-				float brTxRev = smoothstep( BR_TX_REV_T - BR_TX_REV_W, BR_TX_REV_T + BR_TX_REV_W, brTxRn );
+				float brTxRw = max( BR_TX_REV_W, fwidth( brTxRn ) );
+				float brTxRev = smoothstep( BR_TX_REV_T - brTxRw, BR_TX_REV_T + brTxRw, brTxRn );
 				brTxNapW = vec2( sin( brTxWb ), cos( brTxWb ) ) * ( brTxNs * ( 1.0 - 2.0 * brTxRev ) * ( BR_TX_NAP_AMP + BR_TX_NAP_WEAR * wear ) );
 			}
 			if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 ) {
@@ -318,7 +326,13 @@ if ( brL == BR_TX_M_OFFICE && brLA.x > 0.0 && brHoriz ) {
 		brA *= mix( vec3( 1.0 ), mix( 0.88, 1.0, g1.r ) * vec3( 1.02, 0.98, 0.9 ), wet );
 	}
 `,
-  postWet: '',
+  postWet: /* glsl */ `
+// pile layers: standing water and a saturated film lie over the pile, so the specular above them (the environment's
+// specular occlusion and the SSR hit weight, both from the texture cavity ormh.r) sees the water surface rather than the
+// gaps between the tufts; the pile's own visibility brTxVis stays for Dv (matPost)
+float brTxVis = brOrmh.r;
+if ( BR_TX_PILE_ON( brL ) ) brOrmh.r = mix( brOrmh.r, 1.0, max( brPuddle, brFilm ) );
+`,
   rough: '',
   normal: '',
   matPost: /* glsl */ `
@@ -352,7 +366,7 @@ if ( BR_TX_PILE_ON( brL ) ) {
 		brTxNd = clamp( 1.0 - BR_TX_NAP_DIFF * brTxS * brTxVl, 0.6, 1.4 );
 	}
 	// wet pile clumps into bundles: its valleys open and darken
-	float brTxVv = pow( clamp( brOrmh.r, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs );
+	float brTxVv = pow( clamp( brTxVis, 0.0, 1.0 ), 1.0 + BR_TX_WET_V * brAbs );
 	float brTxDv = max( 1.0 - brTxKp.x * ( 1.0 - brTxVv ) * pow( brTxMu, brTxKp.y ), 0.0 );
 	vec3 brTxK = vec3( brTxDv * brTxNd * brTxAm );
 	if ( brL == BR_M_CARPET_L0 ) {

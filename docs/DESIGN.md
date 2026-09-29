@@ -4223,7 +4223,10 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
   near the 5 % limit). Dv stands for the generic texture-cavity multiply, which postLight divides back out of the
   ambient, and for 0b's cavity visibility on the baked direct light, which skips pile layers; wet pile uses
   V^(1 + 0.6 × absorbed water) (its valleys open). The Level 0 fibre trap T = 0.69 × chroma^0.3 now multiplies only
-  the diffuse (it was 0.55 on the whole radiance, sheen and specular included).
+  the diffuse (it was 0.55 on the whole radiance, sheen and specular included). Under standing water and a saturated
+  film, postWet raises ormh.r to 1 on pile layers (Dv keeps the saved V): the generic specular occlusion and the SSR
+  weight read ormh.r, and with V there a puddle's reflection was occluded by the tuft gaps (specular occlusion ~0.47
+  instead of ~0.93 at the mean V, grazing; +1-2 % on the damp patch of the LOBBY pitch −12° framing).
 - **EON** (lane 0b): σ 0.75 (L0), 0.5 (office), 0.4 (fabric). It darkens rough pile seen at grazing under overhead
   light (forward scattering), which the trap absorbs: the gallery 11 carpet / wall luminance ratio is −4 % at high and
   +3 % at medium against a5c03e1. Under the torch it flattens the spot a little (0.6 R over the centre 0.806 against
@@ -4248,7 +4251,9 @@ the carpets, the pile lean in ormh.b / ormh.a; `chunks/family/textile.ts` shades
   through the wet field's slope (a shallow field crossing the threshold draws a contour, not a speckled band), then
   deepens inward; a dried tide ring 2.5 cm outside it; worn lanes close the pile (V → mix(V, 0.9, 0.7 w)) and hold soil
   (× (0.90, 0.87, 0.82)) instead of lightening; spills of 5-30 cm (25 % of 2.4 m cells) with a sharp blotchy edge and
-  a darker 1.5 cm rim.
+  a darker 1.5 cm rim. Thin world features are filtered by the pixel footprint: the spill edge and rim widen to it (the
+  rim keeps its coverage), the reversal-patch edge is no sharper than fwidth of its field, and the front's 2.5 cm
+  raggedness fades out before its cells shrink below a pixel (unfiltered, they alias into dots that crawl in motion).
 - **Detail lattices:** a regular period that is not a power-of-two number of texels beats in the box-filtered mips
   (94 tuft rows at 5.4 texels drew horizontal streaks 1-2 m away): the tuft rows, the loop pitch and the weave use 2, 4
   or 8 texels.
