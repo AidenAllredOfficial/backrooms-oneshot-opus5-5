@@ -203,14 +203,14 @@ void gen(vec2 uv, inout Surf s) {
 export const TEXTILE_RECIPES: RecipeTable = {
   [Mat.CARPET_L0]: {
     glsl: CARPET_L0, normalStrength: 0.45, heightScale: 0.004, trim: [1.027, 1.031, 1.058], aux: 'lean',
-    phys: phys(1, { det: 0, detS: 1, sheen: 0.3, sheenR: 0.42, pile: [1.0, 0.8] }),
+    phys: phys(1, { det: 0, detS: 1, sheen: 0.3, sheenR: 0.42, pile: [1.0, 0.8], sigma: 0.75 }),
   },
   [Mat.CARPET_OFFICE]: {
     glsl: CARPET_OFFICE, normalStrength: 0.9, heightScale: 0.003, trim: [1.035, 1.032, 1.011], aux: 'lean',
-    phys: phys(1, { det: 1, detS: 0.8, sheen: 0.3, sheenR: 0.55, pile: [1.0, 1.2] }),
+    phys: phys(1, { det: 1, detS: 0.8, sheen: 0.3, sheenR: 0.55, pile: [1.0, 1.2], sigma: 0.5 }),
   },
   [Mat.FABRIC_PARTITION]: {
     glsl: FABRIC_PARTITION, normalStrength: 2.0, heightScale: 0.0008, trim: [1.021, 1.021, 1.021],
-    phys: phys(1, { det: 7, detS: 1, sheen: 0.45, sheenR: 0.65, pile: [0.6, 1.5] }),
+    phys: phys(1, { det: 7, detS: 1, sheen: 0.45, sheenR: 0.65, pile: [0.6, 1.5], sigma: 0.4 }),
   },
 };

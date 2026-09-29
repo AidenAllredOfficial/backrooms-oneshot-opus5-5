@@ -36,7 +36,7 @@ export const TEXTILE = {
   /** Level 0 pile trap on the diffuse: T = TRAP x (albedo / max channel)^TRAP_SAT. With Dv (mean V 0.62, kv 0.8) it
    * gives 0.39 looking down, 0.53 at mu_v 0.35 (a typical 3-4 m view; the old constant trap was 0.55 on the whole
    * radiance, sheen and specular included) and 0.59 at mu_v 0.1. Set so the gallery 11 carpet / wall ratio stays. */
-  TRAP: 0.63,
+  TRAP: 0.69,
   TRAP_SAT: 0.3,
   /** Wet pile clumps into spiky bundles, its valleys open and darken: V_eff = V^(1 + WET_V x absorbed water). */
   WET_V: 0.6,
@@ -44,7 +44,7 @@ export const TEXTILE = {
   HIDE: 0.35,
   /** Nap shading, s = v_t . lean: diffuse x clamp(1 - NAP_DIFF s sin(theta_v), 0.6, 1.4), sheen x clamp(1 - NAP_SHEEN s,
    * 0.2, 1.8). */
-  NAP_DIFF: 0.28,
+  NAP_DIFF: 0.32,
   NAP_SHEEN: 0.6,
   /** World nap on the Level 0 floor: magnitude (lean units) plus this x wear, the share of broadloom widths laid
    * reversed, the wobble (degrees) and its noise cell (m, divides NOISE_WRAP). */
