@@ -33,7 +33,8 @@ import type { FamilyHooks } from './index.ts';
 /** Textile shading constants (GLSL #defines BR_TX_* in the pars hook). */
 export const TEXTILE = {
   /** Level 0 pile trap on the diffuse: T = TRAP x (albedo / max channel)^TRAP_SAT. With Dv (mean V 0.62, kv 0.8) it
-   * gives 0.41 looking down, 0.55 at mu_v 0.35 (a typical 3-4 m view: the old constant trap) and 0.62 at mu_v 0.1. */
+   * gives 0.39 looking down, 0.53 at mu_v 0.35 (a typical 3-4 m view; the old constant trap was 0.55 on the whole
+   * radiance, sheen and specular included) and 0.59 at mu_v 0.1. Set so the gallery 11 carpet / wall ratio stays. */
   TRAP: 0.63,
   TRAP_SAT: 0.3,
   /** Wet pile clumps into spiky bundles, its valleys open and darken: V_eff = V^(1 + WET_V x absorbed water). */
