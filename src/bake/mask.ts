@@ -496,12 +496,10 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
       if (hard) {
         // entry fans: traffic funnels through every opening and spreads into the room (3 m deep, widening), so a
         // single-door room (a restroom) still wears from its door
-        if (!cache.open) wearNear(g, cache, c);
-        const o = cache.open as Float64Array, room = g.room[c];
+        const fo = fanOpenings(g, cache, c), o = cache.open as Float64Array;
         let f = 0;
-        for (let k = 0; k < cache.nOpen; k++) {
-          const i = k * 5;
-          if (o[i + 3] !== room && o[i + 4] !== room) continue;
+        for (let q = 0; q < fo.length; q++) {
+          const i = fo[q] * 5;
           const dn = Math.abs(o[i + 2] === 0 ? x - o[i] : z - o[i + 1]) * CELL;
           const dt = Math.abs(o[i + 2] === 0 ? z - o[i + 1] : x - o[i]) * CELL;
           if (dn > 3 || dt > 2) continue;
@@ -516,6 +514,29 @@ export function maskAt(job: BakeJob, cache: MaskCache, x: number, y: number, z: 
   }
   maskOut.r = r > 1 ? 1 : r; maskOut.g = gr > 1 ? 1 : gr; maskOut.b = b > 1 ? 1 : b; maskOut.a = a > 1 ? 1 : a;
   void nz;
+}
+
+/** Per mask cache: per halo cell, the openings of the cell's room within an entry fan's reach (3 m), built lazily
+ * (a halo holds hundreds of openings: a loop over all of them per floor texel multiplied the mask time by ~10). */
+const fanNear = new WeakMap<MaskCache, (Int32Array | null)[]>();
+function fanOpenings(g: BakeJob['g'], mc: MaskCache, c: number): Int32Array {
+  let per = fanNear.get(mc);
+  if (!per) { per = new Array<Int32Array | null>(g.n * g.n).fill(null); fanNear.set(mc, per); }
+  let r = per[c];
+  if (r) return r;
+  if (!mc.open) buildOpenings(g, mc);
+  const o = mc.open as Float64Array, room = g.room[c];
+  const hi = c % g.n, hj = (c - hi) / g.n;
+  const reach = 3 / CELL + 0.75; // fan depth + half the cell diagonal (cells)
+  const list: number[] = [];
+  for (let k = 0; k < mc.nOpen; k++) {
+    const i = k * 5;
+    if (o[i + 3] !== room && o[i + 4] !== room) continue;
+    if (Math.abs(o[i] - (hi + 0.5)) < reach && Math.abs(o[i + 1] - (hj + 0.5)) < reach) list.push(k);
+  }
+  r = Int32Array.from(list);
+  per[c] = r;
+  return r;
 }
 
 /** Rack aisles (hard floors), near occluders at least AISLE_MIN_H tall (cars stay below): occluder boxes reaching
