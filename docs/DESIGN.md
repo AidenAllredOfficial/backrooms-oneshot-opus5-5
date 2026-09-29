@@ -4205,8 +4205,9 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 - the detail controls (`detRep`, 'detailMask', `detTint`, `detSO`);
 - the grime helpers `brHeightBlend` and `brStainFront`.
 
-The only change at the defaults is the visibility term, which darkens joints, grout and pits. With `DIRVIS.LINEAR`
-set to false, the gallery (28 framings at high, 4 at medium) is bit-identical to 0a. The materials harness also
+The only change at the defaults is the visibility term. It moves joints, grout, pits and perforations: darker under
+wide or grazing light, lighter where the old cone had blacked them out. With `DIRVIS.LINEAR` set to false, the gallery
+(28 framings at high, 4 at medium) is bit-identical to 0a. The materials harness also
 reports each layer's aux range (`stats().auxRange`).
 
 #### Lane A: textiles
@@ -4532,8 +4533,16 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
     25-85° at 0-75° from the normal, the rms error is 0.066 and the bias +0.003 (tests/materials/brdf.test.ts
     re-runs a reduced set). Being linear in V, it gives the same wall patch the same mean at 1.5 m and at 6 m
     (−1.32 % and −1.36 % against no term; the old cone: −0.77 % and −0.15 %). A collimated light along the normal
-    reaches the bottom of any open cavity; grazing and wide light lose most. Skipped where `BR_L_PILE.x > 0`: the
-    textile family carries pile visibility itself.
+    reaches the bottom of any open cavity; grazing and wide light lose most.
+    - A narrow light near the horizon (`cos β > 0.8`) takes at least `n²(1/c − 1)`, where
+      `n = (cos β − 0.8)/0.2`, because shallow relief there shadows like cot(elevation). On rough fields 70-84°
+      from the normal this cuts the rms error from 0.217 to 0.177; the old cone's was 0.37, with a bias of −0.23.
+    - Skipped where `BR_L_PILE.x > 0`: the textile family carries pile visibility itself.
+    - Known limit: the model sees only L and w. Corridor lamps at both ends, or light spread along the horizon, read
+      as a wide cap around a steep L. Under raking light, CMU pits then keep about 40 % of the direct light, where
+      the cone kept none (crisper, but 0.23 too dark on average against the reference). The remedy is a bake change:
+      store the direct light's cosine-weighted mean sin²θ (g = 2m) in dir-map layer 1's reserved byte, instead of
+      the R_d the plan deferred.
   - *Relief-aware dirt and wear* (`chunks/surface.ts`, inside the grime block after the profile chain; compiled in
     by `BR_RELIEF_GRIME` once any layer sets an amount). Dirt is
     `amt·conc^1.5·clamp(0.35 + 1.2·mask.G + 0.4·foot, 0, 1)`, where `conc = 1 − ormh.r` and `foot` falls from the

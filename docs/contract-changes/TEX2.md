@@ -42,15 +42,26 @@ v2 conventions").
 
 ### 2026-09-28 — 0b: EON diffuse, linear cavity visibility, dirt / wear, detail controls, grime helpers — APPLIED
 - **Status:** APPLIED by lane 0 (0b). Every per-layer parameter stays at its neutral default. The one change at the
-  defaults is the visibility term (joints, grout, pits). With `DIRVIS.LINEAR = false` the 28 gallery framings (high) and
+  defaults is the visibility term, which only moves joints, grout, pits and perforations. With `DIRVIS.LINEAR = false` the 28 gallery framings (high) and
   4 medium framings are bit-identical to 0a.
 - **`RE_Direct`** is `brRE_Direct` in every surface program (`chunks/brdf.ts`, defined in the clipping_planes_pars slot):
   three's `RE_Direct_Physical` taken from ShaderChunk at build time, plus EON minus Lambert where the global
   `float brDiffSigma` > 0. It covers the baked lobe and the flashlight. `brDiffSigma` is set in material post from
   `BR_L_SIGMA` and the detail / Toksvig variance; family matPost hooks may rescale it. EON keeps the directional
   albedo at ρ (ρ_ms = ρ).
-- **`FRAG_DIRVIS_GLSL`** (`chunks/pom.ts`): `vis = 1 − (1 − V)·g(w, N_g·L)`, linear in the cavity. It replaces the
-  smoothstep cone and skips layers with `BR_L_PILE.x > 0`. POM self-shadow is unchanged, and lighting.ts is not edited.
+- **`FRAG_DIRVIS_GLSL`** (`chunks/pom.ts`): `vis = 1 − (1 − V)·g(w, N_g·L)`, linear in the cavity. g is twice the
+  light cap's cosine-weighted mean sin²θ, with a cot(elevation) floor for narrow lights near the horizon. It replaces
+  the smoothstep cone and skips layers with `BR_L_PILE.x > 0`. POM self-shadow is unchanged, and lighting.ts is not
+  edited.
+  - Measured against a5c03e1, as the median joint / face luminance over 120-880 cavity components per framing:
+    CMU in WAREHOUSE g08 0.890 → 0.804, CMU at the CONCRETE spawn 0.941 → 0.925, the POOLROOMS near floor
+    0.928 → 0.913. The plan's ≤ 0.75 is not met: joints under overhead and near-overhead light keep most of it,
+    which is physical, so darker joints are for the lanes' dirt (BR_L_DIRT).
+  - Flat-face means move +0.1 to +0.7 %.
+  - The same wall patch at 1.5 m and 6 m changes by −1.32 % and −1.36 % (no mip bias; the old cone: −0.77 % and
+    −0.15 %).
+  - SERVER_ROOM (g20): the perforated rack doors get 28 % brighter, because the cone had blacked out their
+    mid-cavity texels under grazing light. Auto exposure then darkens the rest of that frame by 4 %.
 - **Grime block:** relief-aware dirt / wear after the profile chain, inside `if ( brGrime != 0 )`, compiled in by
   `#define BR_RELIEF_GRIME` (1 once a row sets `dirt[3]` or `wear[3]` > 0). Dirt raises ormh.g by 0.12 × dirt. Wear
   reads `brRel`, the relief above the layer's mean plane, which is not local convexity.
