@@ -150,13 +150,14 @@ void gen(vec2 uv, inout Surf s) {
     // face: lippage, warp, the arris round-over
     // (the per-block tilt is the shader's, in world space: a baked tilt would raise the POM top for nothing)
     float face = rest + (r.w - 0.5) * 0.9 * MM + 0.3 * MM * fbm(uv, PM(16.0), 2, 63);
-    // coarse aggregate the texels resolve (6-10 mm pits and lower crowns, rougher in open blocks): the whole face
-    // texture where no detail map is bound, the 'open' modulation under it where one is. Mostly pits, so the relief top
-    // (the POM start plane) stays close to the typical face
+    // coarse aggregate the texels resolve (6-10 mm pits up to 1.6 mm deep and low crowns, rougher in open blocks):
+    // the whole face texture where no detail map is bound (medium / low: at 0.7 mm the face read as a smooth sheet
+    // with a few voids), the 'open' modulation under it where one is. Mostly pits, so the relief top (the POM start
+    // plane) stays close to the typical face
     Cell ag = worley(uv, PM(120.0), 0.9, 69);
     float agH = (0.4 + 0.6 * hashf(ag.id, 70)) * (1.0 - smoothstep(0.1, 0.55, ag.f1));
-    float agS = hashf(ag.id, 72) < 0.6 ? -1.0 : 0.45;
-    face += MM * ((0.4 + 0.3 * open) * agH * agS + 0.25 * fbm(uv, PM(150.0), 2, 71));
+    float agS = hashf(ag.id, 72) < 0.6 ? -1.0 : 0.3;
+    face += MM * ((0.9 + 0.7 * open) * agH * agS + 0.35 * fbm(uv, PM(150.0), 2, 71));
     face -= 0.5 * MM * (1.0 - smoothstep(0.0, 0.002, e)) * (1.0 - smoothstep(0.0, 0.002, e));
     face -= voidDepth * voidM * ${painted ? 'smoothstep(0.0, 0.45, 1.0 - vd / vr)' : '1.0'};
     face -= chip;
@@ -170,7 +171,7 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
   float lapD = abs(bxw - (band + 0.5) * 0.24) - 0.12; // <= 0, distance inside the band edge
   float lap = step(hashf(vec2(mod(band, 10.0), 1.0), 82), 0.3) * (1.0 - smoothstep(0.0, 0.02, -lapD));
   vec3 paint = TABLE_ALBEDO * (1.0 + 0.02 * (r2.x - 0.5)) * (1.0 + 0.024 * bv) * (1.0 - 0.015 * lap);
-  vec3 col = paint * mix(0.9, 1.0, fM); // pooled paint and dust in the joints
+  vec3 col = paint * mix(0.86, 1.0, fM); // pooled paint and dust in the joints (0b's cavity visibility is soft)
   col *= 1.0 - 0.04 * voidM * fM;
   vec3 blockGrey = srgb8(128.0, 126.0, 120.0);
   float edgeP = 1.0 - smoothstep(0.0, 0.3 * MM, chip - 0.1 * MM); // the 0.6 mm paint edge round a fresh chip
@@ -199,7 +200,7 @@ ${painted ? `  // roller bands and lap lines (vertical 0.24 m bands with wobbly 
 // grime darkens the bottom courses' joints itself.
 export const MASONRY_RECIPES: RecipeTable = {
   [Mat.CMU_PAINTED]: {
-    glsl: cmuBlock(true), normalStrength: 1.0, heightScale: CMU_HS, trim: [1.007, 1.007, 1.008], aux: 'detailMask',
+    glsl: cmuBlock(true), normalStrength: 1.0, heightScale: CMU_HS, trim: [1.012, 1.012, 1.009], aux: 'detailMask',
     phys: phys(0.3, { pomTop: 0.95, tok: 0.6, det: Det.CMU_FACE, detS: 1, sigma: 0.2 }),
   },
   [Mat.CMU_RAW]: {

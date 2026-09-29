@@ -4137,7 +4137,7 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 | CONCRETE_FLOOR | Aggregate speckle, a few exposed pebbles, trowel swirls with burnished burns (darker, −0.14 roughness), Worley F2−F1 crack network, curing mottle, chalky laitance, a soft unimodal sheen field (roughness 0.44–0.6). (Oil spots are decals.) Isotropic enough to also serve stair risers (frame 4.8 × 3.0 m). |
 | CONCRETE_WALL | Frame 2.4 × 1.5 m: formwork seams every 1.2 m horizontally and 1.5 m vertically, tie holes. heightScale 20 mm with the face at 0.9 (POM top 0.92) and 18 mm deep conical tie holes. |
 | CONCRETE_CEIL | Board-form grain. |
-| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses, third bond), from the `cmuBlock()` body it shares with CMU_RAW. Each block's face is inset 4–6 mm per side with a ±0.6 mm wavy arris (joints 8–12 mm), rounded over 2 mm; the mortar is tooled concave (7 mm jointer, 4.5 mm deep) with burrs on ~12 % of the joint length. Faces: lippage ±0.45 mm (each world block is tilted ±0.25° by the shader), 6–10 mm aggregate pits and low crowns, an open-texture field per block that drives the ≥ 3 mm voids (painted: shallow, rim-rounded, albedo × 0.96), chips on 10 % of the edges and 25 % of the corners (≤ 8 mm, 65 % painted over), roller lap bands. Roughness: face 0.52, voids 0.72, joints 0.58, fresh chips 0.85. `ormh.a` is the detail mask (1 on faces, 0.3 in joints). Everything under 3 mm is D14 CMU_FACE's. heightScale 6 mm with the face at 0.79, POM top 0.95 (the relief fills the height range, so the march spends no steps above the faces). |
+| CMU_PAINTED | Frame 2.4 × 1.0 m: 0.4 × 0.2 blocks (6 × 5 courses, third bond), from the `cmuBlock()` body it shares with CMU_RAW. Each block's face is inset 4–6 mm per side with a ±0.6 mm wavy arris (joints 8–12 mm), rounded over 2 mm; the mortar is tooled concave (7 mm jointer, 4.5 mm deep) with burrs on ~12 % of the joint length. Faces: lippage ±0.45 mm (each world block is tilted ±0.37° by the shader), 6–10 mm aggregate pits up to 1.6 mm deep and low crowns, an open-texture field per block that drives the ≥ 3 mm voids (painted: shallow, rim-rounded, albedo × 0.96), chips on 10 % of the edges and 25 % of the corners (≤ 8 mm, 65 % painted over), roller lap bands, joints × 0.86 (pooled paint and dust). Roughness: face 0.52, voids 0.72, joints 0.58, fresh chips 0.85. `ormh.a` is the detail mask (1 on faces, 0.3 in joints). Everything under 3 mm is D14 CMU_FACE's. heightScale 6 mm with the face at 0.79, POM top 0.95 (the relief fills the height range, so the march spends no steps above the faces). |
 | CMU_RAW | The same blocks unpainted: light natural grey, salt-and-pepper, sRGB (166, 164, 159), ±4 % per block (the shader adds ±6 %) and 20 % batch casts, voids × 0.5, fresh chips × 0.8, a lighter sandy mortar (the block colour × 1.16 / 1.15 / 1.12, sRGB (177, 175, 167)) with a faint efflorescence haze, roughness 0.9 / 0.92, detail D15 CMU_RAW. PIPEWORKS walls, service corridors and loading bays. |
 | POOL_TILE | 0.15 m white glazed tiles (roughness 0.06–0.12) with a slight pillow. Per-tile tilt ±0.5° per axis (lippage; ±1.5° scattered the lamps' reflections into single-tile glints), POM top 0.76. Hand-set joints: each face is inset 1.2–1.9 mm per side with a ±0.25 mm wobble. A fat-edge glaze ridge on the cushion; batch shade ±4 %, 5 % cream and 3 % blue-white tiles; crazing (a 0.8 mm net plus hairlines) on 12 %; conchoidal chips showing the buff bisque on 6 %; a hazy glaze rim at the joint. Sanded grout sRGB (176, 178, 170), concave, roughness 0.8. `ormh.a` is the grout coverage: the shader colours the grout along its lines in world space. |
 | POOL_MOSAIC | 2.5 cm glass mosaic on 0.3 m sheets, with wider joints at the sheet edges. Chips with 2 mm rounded corners (grout diamonds), a 1 mm edge round, a 0.15 mm dome, lippage ±0.25 mm and tilt ±0.5°. Five related hues (±6°, value 0.83–1.19) plus 5 % accents. The colour sits inside the glass: cloud (±8 %), streaks, bubbles in 5 % of the chips, a darker, more saturated edge band. Chip roughness 0.05–0.08, grout 0.8; `ormh.a` is the grout coverage. |
@@ -4221,24 +4221,27 @@ Block walls read as concrete block at every distance, and the tile layers as fir
   crowns stand out of a paste of fine sand; crevices open where three grits meet; 0.8-2.5 mm voids cluster in
   under-compacted 'open' patches. D14 is painted: the film rounds and levels the relief (x 0.6), bridges voids under
   ~0.9 mm and lines the rest as shallow pits in the face colour, so voids read through shading and the cavity, not
-  dark albedo (rms slope 0.375). D15 keeps the full relief, deep voids at x 0.65 and a salt-and-pepper tone per grain
+  dark albedo (rms slope 0.39). D15 keeps the full relief, deep voids at x 0.65 and a salt-and-pepper tone per grain
   (rms slope 0.44). The painted face therefore reads as sandpaper rather than a plastic sheet with holes (gallery 09's
   pits at < 0.6 x the local mean: 2.9 % of the near wall before, 0.2 % on raw block now).
-- **CMU base v2** (`layers/masonry.ts`, table above): `cmuBlock()` is shared by both layers. Joints vary block to block
-  and are tooled concave; chips, voids and lap bands are resolved at the base texel. The detail mask (ormh.a, 0.3 in the
-  joints) keeps the tooled mortar smoother than the face. The base also carries 6-10 mm aggregate crowns, which are
-  the whole face texture on medium and low, where no detail maps are bound.
-- **World block variation** (`chunks/family/masonry.ts` postSample / postDetail): a key from the wall position
-  follows the texture's third bond (wrapping at NOISE_WRAP / 0.4 m and 15 courses per storey, so it never jumps at a
-  tile edge) and gives every world block a paint lot (+-3.2 % value, +-1 % warmth; raw +-6 %), first-coat flashing
-  (+-0.05 roughness), a +-0.25 deg tilt, a texture class (6 % touch-up, 4 % heavily filled, 10 % open) and its own
-  patch of the aggregate (a detail-uv offset). Faces only: the joint share comes from the detail mask. The flashing is
-  kept small because the probe's roughness fade (0.5-0.65) turns sheen differences into lamp-reflection steps, and the
-  rough hook caps painted CMU at 0.67 so that no block straddles SSR's G-buffer eligibility cut (0.7), where blocks
-  popped between the two paths with distance. The same hook undoes the cotangent frame's u / v scaling on these walls
-  (TEX2.md, lane C: a core issue on every layer with repeatY != repeat), which had shaded head joints, tilts and chips
-  at 42 % of their slope. Without detail maps, the rough hook adds D14 / D15's unresolved slope variance (0.12 / 0.18)
-  to alpha^2, so the walls keep their matte sheen.
+- **CMU base v2** (`layers/masonry.ts`, table above): `cmuBlock()` is shared by both layers. Joints vary block to
+  block and are tooled concave; chips, voids and lap bands are resolved at the base texel. The detail mask (ormh.a,
+  0.3 in the joints) keeps the tooled mortar smoother than the face. The base also carries 6-10 mm aggregate pits (up
+  to 1.6 mm deep) and low crowns, which are the whole face texture on medium and low, where no detail maps are bound:
+  at 0.7 mm the medium face read as a smooth sheet with a few voids (1.5 px high-pass at gallery 08's 0.45 m: 0.8 %,
+  now 1.1 %, base 2.7 %; at 1.5 m 2.3 %, now 2.6 %, base 3.0 %). The painted joints are 14 % darker than the face
+  (pooled paint and dust; 0b's cavity visibility alone leaves tooled joints faint at mid range).
+- **World block variation** (`chunks/family/masonry.ts` postSample / postDetail): a key from the wall position follows
+  the texture's third bond (wrapping at NOISE_WRAP / 0.4 m and 15 courses per storey, so it never jumps at a tile
+  edge) and gives every world block a paint lot (+-4.5 % value, +-1 % warmth; raw +-6 %), first-coat flashing (+-0.05
+  roughness), a +-0.37 deg tilt (lippage: sheen steps between blocks at mid range), a texture class (6 % touch-up, 4 %
+  heavily filled, 10 % open) and its own patch of the aggregate (a detail-uv offset). Faces only: the joint share
+  comes from the detail mask. The flashing is kept small because the probe's roughness fade (0.5-0.65) turns sheen
+  differences into lamp-reflection steps, and the rough hook caps painted CMU at 0.67 so that no block straddles SSR's
+  G-buffer eligibility cut (0.7), where blocks popped between the two paths with distance. The same hook undoes the
+  cotangent frame's u / v scaling on these walls (TEX2.md, lane C: a core issue on every layer with repeatY !=
+  repeat), which had shaded head joints, tilts and chips at 42 % of their slope. Without detail maps, the rough hook
+  adds D14 / D15's unresolved slope variance (0.12 / 0.18) to alpha^2, so the walls keep their matte sheen.
 - **CMU_RAW** is placed on PIPEWORKS walls, the transition service corridors and the loading bays; CONCRETE, WAREHOUSE
   and the towers stay painted. Its table albedo is 0.38, light natural grey block (LRV 35-40; the detail multiplier is
   divided by its 1x1-mip mean, so the rendered face averages the table value). That is three quarters of the painted
