@@ -4,6 +4,7 @@
 
 import { Mat } from '../../../core/ids.ts';
 import { NOISE_WRAP, STOREY_PITCH } from '../../../core/constants.ts';
+import { Det } from '../../../textures/detailRecipes/types.ts';
 import { CMU_BLOCK, CMU_BOND } from '../../../textures/layers/masonry.ts';
 import type { FamilyHooks } from './index.ts';
 
@@ -35,6 +36,12 @@ export const CMU_DET_VAR_MEAN: Readonly<Record<number, number>> = { [Mat.CMU_PAI
 const DETAIL_MASK_SHIM = 1;
 
 const f = (x: number): string => (Number.isInteger(x) ? `${x}.0` : String(x));
+const v3 = (c: readonly number[]): string => `vec3( ${c.map(f).join(', ')} )`;
+/** Masonry grime colours: seepage (x 0.86 with a brown tint) and efflorescence salts. */
+const SEEPAGE = [0.86 * 0.93, 0.86 * 0.9, 0.86 * 0.84].map((x) => Number(x.toFixed(4)));
+const EFFLORESCENCE = [0.66, 0.65, 0.62] as const;
+/** Blister lattice cell (m): divides NOISE_WRAP and STOREY_PITCH. */
+const BLISTER_CELL = 0.012;
 const V = CMU_VARIATION;
 const offs = CMU_BOND.map((o) => f(Number(o.toFixed(6))));
 
@@ -105,40 +112,88 @@ if ( brMsOn ) {
 `,
   grime: /* glsl */ `
 	else if ( brGrime == BR_G_MASONRY ) {
-		// concrete: oil and wet patches; floors: saw-cut control joints; walls: damp, efflorescence, tie-hole rust
-		float oil = smoothstep( 0.55, 0.8, g1.b * 0.6 + brMask.g * 0.7 );
-		if ( brHoriz ) oil = max( oil, brBlotch( brS2, true, 311u, 0.18, 0.15, 0.45, ( g2.b - 0.5 ) * 0.6 ) * 0.8 );
-		brA *= mix( vec3( 1.0 ), vec3( 0.5, 0.48, 0.46 ), oil * 0.65 );
-		brA *= mix( vec3( 1.0 ), vec3( 0.62, 0.58, 0.52 ), clamp( brMask.g * ( 0.4 + g2.g ), 0.0, 1.0 ) * 0.8 );
-		if ( brHoriz && brL == BR_M_CONCRETE_FLOOR && brNWg.y > 0.0 ) {
-			vec2 jd = abs( fract( brS2 / BR_CONCRETE_JOINT + 0.5 ) - 0.5 ) * BR_CONCRETE_JOINT; // m to the joint lines
-			vec2 fw = max( fwidth( brS2 ), vec2( 1e-4 ) );
-			float hw = 0.002 + 0.003 * smoothstep( 0.6, 0.9, g1.b ) + 0.0015 * ( g2.r - 0.5 ); // spalled edges
-			vec2 ln = clamp( 2.0 * hw / fw, 0.0, 1.0 ) * ( 1.0 - smoothstep( vec2( hw ), hw + fw, jd ) );
-			vec2 dz = 1.0 - smoothstep( 0.0, 0.03, jd ); // dirt collected beside the cut
-			brA *= 1.0 - 0.6 * max( ln.x, ln.y ) - 0.08 * max( dz.x, dz.y );
-		}
-		if ( ! brHoriz ) {
-			float s = brMask.r + ( g1.r - 0.5 ) * 0.3 * step( 0.02, brMask.r );
-			float damp = smoothstep( 0.42, 0.5, s );
-			float front = ( 1.0 - smoothstep( 0.0, 0.05, abs( s - 0.47 ) ) ) * step( 0.02, brMask.r );
-			brA *= mix( 1.0, 0.78, damp );
-			// efflorescence: white-grey salts at the drying front and in streaks down the damp area
-			float eff = clamp( front * 0.8 + damp * smoothstep( 0.5, 0.8, g1.a ) * 0.7, 0.0, 1.0 );
-			brA = mix( brA, vec3( 0.6, 0.59, 0.56 ), eff * 0.5 );
-			brRoughMul *= mix( 1.0, 1.1, eff );
-			if ( brL == BR_M_CONCRETE_WALL ) {
-				// rust bleeding from some formwork tie holes (holes at along = 0.3 + 0.6 k, y = 0.375 + 0.75 k)
-				float hx = ( floor( ( brS2.x - 0.3 ) / 0.6 + 0.5 ) ) * 0.6 + 0.3;
-				float hy = ceil( ( brS2.y - 0.375 ) / 0.75 ) * 0.75 + 0.375;
-				uint hh = brHash2u( brWrap( ivec2( int( floor( hx / 0.6 ) ), int( floor( hy / 0.75 ) ) ), ivec2( int( BR_NOISE_WRAP / 0.6 + 0.5 ), 4 ) ), 719u );
-				float dy = hy - brS2.y;
-				float L = 0.15 + 0.6 * brU01( brPcg( hh ) );
-				float w = 0.008 + 0.03 * dy / L;
-				float rs = step( brU01( hh ), 0.35 ) * exp( - ( brS2.x - hx ) * ( brS2.x - hx ) / ( w * w ) ) * ( 1.0 - smoothstep( 0.2, 1.0, dy / L ) ) * step( 0.01, dy );
-				rs *= 0.5 + 0.5 * g1.a;
-				brA = mix( brA, vec3( 0.32, 0.16, 0.07 ), rs * 0.6 );
+		// masonry (CMU): paint delamination and blisters in the damp band (A; painted block: the raw block shows
+		// through), dirt (G) gathering on the bed-joint ledges, damp and seepage (R) that the mortar wicks further than
+		// the block, efflorescence at the drying front and blooming in the joints of the bottom 0.6 m, boot and cart
+		// scuffs; tops of block walls (horizontal): oil and dirt
+		float jM = clamp( ( 1.0 - brAux ) / 0.7, 0.0, 1.0 ); // joint share (detail-mask channel: 0.3 in the joints)
+		if ( ! brHoriz && brL == BR_M_CMU_PAINTED ) {
+			float fv = brMask.a + 0.3 * ( g2.r - 0.5 ) + 0.18 * ( g1.g - 0.5 ); // ragged, isotropic patches
+			vec2 fd = vec2( dFdx( fv ), dFdy( fv ) );
+			float fl = smoothstep( 0.5, 0.62, fv ); // flaked: the substrate shows
+			float rim = smoothstep( 0.4, 0.5, fv ) * ( 1.0 - fl ); // the lifted film edge around it
+			// blister lattice (12 mm cells in wall metres: along, y) and its footprint fade, in uniform control flow
+			vec2 bc = vec2( dot( brPW.xz, vec2( brNWg.z, - brNWg.x ) ), vBrLocal.y ) / ${f(BLISTER_CELL)};
+			float bfw = 1.0 - smoothstep( 0.25, 0.5, max( length( dFdx( bc ) ), length( dFdy( bc ) ) ) );
+			if ( fl > 0.0 ) {
+				float rl = float( BR_M_CMU_RAW );
+				vec3 ra = textureGrad( uBrAlbedo, vec3( brUv, rl ), brDx, brDy ).rgb;
+				vec3 rn = textureGrad( uBrNormal, vec3( brUv, rl ), brDx, brDy ).xyz * 2.0 - 1.0;
+				vec4 ro = textureGrad( uBrOrmh, vec3( brUv, rl ), brDx, brDy );
+				if ( brMsOn ) rn.x *= brLB.x / brLB.y; // the painted layer's frame fix (postSample)
+				float am = 1.0;
+#if defined( BR_DETAIL_MAPS ) && ! defined( BR_DECAL )
+				if ( uBrReflPass < 0.5 ) {
+					// the raw aggregate (D15) in place of the painted face (D14)
+					vec4 dmu;
+					vec4 dt = brDetailFetch( brDetUv, ${f(Det.CMU_RAW)}, brDetDx, brDetDy, dmu );
+					float ds = BR_DETAIL_SLOPE[ ${Det.CMU_RAW} ];
+					vec2 sl = ( dt.rg * 2.0 - 1.0 ) * ds;
+					float k = brMsDet * brAux * uBrLayerD[ brL ].y;
+					brDetSl = mix( brDetSl, sl * k, fl );
+					brDetVar = mix( brDetVar, max( dt.a * 2.0 * ds * ds - dot( sl, sl ), 0.0 ) * k * k, fl );
+					am = dmu.b > 0.0 ? 1.0 + k * ( dt.b / dmu.b - 1.0 ) : 1.0;
+					ro.g += BR_DETAIL_ROUGH_K[ ${Det.CMU_RAW} ] * ( 1.0 - am );
+				}
+#endif
+				// the salts that lifted the film bloom on the exposed block
+				brA = mix( brA, mix( ra * am, ${v3(EFFLORESCENCE)}, 0.35 * smoothstep( 0.3, 0.9, g1.g + 0.3 * g2.r ) ), fl );
+				brNrm.xyz = mix( brNrm.xyz, rn, fl );
+				brOrmh.rg = mix( brOrmh.rg, ro.rg, fl );
 			}
+			// the film edge lifts toward the flake: it tilts away from it and catches the light
+			mat2 brJ = mat2( brDx.x, brDy.x, brDx.y, brDy.y ); // brJ * grad_uv = screen derivatives
+			vec2 gu = abs( determinant( brJ ) ) > 1e-14 ? inverse( brJ ) * fd : vec2( 0.0 );
+			vec2 gm = gu / brLB.xy; // per metre
+			float gl = length( gm );
+			if ( gl > 1e-6 && rim > 0.0 ) {
+				brNrm.xy -= gm / gl * ( 0.9 * rim * brNrm.z );
+				brA *= 1.0 + 0.06 * rim;
+			}
+			// blisters: 2-8 mm domes of film lifted by the damp where it still holds
+			float bl = smoothstep( 0.22, 0.42, fv ) * ( 1.0 - fl ) * smoothstep( 0.55, 0.8, g1.g ) * bfw;
+			if ( bl > 0.0 ) {
+				vec2 bi = floor( bc );
+				uint bh = brHash2u( brWrap( ivec2( bi ), ivec2( ${Math.round(NOISE_WRAP / BLISTER_CELL)}, ${Math.round(STOREY_PITCH / BLISTER_CELL)} ) ), 1301u );
+				vec2 bo = 0.35 + 0.3 * vec2( brU01( brPcg( bh ) ), brU01( brPcg( bh ^ 0x51u ) ) );
+				float brr = mix( 0.08, 0.33, brU01( brPcg( bh + 7u ) ) );
+				vec2 bp = ( bc - bi - bo ) / brr;
+				float on = step( brU01( bh ), 0.4 ) * ( 1.0 - smoothstep( 0.8, 1.0, dot( bp, bp ) ) );
+				brNrm.xy += bp * ( 0.8 * on * bl * brNrm.z );
+			}
+		}
+		float oil = brHoriz ? max( smoothstep( 0.55, 0.8, g1.b * 0.6 + brMask.g * 0.7 ), brBlotch( brS2, true, 311u, 0.18, 0.15, 0.45, ( g2.b - 0.5 ) * 0.6 ) * 0.8 ) : 0.0;
+		brA *= mix( vec3( 1.0 ), vec3( 0.5, 0.48, 0.46 ), oil * 0.65 );
+		brA *= mix( vec3( 1.0 ), vec3( 0.62, 0.58, 0.52 ), clamp( brMask.g * ( 0.4 + g2.g ) * ( 1.0 + 0.6 * jM ), 0.0, 1.0 ) * 0.8 );
+		if ( ! brHoriz ) {
+			float y = vBrLocal.y;
+			// damp and seepage: the stain threshold of the mask's R field, its edge ragged by the tide field and pushed
+			// out along the joints; brownish, not black
+			float wR = step( 0.02, brMask.r );
+			float s = brMask.r + ( g1.r - 0.5 ) * 0.3 * wR + 0.05 * jM * wR;
+			float damp = smoothstep( 0.42, 0.5, s );
+			float front = ( 1.0 - smoothstep( 0.0, 0.05, abs( s - 0.47 ) ) ) * wR;
+			brA *= mix( vec3( 1.0 ), ${v3(SEEPAGE)}, damp );
+			// efflorescence: salt crust along the drying front and blooming in the joints (salts migrate through the
+			// mortar), in streaks down the damp area of the bottom 0.6 m
+			float eff = clamp( ( front * 0.8 + damp * smoothstep( 0.5, 0.8, g1.a ) * 0.7 * ( 1.0 - smoothstep( 0.45, 0.65, y ) ) ) * ( 0.6 + 1.2 * jM ), 0.0, 1.0 );
+			brA = mix( brA, ${v3(EFFLORESCENCE)}, eff * 0.55 );
+			brRoughMul *= mix( 1.0, 1.3, eff );
+			// scuffs: black rubber smears from carts (0.08-0.35 m) and boots and trolleys (0.75-1.0 m) on the faces
+			float band = smoothstep( 0.06, 0.1, y ) * ( 1.0 - smoothstep( 0.3, 0.37, y ) ) + smoothstep( 0.72, 0.77, y ) * ( 1.0 - smoothstep( 0.96, 1.03, y ) );
+			float sc = band * smoothstep( 0.62, 0.85, g1.b ) * clamp( 0.3 + 1.5 * brMask.g, 0.0, 1.0 ) * ( 1.0 - 0.6 * jM );
+			brA *= 1.0 - 0.45 * sc;
+			brRoughMul *= 1.0 - 0.15 * sc;
 		}
 		brRoughMul *= mix( 1.0, 0.7, oil );
 	}
