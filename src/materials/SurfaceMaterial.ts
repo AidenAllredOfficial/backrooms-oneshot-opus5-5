@@ -15,6 +15,7 @@ import type { MaterialGlobals, TileBindings } from '../core/runtime.ts';
 import { injectAt, SURFACE_INJECTIONS } from './anchors.ts';
 import { VERT_INVARIANT_GLSL } from './DepthMaterial.ts';
 import { BOUNCE_GLSL } from './chunks/bounce.ts';
+import { brdfParsGlsl } from './chunks/brdf.ts';
 import { fragmentCommon, HAZE_FUNCS_GLSL } from './chunks/common.ts';
 import { DETAIL_PARS_GLSL } from './chunks/detail.ts';
 import { EMITTER_GLSL } from './chunks/emitters.ts';
@@ -56,7 +57,8 @@ function injectionCode(): Record<string, string> {
       + WATER_SURF_GLSL // E
       + VOLUMETRIC_GLSL + BOUNCE_GLSL // F
       + familyHook('pars'), // texture realism v2 families
-    'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL + WATER_SPOT_GLSL,
+    // after lights_physical_pars_fragment: texture realism v2's RE_Direct override (EON rough diffuse, chunks/brdf.ts)
+    'fragment:clipping_planes_pars_fragment': LENS_SHIMMER_GLSL + HAZE_FUNCS_GLSL + WATER_SPOT_GLSL + brdfParsGlsl(),
     'fragment:clipping_planes_fragment': FRAG_MAIN_START_GLSL,
     'fragment:map_fragment': FRAG_MAP_GLSL,
     'fragment:roughnessmap_fragment': FRAG_ROUGHNESS_GLSL,
