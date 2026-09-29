@@ -14,6 +14,13 @@ export const CMU_BLOCK: readonly [number, number] = [0.4, 0.2];
  * periodic; courses use a third bond, so every head joint is overlapped by >= 1/3 of a block. The world block key of
  * the shader (chunks/family/masonry.ts) follows the same sequence. */
 export const CMU_BOND = [0, 1 / 3, 2 / 3, 1 / 3, 2 / 3] as const;
+/** CMU_BOND as a GLSL float literal (6 decimals: the same values as the shader's key) */
+export const cmuBondLit = (o: number): string => {
+  const s = String(Number(o.toFixed(6)));
+  return s.includes('.') ? s : `${s}.0`;
+};
+/** the course offset (blocks) of course `cw` (0..4) as a GLSL expression: CMU_BOND as a chain of selects */
+const BOND_GLSL = CMU_BOND.map((o, i) => (i < CMU_BOND.length - 1 ? `cw < ${i}.5 ? ${cmuBondLit(o)} : ` : cmuBondLit(o))).join('');
 
 /**
  * Concrete block masonry on the 2.4 x 1.0 m frame, shared by the painted and the raw layer (`painted`). Everything
@@ -42,8 +49,8 @@ const cmuBlock = (painted: boolean): string => /* glsl */ `
 #define CMU_HS ${CMU_HS.toFixed(4)}
 #define MM (0.001 / CMU_HS)
 float cmuOff(float c) {
-  float cw = mod(c, 5.0);
-  return cw < 0.5 ? 0.0 : cw < 1.5 ? 1.0 / 3.0 : cw < 2.5 ? 2.0 / 3.0 : cw < 3.5 ? 1.0 / 3.0 : 2.0 / 3.0;
+  float cw = mod(c, ${CMU_BOND.length}.0);
+  return ${BOND_GLSL};
 }
 // the block of course c at frame x (metres): its index along the course and its frame-wrapped id
 vec2 cmuId(float x, float c, out float bx) {

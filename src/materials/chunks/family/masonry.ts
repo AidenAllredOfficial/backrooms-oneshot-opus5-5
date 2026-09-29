@@ -5,7 +5,7 @@
 import { Mat } from '../../../core/ids.ts';
 import { NOISE_WRAP, STOREY_PITCH } from '../../../core/constants.ts';
 import { SSR } from '../../../post/ssr/ssrGlsl.ts';
-import { CMU_BLOCK, CMU_BOND } from '../../../textures/layers/masonry.ts';
+import { CMU_BLOCK, CMU_BOND, cmuBondLit } from '../../../textures/layers/masonry.ts';
 import type { FamilyHooks } from './index.ts';
 
 /**
@@ -43,9 +43,9 @@ const v3 = (c: readonly number[]): string => `vec3( ${c.map(f).join(', ')} )`;
 const SEEPAGE = [0.86 * 0.93, 0.86 * 0.9, 0.86 * 0.84].map((x) => Number(x.toFixed(4)));
 const EFFLORESCENCE = [0.66, 0.65, 0.62] as const;
 /** Blister lattice cell (m): divides NOISE_WRAP and STOREY_PITCH. */
-const BLISTER_CELL = 0.012;
+export const BLISTER_CELL = 0.012;
 const V = CMU_VARIATION;
-const offs = CMU_BOND.map((o) => f(Number(o.toFixed(6))));
+const offs = CMU_BOND.map(cmuBondLit); // the recipe's course offsets, literally
 
 export const MASONRY_HOOKS: FamilyHooks = {
   pars: /* glsl */ `
