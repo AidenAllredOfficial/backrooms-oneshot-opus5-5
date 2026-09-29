@@ -32,12 +32,12 @@ export interface MaterialLayerDef {
 const S = SurfaceSound;
 export const LAYER_DEFS: readonly MaterialLayerDef[] = [
   { id: 0, name: 'WALLPAPER_L0', repeat: 1.2, tileSize: 0, albedoMean: [0.42, 0.34, 0.12], roughness: 0.7, metal: 0, grime: 'wallpaper', sound: S.CARPET, absorption: 0.1, reflective: false },
-  { id: 1, name: 'CARPET_L0', repeat: 2.4, tileSize: 0, hexTile: 1.2, albedoMean: [0.22, 0.17, 0.08], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.35, reflective: true },
+  { id: 1, name: 'CARPET_L0', repeat: 1.2, tileSize: 0, hexTile: 0.6, albedoMean: [0.22, 0.17, 0.08], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.35, reflective: true },
   { id: 2, name: 'CEILING_TILE', repeat: 1.2, tileSize: 0.6, albedoMean: [0.7, 0.67, 0.56], roughness: 0.9, metal: 0, grime: 'ceilingTile', sound: S.CARPET, absorption: 0.6, reflective: false },
   { id: 3, name: 'PANEL_LENS', repeat: 0.6, tileSize: 0, albedoMean: [0.7, 0.7, 0.68], roughness: 0.3, metal: 0, grime: 'none', sound: S.METAL, absorption: 0.05, reflective: false },
   { id: 4, name: 'TRIM_PAINT', repeat: 1.2, tileSize: 0, albedoMean: [0.72, 0.7, 0.64], roughness: 0.5, metal: 0, grime: 'paint', sound: S.WOOD, absorption: 0.05, reflective: false },
   { id: 5, name: 'WALLPAPER_MANILA', repeat: 1.2, tileSize: 0, albedoMean: [0.5, 0.42, 0.28], roughness: 0.72, metal: 0, grime: 'wallpaper', sound: S.CARPET, absorption: 0.1, reflective: false },
-  { id: 6, name: 'CARPET_OFFICE', repeat: 2.4, tileSize: 0.6, albedoMean: [0.12, 0.13, 0.15], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.3, reflective: false },
+  { id: 6, name: 'CARPET_OFFICE', repeat: 1.2, tileSize: 0.6, albedoMean: [0.12, 0.13, 0.15], roughness: 0.95, metal: 0, grime: 'carpet', sound: S.CARPET, absorption: 0.3, reflective: false },
   { id: 7, name: 'DRYWALL', repeat: 2.4, tileSize: 0, albedoMean: [0.62, 0.6, 0.55], roughness: 0.85, metal: 0, grime: 'paint', sound: S.CONCRETE, absorption: 0.08, reflective: false },
   { id: 8, name: 'VINYL_VCT', repeat: 1.2, tileSize: 0.3, albedoMean: [0.45, 0.43, 0.38], roughness: 0.35, metal: 0, grime: 'tile', sound: S.VINYL, absorption: 0.03, reflective: true },
   { id: 9, name: 'CONCRETE_FLOOR', repeat: 4.8, repeatY: 3.0, tileSize: 0, hexTile: 2.4, albedoMean: [0.3, 0.29, 0.27], roughness: 0.6, metal: 0, grime: 'concrete', sound: S.CONCRETE, absorption: 0.02, reflective: true },
