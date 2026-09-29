@@ -4199,6 +4199,18 @@ export function generateDetailTextures(renderer: THREE.WebGLRenderer, anisotropy
 0a: the file split, the recipe rows, the channels, the reserved ids and slots and the hook points, bit-identical on the
 28 gallery framings (high) and 4 medium framings (`node tools/ab.mjs --base a5c03e1 --expect same`).
 
+0b is the shared shading that the lanes drive through their `SurfacePhys` rows (WP9, "Shared shading (0b)"):
+- EON rough diffuse (`sigma`);
+- the baked light's cavity visibility, linear in V;
+- relief-aware dirt and wear (`dirt`, `wear`, `reliefM`);
+- the detail controls (`detRep`, 'detailMask', `detTint`, `detSO`);
+- the grime helpers `brHeightBlend` and `brStainFront`.
+
+The only change at the defaults is the visibility term. It moves joints, grout, pits and perforations: darker under
+wide or grazing light, lighter where the old cone had blacked them out. With `DIRVIS.LINEAR` set to false, the gallery
+(28 framings at high, 4 at medium) is bit-identical to 0a. The materials harness also
+reports each layer's aux range (`stats().auxRange`).
+
 #### Lane A: textiles
 Pile under overhead light reads through occlusion and view dependence, not through normals (the baked light on floors
 is ~0.5-0.6 directional and near vertical). The recipes (table above) store the pile visibility V in ormh.r and, on
@@ -4427,10 +4439,10 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
     get zero, and the faces are small.
   - `material.multiScatteringCompensation` is only initialised by three's `lights_fragment_begin` when punctual lights exist; our chunk **sets it itself** from `material.dfg` exactly as r186 does: `material.multiScatteringCompensation = 1.0 + material.specularColorBlended * (1.0 / (material.dfg.x + material.dfg.y) - 1.0);` (`material.dfg` is always set by `lights_fragment_begin`), so harness scenes without the flashlight match the game.
   - The directional part is multiplied by its visibility `brDirVis` (A's contact shadow, then package B's
-    `chunks/pom.ts FRAG_DIRVIS_GLSL`): the cavity's visibility cone (not lite): the texture cavity V is the
-    cosine-weighted visibility of a cone around the mapped normal, V = sin² α, so the light is seen while
-    `N·L > cos α = sqrt(1 − V)` (`smoothstep(cos α ∓ 0.15)`): grout, joints, pile gaps and fissures shadow the baked
-    light as it grazes (Chan's `clamp(|N·L| + 2·ao² − 1)` never fired at the textures' V ≥ 0.9);
+    `chunks/pom.ts FRAG_DIRVIS_GLSL`): the texture cavity's visibility of the light (not lite; texture realism v2 0b,
+    below), `1 − (1 − V)·g`, linear in the cavity V so the mips stay unbiased: grout, joints, pits and fissures keep
+    less of the baked light the wider it spreads and the lower it stands (the earlier cone test,
+    `N·L > sqrt(1 − V)`, lit them fully under overhead lamps and vanished in the coarse mips);
     on ultra (`BR_POM` 2) the parallax hit also marches up to 4 steps toward the light up to the relief top (step
     midpoints, one per march step length; skipped when the shadow would be under half a pixel long; occlusion × 8 per
     unit of height above the ray, × the parallax fade; not × w: `brDirVis` scales only the directional share already).
@@ -4545,6 +4557,70 @@ export const SHADER_ANCHORS: readonly { stage: 'vertex' | 'fragment'; include: s
   `if ( uDebugView == BR_DV_<VIEW> ) BR_DEBUG_EXIT( v )` (`chunks/debug.ts` DEBUG_PARS_GLSL: the fog stage's decal
   premultiply, HDR clamp and empty specular G-buffer), instead of going through the fog-stage view list: a value read
   there stays live through the whole shader, and six of them cost ~0.3 ms per ultra frame (register pressure).
+- **Shared shading (0b).** Every term is neutral at the rows' defaults; lanes switch them on in their `SurfacePhys`.
+  - *Rough diffuse* (`chunks/brdf.ts`, TS twin `eonBrdf`): three's `RE_Direct_Physical`, taken from ShaderChunk at
+    build time, becomes `brRE_Direct` (`#define RE_Direct` in the clipping_planes_pars slot, after
+    lights_physical_pars). It keeps three's Lambert line and adds EON minus Lambert where the global `brDiffSigma`
+    > 0, for the baked dominant-direction lobe and the flashlight. EON is the energy-preserving Fujii Oren-Nayar of
+    Portsmouth, Kutz and Hill (2025): `f = ρ(A + B·s/t) + f_ms`, `A = 1/(π + (π/2 − 2/3)σ)`, `B = σA`. Its
+    multiple-scattering lobe takes `ρ_ms = ρ`, because ρ is the calibrated macroscopic albedo, so the directional
+    albedo stays ρ at every angle (the white furnace holds within 0.1 %). material post sets
+    `brDiffSigma = min(1, sqrt(BR_L_SIGMA² + 0.5·(brDetVar + brVar)))` on layers with `BR_L_SIGMA > 0` and 0
+    elsewhere; the family matPost hooks may rescale it. The ambient and gradient terms and the sheen stay as they
+    were. At σ 0.45 the single scattering over Lambert is 0.885 at L = V = N and 1.48 at L = V, 60° off the normal:
+    under a torch at the eye the hot spot flattens and the oblique floor lifts.
+  - *Cavity visibility of the baked light* (`chunks/pom.ts` `DIRVIS`, TS twin `dirVis`):
+    `vis = 1 − (1 − V)·g`. The light is a cap of half-angle β around L, with `cos β = 2R_d − 1`. `g = 1.04·(2 −
+    (1 + cb²)c² − 1.5(1 − cb²)(1 − c²))` is twice the cap's cosine-weighted mean sin²θ, the hemisphere's being ½,
+    with `c = N_g·L` and `cb = max(cos β, min(sin θ_L, 0.55))` (the part of a wide cap below the horizon is cut).
+    Against a ray-marched height-field reference of grooves, tooled joints, pits and rough fields under caps of
+    25-85° at 0-75° from the normal, the rms error is 0.066 and the bias +0.003 (tests/materials/brdf.test.ts
+    re-runs a reduced set). A collimated light along the normal reaches the bottom of any open cavity; grazing and
+    wide light lose most.
+    - R_d, the direct light's own resultant length, is not baked. The baked w is R_d times the direct share of the
+      irradiance, and full bakes of nine zones (all terms against direct only, per texel) show that share swinging
+      from 0.25 on grazing-lit walls to 0.95 on floors under a lamp, while R_d stays at 0.85-1.0. The plan's
+      `R_d ≈ w / 0.8` therefore read grazing walls as a hemisphere-wide cap and gave their joints and pits about
+      twice the light the cap model gives at the baked R_d. The estimate is `R_d = clamp(0.95 + 0.15·w − 0.2·c)`,
+      fitted to two tiles per zone of those bakes: rms 0.055 in visibility against 0.097 for `w / 0.8`, weighted by
+      the directional energy (the other two tiles: 0.053 against 0.092; a sweep test re-checks it on two zones).
+    - `g ≤ 2`, so the clamp at 0 never engages above V = 0.5. The term stays linear in V over faces, joints and pits,
+      and the same wall patch has the same mean at 1.5 m and at 6 m (−1.75 % and −1.80 % against no term; the old
+      cone: −0.77 % and −0.15 %). A narrow light near the horizon would ask for more (shallow relief shadows like
+      cot(elevation) there), but only 1 % of the baked directional energy falls there.
+    - Skipped where `BR_L_PILE.x > 0`: the textile family carries pile visibility itself.
+    - Known limit: V is a scalar. The shadow of a pit or joint under a narrow light is a threshold in the horizon
+      angle, which a term linear in V can only average, so pits under raking light are softer than under the old
+      cone (PIPEWORKS corridor, joint / face 0.74 with the cone, 0.85 now), and a light spread along the horizon
+      (corridor lamps at both ends) still reads as one cap. Darker joints are the lanes' dirt (`BR_L_DIRT`).
+  - *Relief-aware dirt and wear* (`chunks/surface.ts`, inside the grime block after the profile chain; compiled in
+    by `BR_RELIEF_GRIME` once any layer sets an amount). Dirt is
+    `amt·conc^1.5·clamp(0.35 + 1.2·mask.G + 0.4·foot, 0, 1)`, where `conc = 1 − ormh.r` and `foot` falls from the
+    wall base to 0.6 m. It multiplies the albedo toward `BR_L_DIRT.rgb` and adds 0.12 of roughness (into ormh.g, so
+    the glaze unmixing sees it). Wear is `amt·clamp(brRel / BR_L_RELIEF, 0, 1)^1.2·traffic`, where traffic is mask A
+    on floors and falls from 0.3 m to 1.5 m on walls; it mixes the albedo toward `BR_L_WEAR.rgb`. brRel is measured
+    from the layer's mean plane, not from its neighbourhood. A block face above its joints is convex all over, so
+    arris wear needs a local 'wear' aux field.
+  - *Detail controls* (`chunks/surface.ts`, `chunks/detail.ts`):
+    - `BR_L_DETREP` divides the detail uv, its footprint and the puddle ripple's scale, so the detail repeats every
+      0.3 m × detRep.
+    - On 'detailMask' layers, brAux multiplies the detail strength after the postSample hooks.
+    - `BR_L_DETTINT` applies the multiplier's deviation once more per channel:
+      `brA *= 1 + (brAm − 1)·strength·tint`.
+    - `BR_L_DETSO` folds the detail cavity into the inline environment specular after FRAG_AO_REFL:
+      `× max(0.5, mix(1, brAm, 0.5·strength·detSO))`. The SSR G-buffer specular is untouched.
+  - *Grime helpers* (`chunks/grimeLib.ts`, before the family pars; TS twins `heightBlend`, `stainFront`):
+    - `brHeightBlend(m, rel, K, E)`: mask coverage that fills low relief first.
+    - `brStainFront(s, fine, L0, out inside, out tide)`: three nested ragged fronts. The inner fronts' spacing is
+      hashed from L0's bits. Each deposit is sharp outside and 4× softer inside, with an fwidth-based width, so call
+      it only in quad-uniform control flow.
+  - No uniforms and no samplers are added. `tests/materials/samplerBudget.test.ts` pins high and ultra at shell 16,
+    props 16, decal 15 and water 13 units, and takes a census of fragment uniform vectors. High and ultra pack to
+    218-219 of the WebGL2 minimum of 224, all of the growth from MAT_COUNT 30.
+  - Cost: while a feature's const array is all zeros, the compiler drops its code. Once any row sets a value, every
+    surface program pays for it through register pressure, whether or not such pixels are on screen. At ultra
+    (2560x1440) that is about 0.1-0.3 ms per feature (TEX2.md). At high, EON, dirt, wear, tint and specular
+    occlusion on concrete and CMU together cost +0.05-0.12 ms.
 
 **Must NOT touch:** lightmap encoding (WP7) and post (WP11). All tuning constants live in `materials/chunks/*.ts`.
 

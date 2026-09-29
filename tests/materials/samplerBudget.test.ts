@@ -5,6 +5,8 @@
 // material's defines, and the sampler units the remaining code references are counted (array elements one by one;
 // three's spot shadow map and cookie included). The presets are checked as they run today, with the final values of
 // the graphics-realism flags (FINAL below) and with every define on. Runtime twin: materials/warmup.ts.
+// The same assembly takes a census of the fragment uniform vectors (texture realism v2 keeps per-layer data in GLSL
+// const arrays; only MAT_COUNT's growth to 30 may add uniform vectors).
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -167,6 +169,75 @@ function referencedSamplers(code: string): Map<string, number> {
 }
 const unitsOf = (s: Map<string, number>): number => [...s.values()].reduce((a, b) => a + b, 0);
 
+/** The census below (unpacked rows) before texture realism v2 (a5c03e1, MAT_COUNT 28). At MAT_COUNT 30 (0a, 0b adds
+ * none) it reads low 172 / 174 / 166 / 50, medium 243 / 245 / 236 / 64, high and ultra 247 / 249 / 246 / 87 (shell,
+ * props, decal, water); packed 150 / 151 / 146 / 32, 217 / 218 / 212 / 41 and 218 / 219 / 218 / 60 of the 224 the WebGL2
+ * minimum guarantees (208 / 209 / 208 before: 5 vec4 of headroom left on high and ultra). */
+const CENSUS_PRE_V2: Record<QualityName, Record<SurfaceVariant | 'water', number>> = {
+  low: { shell: 164, props: 166, decal: 158, water: 50 },
+  medium: { shell: 233, props: 235, decal: 226, water: 64 },
+  high: { shell: 237, props: 239, decal: 236, water: 87 },
+  ultra: { shell: 237, props: 239, decal: 236, water: 87 },
+};
+
+/** A uniform as rows x columns of vec4 slots (arrays: rows x length; struct members flattened). */
+interface Slot { rows: number; cols: number }
+const SHAPE: Record<string, Slot> = {
+  float: { rows: 1, cols: 1 }, int: { rows: 1, cols: 1 }, uint: { rows: 1, cols: 1 }, bool: { rows: 1, cols: 1 },
+  vec2: { rows: 1, cols: 2 }, ivec2: { rows: 1, cols: 2 }, uvec2: { rows: 1, cols: 2 }, bvec2: { rows: 1, cols: 2 },
+  vec3: { rows: 1, cols: 3 }, ivec3: { rows: 1, cols: 3 }, uvec3: { rows: 1, cols: 3 }, bvec3: { rows: 1, cols: 3 },
+  vec4: { rows: 1, cols: 4 }, ivec4: { rows: 1, cols: 4 }, uvec4: { rows: 1, cols: 4 }, bvec4: { rows: 1, cols: 4 },
+  mat2: { rows: 2, cols: 2 }, mat3: { rows: 3, cols: 3 }, mat4: { rows: 4, cols: 4 },
+};
+
+/** Fragment uniform vectors of the referenced non-sampler uniforms of assembled code, plus the prefix three's
+ * WebGLProgram adds (viewMatrix, cameraPosition, isOrthographic): `rows`, one vec4 per scalar / vector / matrix column
+ * (no packing: an upper bound), and `packed`, the rows the GLSL ES packing rules (appendix A) need, greedily: widest
+ * first, each variable a column span over its array rows. */
+function uniformVectors(code: string): { rows: number; packed: number } {
+  const defs = new Map<string, string>();
+  for (const m of code.matchAll(/^\s*#\s*define\s+(\w+)\s+(.*)$/gm)) defs.set(m[1], m[2].trim());
+  const len = (e: string | undefined): number => (e ? evalExpr(e, defs) : 1);
+  const structs = new Map<string, Slot[]>();
+  const slots = (type: string, n: number): Slot[] => {
+    const st = structs.get(type);
+    if (st) return st.map((m) => ({ rows: m.rows * n, cols: m.cols }));
+    const sh = SHAPE[type];
+    if (!sh) throw new Error(`census: unknown uniform type ${type}`);
+    return [{ rows: sh.rows * n, cols: sh.cols }];
+  };
+  for (const m of code.matchAll(/\bstruct\s+(\w+)\s*\{([^}]*)\}/g)) {
+    structs.set(m[1], [...m[2].matchAll(/(\w+)\s+(\w+)\s*(?:\[\s*([^\]]+?)\s*\])?\s*;/g)].flatMap((mm) => slots(mm[1], len(mm[3]))));
+  }
+  const decl = /\buniform\s+(?:(?:lowp|mediump|highp)\s+)?(\w+)\s+(\w+)\s*(?:\[\s*([^\]]+?)\s*\])?\s*;/g;
+  const body = code.replace(decl, '');
+  const vars: Slot[] = [{ rows: 4, cols: 4 }, { rows: 1, cols: 3 }, { rows: 1, cols: 1 }];
+  for (const m of code.matchAll(decl)) {
+    if (/sampler/.test(m[1]) || !new RegExp(`\\b${m[2]}\\b`).test(body)) continue;
+    vars.push(...slots(m[1], len(m[3])));
+  }
+  const rows = vars.reduce((a, v) => a + v.rows, 0);
+  // greedy packing into 4 columns
+  vars.sort((x, y) => y.cols - x.cols || y.rows - x.rows);
+  const used: boolean[][] = [];
+  const free = (r: number, c: number): boolean => !used[r]?.[c];
+  let packed = 0;
+  for (const v of vars) {
+    let placed = false;
+    for (let r = 0; !placed; r++) {
+      for (let c = 0; c + v.cols <= 4 && !placed; c++) {
+        let ok = true;
+        for (let i = 0; i < v.rows && ok; i++) for (let j = 0; j < v.cols && ok; j++) ok = free(r + i, c + j);
+        if (!ok) continue;
+        for (let i = 0; i < v.rows; i++) { used[r + i] ??= []; for (let j = 0; j < v.cols; j++) used[r + i][c + j] = true; }
+        packed = Math.max(packed, r + v.rows);
+        placed = true;
+      }
+    }
+  }
+  return { rows, packed };
+}
+
 // ---------------------------------------------------------------- materials
 
 function fakeTextures(): TextureSet {
@@ -174,7 +245,7 @@ function fakeTextures(): TextureSet {
   return { size: 512, albedo: t(), normal: t(), ormh: t(), grime: t(), waterNormals: t(), cookie: t(), dispose() { /* test */ } };
 }
 
-interface Built { variant: SurfaceVariant | 'water'; samplers: Map<string, number> }
+interface Built { variant: SurfaceVariant | 'water'; samplers: Map<string, number>; vectors: { rows: number; packed: number } }
 
 /** Every variant's referenced samplers for a preset (and optionally a forced define set for the surfaces). */
 function build(q: QualityConfig, force?: QualityDefines): Built[] {
@@ -186,10 +257,12 @@ function build(q: QualityConfig, force?: QualityDefines): Built[] {
     if (force) applySurfaceDefines(m, v, force);
     const shader = { uniforms: {}, vertexShader: ShaderLib.physical.vertexShader, fragmentShader: ShaderLib.physical.fragmentShader };
     (m.onBeforeCompile as (s: typeof shader, r: THREE.WebGLRenderer) => void)(shader, {} as THREE.WebGLRenderer);
-    out.push({ variant: v, samplers: referencedSamplers(assembleFragment(shader.fragmentShader, m.defines as Record<string, string>)) });
+    const code = assembleFragment(shader.fragmentShader, m.defines as Record<string, string>);
+    out.push({ variant: v, samplers: referencedSamplers(code), vectors: uniformVectors(code) });
   }
   const w = t.water as THREE.ShaderMaterial;
-  out.push({ variant: 'water', samplers: referencedSamplers(assembleFragment(w.fragmentShader, w.defines as Record<string, string>)) });
+  const wc = assembleFragment(w.fragmentShader, w.defines as Record<string, string>);
+  out.push({ variant: 'water', samplers: referencedSamplers(wc), vectors: uniformVectors(wc) });
   return out;
 }
 
@@ -226,6 +299,24 @@ describe('surface sampler budget (16 texture units)', () => {
       }
     });
   }
+
+  it('high / ultra use exactly shell 16, props 16, decal 15 and water 13 units (texture realism v2 adds none)', () => {
+    for (const n of ['high', 'ultra']) {
+      const units = Object.fromEntries(CASES.find(([c]) => c === n)![1].map((b) => [b.variant, unitsOf(b.samplers)]));
+      expect(units, n).toEqual({ shell: 16, props: 16, decal: 15, water: 13 });
+    }
+  });
+
+  it('fragment uniform-vector census: texture realism v2 adds at most MAT_COUNT\'s +10 vec4 (5 layer arrays x 2 layers)', () => {
+    for (const n of QUALITY_NAMES) {
+      for (const b of CASES.find(([c]) => c === n)![1]) {
+        const grow = b.variant === 'water' ? 0 : 10; // the water program does not declare the layer arrays
+        expect(b.vectors.rows, `${n} ${b.variant}`).toBeLessThanOrEqual(CENSUS_PRE_V2[n][b.variant] + grow);
+        // the WebGL2 minimum MAX_FRAGMENT_UNIFORM_VECTORS
+        expect(b.vectors.packed, `${n} ${b.variant}`).toBeLessThanOrEqual(224);
+      }
+    }
+  });
 
   it('three\'s own samplers: every surface program samples dfgLUT (material.dfg, lights_fragment_begin); water does not', () => {
     // the plan's inventory (12 shell samplers + probe, SSAO, froxel volume, detail = 16) did not count dfgLUT: with it
