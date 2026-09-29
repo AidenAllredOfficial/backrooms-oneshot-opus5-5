@@ -283,9 +283,12 @@ if ( brWpProp || brWpOn ) {
 		// speckle channel: speckle made leopard spots) on steel that can rust; stainless and chrome only dull
 		if ( brL != BR_M_METAL_BARE && brL != BR_M_METAL_RUST ) { // (METAL_RUST: its own run-off, postSample)
 			float rust = smoothstep( 0.5, 0.85, brMask.g * 0.8 + g1.a * 0.6 + g2.r * 0.2 );
-			brA = mix( brA, BR_RUST * ( 0.8 + 0.4 * g2.r ), rust * ( brL == BR_M_METAL_PAINTED ? 0.45 : 0.75 ) ); // (paint: stains, not scale)
+			// on paint these are thin stains over an intact film, not scale: a lighter tint, and the gloss mostly kept (the
+			// tide field's blobs had turned painted pipes' highlights into lumps)
+			rust *= brL == BR_M_METAL_PAINTED ? 0.5 : 1.0;
+			brA = mix( brA, BR_RUST * ( 0.8 + 0.4 * g2.r ), rust * 0.75 );
 			brMetal *= 1.0 - rust;
-			brRoughMul = mix( 1.0, 1.6, rust );
+			brRoughMul = mix( 1.0, brL == BR_M_METAL_PAINTED ? 1.2 : 1.6, rust );
 		}
 		// settled dust on up-facing shell steel (props get the anchor cell's dust in surface.ts), heavier in the mask's
 		// grime; a greasy hand band on painted steel (glossier)
@@ -294,8 +297,8 @@ if ( brWpProp || brWpOn ) {
 		brMetal *= 1.0 - brWpDu;
 		brRoughMul *= mix( 1.0, 1.5, brWpDu );
 		if ( brL == BR_M_METAL_PAINTED ) {
-			float brWpGr = exp( - ( vBrLocal.y - 1.2 ) * ( vBrLocal.y - 1.2 ) * 11.0 ) * smoothstep( 0.45, 0.75, g2.r ) * ( 1.0 - abs( brNWg.y ) );
-			brRoughMul *= 1.0 - 0.25 * brWpGr * brWpTop;
+			float brWpGr = exp( - ( vBrLocal.y - 1.2 ) * ( vBrLocal.y - 1.2 ) * 11.0 ) * smoothstep( 0.35, 0.7, g2.r ) * ( 1.0 - abs( brNWg.y ) );
+			brRoughMul *= 1.0 - 0.35 * brWpGr * brWpTop;
 		}
 	}
 `,

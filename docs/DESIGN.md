@@ -4357,7 +4357,8 @@ Painted steel, bare metal, rust, wood, plastic, kraft and rubber read as those m
   flakes (4-16 texels). For uniform W the ramp's mean is the level only while level >= a, so a lower level moves to
   2 sqrt(a l) - a: the exposed share equals the level at every distance (tests/props/wear.test.ts).
 - **METAL_PAINTED** is a neutral topcoat: +-2 % coat thickness, oil-canning (+-0.45 mm over 0.15-0.4 m, which bends
-  lamp reflections), roughness 0.4 +- 0.06 (uneven gloss); W from 17 cm clusters, 2.5 cm chip groups and angular 8 mm flakes that
+  lamp reflections), roughness 0.4 +- 0.015 (random gloss mottle read as lumps in grazing lamp reflections, so the gloss varies
+  through grease, kick-zone chalking and chips instead); W from 17 cm clusters, 2.5 cm chip groups and angular 8 mm flakes that
   break first along their borders; albedo.a (aux2) a scratch field (0-2 segments of 8-80 mm per 60 mm cell, 60 %
   within 15 degrees of u, depth class 0.3-1). Runtime: topcoat, then a primer ring (grey, or red oxide on 40 % of the
   props, roughness 0.7), then the steel core 0.06 further down W (F0 0.56, roughness 0.3; on old props oxidised

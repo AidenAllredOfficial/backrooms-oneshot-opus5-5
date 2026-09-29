@@ -13,7 +13,6 @@ import { phys, type RecipeTable } from './types.ts';
  * next ring; hue and value vary per board. Rings finer than ~3 samples fade to their mean (no moire). ormh.a = the finish-wear
  * threshold (runtime: lighter, less saturated, rougher where hands and objects wore the finish off). */
 const WOOD = /* glsl */ `
-#define SS 4
 float wn1(float x, int seed) {
   float i = floor(x), f = x - i;
   return mix(hashf(ivec2(int(i), 7), seed), hashf(ivec2(int(i) + 1, 7), seed), f * f * (3.0 - 2.0 * f));
@@ -80,7 +79,6 @@ void gen(vec2 uv, inout Surf s) {
  * 7 cm cells) and a faint pigment mottle; the EDM haircell is detail D10. ormh.a = the scuff threshold (angular 3-20 mm
  * blobs and short streaks; the runtime whitens them where edges and the kick zone wear, and chalks up-facing faces). */
 const PLASTIC = /* glsl */ `
-#define SS 4
 float cdfN(float x) { return 1.0 / (1.0 + exp(-1.702 * x)); }
 void gen(vec2 uv, inout Surf s) {
   vec2 w = warp(uv, PM(3.0), 3, 3, 0.05);
@@ -101,7 +99,6 @@ void gen(vec2 uv, inout Surf s) {
  * waxy antiozonant bloom (ormh.a: the runtime greys it on up-facing and old parts), ozone crazing (fine dark cracks,
  * ~3 %), roughness 0.62 +- 0.08 with rubbed glossier patches (0.45); the haircell detail at half strength. */
 const RUBBER = /* glsl */ `
-#define SS 4
 void gen(vec2 uv, inout Surf s) {
   float mid = fbm(uv, PM(20.0), 3, 4);
   float craze = smoothstep(0.93, 0.985, ridged(warp(uv, PM(6.0), 2, 5, 0.02), PM(160.0), 2, 6))

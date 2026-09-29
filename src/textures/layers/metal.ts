@@ -49,7 +49,7 @@ float scratchField(vec2 uv) {
 void gen(vec2 uv, inout Surf s) {
   s.albedo = TABLE_ALBEDO * (1.0 + 0.1 * fbm(uv, PM(4.0), 3, 10)); // coat thickness +-3 %
   s.height = 0.5 + 1.3 * fbm(uv, PM(3.0), 2, 3); // oil-canning, ~+-0.45 mm
-  s.rough = 0.4 + 0.28 * fbm(uv, PM(8.0), 3, 11) + 0.1 * fbm(uv, PM(40.0), 2, 15); // +-0.06: uneven gloss, finer mottle
+  s.rough = 0.4 + 0.06 * fbm(uv, PM(20.0), 3, 11) + 0.03 * fbm(uv, PM(60.0), 2, 15); // +-0.015 at 2-5 cm: more reads as lumps in grazing lamp reflections (the gloss varies through grease, kick-zone chalking and chips)
   s.metal = 0.0;
   vec2 wv = warp(uv, PM(3.0), 3, 4, 0.04);
   float lf = fbm(wv, PM(6.0), 4, 5);
@@ -104,8 +104,7 @@ void gen(vec2 uv, inout Surf s) {
   float lift = 0.0002 + 0.0008 * fh.z;
   float gap = 1.0 - smoothstep(0.02, 0.07, fe.x); // the plate border: a 1-2 mm gap of fresh oxide
   // deep rust: tubercles (1-3 mm) and pits in three log-spaced octaves, denser where C is lowest
-  Cell tc = worley(uv, PM(420.0), 1.0, 10);
-  float tub = (1.0 - smoothstep(0.0, 0.8, tc.f1)) * step(hashf(tc.id, 11), 0.6);
+  float tub = smoothstep(0.05, 0.45, fbm(uv, PM(300.0), 2, 10)); // (the 1-2 mm tubercles themselves are D19)
   float pit = 0.0;
   for (int k = 0; k < 3; k++) {
     float d = k == 0 ? 150.0 : k == 1 ? 300.0 : 600.0;
@@ -201,7 +200,6 @@ void gen(vec2 uv, inout Surf s) {
  * film) and sparse dark pits. ormh.a = the smudge threshold field (15 x 20 mm sebum clusters: the runtime puts them in
  * the hand band and near edges, rougher and a little darker). */
 const METAL_BARE = /* glsl */ `
-#define SS 4
 ${CDF_N}
 void gen(vec2 uv, inout Surf s) {
   float lo = fbm(uv, PM(3.0), 3, 3);
@@ -231,7 +229,7 @@ export const METAL_RECIPES: RecipeTable = {
     phys: phys(0.05, { det: 18, detS: 1 }),
   },
   [Mat.METAL_RUST]: {
-    glsl: METAL_RUST, normalStrength: 1.5, heightScale: 0.003, trim: [0.991, 1.0, 0.984], aux: 'wear',
+    glsl: METAL_RUST, normalStrength: 1.5, heightScale: 0.003, trim: [0.918, 0.947, 0.972], aux: 'wear',
     phys: phys(0.4, { det: 19, detS: 1, sigma: 0.5 }),
   },
   [Mat.METAL_GRATE]: {
