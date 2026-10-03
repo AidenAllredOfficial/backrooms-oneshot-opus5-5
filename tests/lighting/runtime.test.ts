@@ -458,6 +458,35 @@ describe('LightingRuntime', () => {
 
 // ---------------------------------------------------------------- anomaly director
 describe('anomaly director', () => {
+  it('releases light overrides and sparks when the clock rewinds or the storey changes', () => {
+    for (const change of ['rewind', 'storey']) {
+      const bus: GameBus = new EventBus<GameEvents>();
+      const scene = new THREE.Scene();
+      const rt = createLightingRuntime(scene, globals(), textures, QUALITY.high, DEFAULT_SETTINGS, bus);
+      const lay = createEmptyLayout({ s: 0, cx: 0, cz: 0 }, Zone.LOBBY, 1, Mood.NORMAL);
+      lay.ceilCm.fill(270);
+      lay.anomalies.push({ kind: AnomalyKind.SPARKING, x: 6, z: 6, r: 1, seed: 31337 });
+      const dyn = { id: 900, dynamic: true, px: 6.5, py: 2.68, pz: 6 } as unknown as FixtureRef['f'];
+      const w = world(Zone.LOBBY, Mood.NORMAL, new Map([['0:0', lay]]), [
+        { f: dyn, wx: 6.5, wy: 2.68, wz: 6, tileKey: '0:0:0:0' },
+      ]);
+      const dir = createAnomalyDirector(bus, rt, scene);
+      const p = player(4, 4);
+      let bin = 0;
+      while (Number.isNaN(sparkBurstTime(31337, bin))) bin++;
+      const burst = sparkBurstTime(31337, bin);
+      dir.update(burst - 0.01, 0, p, w);
+      dir.update(burst + 0.01, 0.02, p, w);
+      expect(rt.intensityOf(900)).toBe(0.2);
+      const mesh = scene.getObjectByName('sparks') as THREE.Mesh;
+      expect(mesh.geometry.drawRange.count).toBeGreaterThan(0);
+      if (change === 'storey') p.s = 1;
+      dir.update(change === 'rewind' ? 0 : burst + 0.02, 0.01, p, w);
+      expect(rt.intensityOf(900), change).toBe(1);
+      expect(mesh.geometry.drawRange.count, change).toBe(0);
+    }
+  });
+
   it('spark schedule is Poisson-like at ~1/8 s and deterministic', () => {
     let n = 0;
     for (let b = 0; b < 20000; b++) {

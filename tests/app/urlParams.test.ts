@@ -79,6 +79,10 @@ describe('every parameter parses', () => {
     const q = parse('yaw=1&yawDeg=90');
     expect(q.yaw).toBe(1);
     expect(q.warnings).toHaveLength(1);
+    const pitch = parse('pitch=0.5&pitchDeg=90');
+    expect(pitch.pitch).toBe(0.5);
+    expect(pitch.warnings).toEqual(['pitchDeg: ignored because pitch is given']);
+    expect(Number.isFinite(parse('yawDeg=1e308').yaw)).toBe(true);
   });
   it('goto targets (case-insensitive names) and zone shorthand', () => {
     expect(parse('goto=zone:poolrooms').goto).toBe('zone:POOLROOMS');
@@ -216,6 +220,11 @@ describe('helpers', () => {
     expect(p.x).toBeCloseTo(12.345, 1);
     expect(p.z).toBeCloseTo(-6.789, 1);
     expect(p.yaw).toBeCloseTo(1.2345, 2);
+  });
+  it('locationSearch preserves tower and elevator heights when supplied', () => {
+    const p = parse(locationSearch('tower', 2, 3, 4, 0.5, -0.2, -1.325));
+    expect(p).toMatchObject({ seedText: 'tower', s: 2, x: 3, z: 4, y: -1.325 });
+    expect(p.warnings).toEqual([]);
   });
 });
 

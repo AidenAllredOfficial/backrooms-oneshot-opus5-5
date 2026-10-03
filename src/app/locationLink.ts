@@ -1,11 +1,25 @@
 import { DEFAULT_SETTINGS } from '../core/settings.ts';
-import { parseLaunchParams } from './urlParams.ts';
+import { LANDMARK_NAMES, MOOD_NAMES, ZONE_NAMES } from '../core/ids.ts';
+import type { LaunchParams } from '../core/debug.ts';
+import type { PlayerState } from '../core/player.ts';
+import { locationSearch, parseLaunchParams } from './urlParams.ts';
 
 /** World and pose fields only. A pasted link never changes the player's video/audio controls. */
 export const LOCATION_KEYS = [
   'seed', 's', 'x', 'y', 'z', 'yaw', 'pitch', 'yawDeg', 'pitchDeg', 'goto', 'zone',
   'forceZone', 'forceMood', 'forceLandmark', 'testScene', 'lights',
 ] as const;
+
+/** Share the same generated world as well as its pose, including active generation overrides. */
+export function sharedLocationSearch(params: LaunchParams, pose: Pick<PlayerState, 's' | 'x' | 'y' | 'z' | 'yaw' | 'pitch'>): string {
+  const search = new URLSearchParams(locationSearch(params.seedText, pose.s, pose.x, pose.z, pose.yaw, pose.pitch, pose.y));
+  if (params.forceZone !== null) search.set('forceZone', ZONE_NAMES[params.forceZone]);
+  if (params.forceMood !== null) search.set('forceMood', MOOD_NAMES[params.forceMood]);
+  if (params.forceLandmark !== null) search.set('forceLandmark', LANDMARK_NAMES[params.forceLandmark]);
+  if (params.testScene !== null) search.set('testScene', params.testScene);
+  if (params.lights !== 'default') search.set('lights', params.lights);
+  return `?${search}`;
+}
 
 /** Read a shared URL or query string as location data, without navigating to its host. */
 export function locationLinkSearch(text: string): string {

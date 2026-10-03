@@ -43,13 +43,13 @@ import type {
 } from '../core/runtime.ts';
 import type { WorkerInit, WorkerRequest, WorkerResponse } from '../core/worker.ts';
 import {
-  CAPTURE_VIEW_Y, QUERY_PRIORITY, basePriority, createMotion, desiredChunks, fogHidden, inCaptureSet, jobPriority,
+  CAPTURE_VIEW_Y, QUERY_PRIORITY, basePriority, createMotion, desiredChunks, fogEnd, fogHidden, inCaptureSet, jobPriority,
   keepResident, lookahead, rectChebyshev, rectDistance, resetMotion, updateMotion,
 } from './priorities.ts';
 import type { JobType } from './priorities.ts';
 import { createTileUploader, setDoorMeshYaw, type TileGpu, type TileUploader, type UploaderMemory } from './TileObject.ts';
 import type { JobHandle, WorkerPool } from './WorkerPool.ts';
-import { chunkNumKey, createChunkData, createWorldQuery, StoreyData, type ChunkData } from './WorldQueryImpl.ts';
+import { chunkMapKey, createChunkData, createWorldQuery, StoreyData, type ChunkData, type ChunkMapKey } from './WorldQueryImpl.ts';
 
 export interface StreamerOptions {
   renderer: THREE.WebGLRenderer; materials: MaterialSystem; quality: QualityConfig; init: WorkerInit; bus: GameBus; pool: WorkerPool; startStorey: StoreyId;
@@ -156,7 +156,7 @@ const timings = new WeakMap<WorldStreamer, StreamTiming>();
 export const getStreamTiming = (st: WorldStreamer): StreamTiming | null => timings.get(st) ?? null;
 
 interface ChunkRec {
-  key: ChunkKey; ks: string; s: StoreyId; nk: number;
+  key: ChunkKey; ks: string; s: StoreyId; nk: ChunkMapKey;
   layoutJob: JobHandle<Extract<WorkerResponse, { t: 'layout' }>> | null;
   data: ChunkData | null;
   tiles: TileRec[];
@@ -234,7 +234,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   });
 
   // ---- records
-  const recs: Map<number, ChunkRec>[] = [new Map(), new Map(), new Map()];
+  const recs: Map<ChunkMapKey, ChunkRec>[] = [new Map(), new Map(), new Map()];
   const chunkList: ChunkRec[] = [];
   const tilesByKey = new Map<string, TileRec>();
   const doorPoses = new Map<string, number>();
@@ -501,13 +501,17 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   // The pool drops (never settles) every job on reinit. Queries do not depend on BakeQuality, so a quality change
   // must not strand a caller awaiting spawn()/findNearest(): pending queries are re-submitted after each reinit.
 
-  interface QueryRec { submit(): void }
+  interface QueryRec { submit(): void; cancel(): void }
   const queries = new Set<QueryRec>();
 
   function runQuery<T extends 'find' | 'spawn' | 'ascii'>(req: Extract<WorkerRequest, { t: T }>): Promise<Extract<WorkerResponse, { t: T }>> {
     return new Promise((resolve, reject) => {
       let current: JobHandle<Extract<WorkerResponse, { t: T }>> | null = null;
       const rec: QueryRec = {
+        cancel() {
+          current?.cancel();
+          current = null;
+        },
         submit() {
           const h = pool.submit<T>(req, QUERY_PRIORITY);
           current = h;
@@ -593,7 +597,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
   // ================================================================ records
 
   function ensureChunk(s: StoreyId, cx: number, cz: number): ChunkRec {
-    const nk = chunkNumKey(cx, cz);
+    const nk = chunkMapKey(cx, cz);
     let c = recs[s].get(nk);
     if (c && c.key.cx === cx && c.key.cz === cz) return c;
     const key: ChunkKey = { s, cx, cz };
@@ -710,7 +714,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     // of every chunk first: computeChunkPrio treats undesired chunks as prefetch groups)
     if (scope === 'capture') {
       for (let i = 0; i < n; i++) {
-        const c = recs[storey].get(chunkNumKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec;
+        const c = recs[storey].get(chunkMapKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec;
         computeChunkPrio(c);
         c.desired = c.gate;
       }
@@ -718,7 +722,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     chunksDesired = n;
     // jobs after every desired flag is final (priorities depend on it), nearest ring first
     for (let i = 0; i < n; i++) {
-      const c = recs[storey].get(chunkNumKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec;
+      const c = recs[storey].get(chunkMapKey(desiredScratch[i * 2], desiredScratch[i * 2 + 1])) as ChunkRec;
       if (c.desired) startJobs(c);
     }
     tStorey = storey;
@@ -1126,7 +1130,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       const cx = worldToChunk(x), cz = worldToChunk(z);
       for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
-          const c = recs[s].get(chunkNumKey(cx + dx, cz + dz));
+          const c = recs[s].get(chunkMapKey(cx + dx, cz + dz));
           if (!c || c.key.cx !== cx + dx || c.key.cz !== cz + dz) return false;
           if (!c.data) {
             if (c.failed) continue; // logged; a deterministic failure must not block a traversal forever
@@ -1186,7 +1190,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
       const r = Math.max(0, radiusChunks | 0);
       for (let dz = -r; dz <= r; dz++) {
         for (let dx = -r; dx <= r; dx++) {
-          const c = recs[storey].get(chunkNumKey(pcx + dx, pcz + dz));
+          const c = recs[storey].get(chunkMapKey(pcx + dx, pcz + dz));
           if (!c || c.key.cx !== pcx + dx || c.key.cz !== pcz + dz) return false;
           if (!c.data) {
             if (c.failed) continue; // logged loudly; never block readiness on a deterministic failure
@@ -1200,17 +1204,22 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
 
     isReadyNear(nearM, viewM, needFull) {
       if (Number.isNaN(pcx)) return false;
-      const own = recs[storey].get(chunkNumKey(pcx, pcz));
+      const own = recs[storey].get(chunkMapKey(pcx, pcz));
       if (!own || !(own.data || own.failed)) return false;
+      // The player gate only waits for work the current preset requests and can display. At radius 1 a 40 m
+      // view range reaches never-streamed ring-2 chunks near a chunk border, beyond the fully opaque edge fog.
+      const visibleReach = fogEnd(quality.streamRadius);
+      nearM = Math.min(nearM, visibleReach);
+      viewM = Math.min(viewM, visibleReach);
       const reach = Math.max(nearM, viewM);
-      const r = Math.ceil(reach / CHUNK_SIZE);
+      const r = Math.min(quality.streamRadius, Math.ceil(reach / CHUNK_SIZE));
       for (let dz = -r; dz <= r; dz++) {
         for (let dx = -r; dx <= r; dx++) {
           const cx = pcx + dx, cz = pcz + dz;
           const x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
           const d = rectDistance(px, pz, x0, z0, x0 + CHUNK_SIZE, z0 + CHUNK_SIZE);
           if (d > reach) continue;
-          const c = recs[storey].get(chunkNumKey(cx, cz));
+          const c = recs[storey].get(chunkMapKey(cx, cz));
           if (!c || c.key.cx !== cx || c.key.cz !== cz) return false;
           if (!c.data) { if (c.failed) continue; return false; }
           for (const t of c.tiles) {
@@ -1281,7 +1290,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     },
 
     chunkLoaded(k) {
-      const c = recs[k.s].get(chunkNumKey(k.cx, k.cz));
+      const c = recs[k.s].get(chunkMapKey(k.cx, k.cz));
       return c !== undefined && c.key.cx === k.cx && c.key.cz === k.cz && c.data !== null;
     },
 
@@ -1309,6 +1318,7 @@ export function createStreamerCore(o: StreamerCoreOptions): WorldStreamer {
     },
 
     dispose() {
+      for (const q of queries) q.cancel();
       queries.clear(); // like the pool's dropped jobs, pending queries never settle after dispose
       while (chunkList.length > 0) evictChunk(chunkList[chunkList.length - 1]);
       for (const d of disposeQ) {

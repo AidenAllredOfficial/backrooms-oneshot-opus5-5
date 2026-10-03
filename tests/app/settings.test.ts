@@ -219,6 +219,15 @@ describe('R2 (B7) settings', () => {
 });
 
 describe('R2 (B7) tape log', () => {
+  it('persists arbitrary seeds that match object prototype names', () => {
+    const st = new MemStorage();
+    const ts = createTapeLogStore(st);
+    for (const seed of ['__proto__', 'constructor', 'toString']) {
+      ts.save(seed, { zones: 3, landmarks: [0], storeys: 2, metres: 12.5, seconds: 10, updatedAt: 0 });
+      expect(createTapeLogStore(st).load(seed)).toMatchObject({ zones: 3, metres: 12.5, storeys: 2 });
+      expect(Object.hasOwn(JSON.parse(st.getItem(TAPE_LOG_KEY) as string), seed)).toBe(true);
+    }
+  });
   it('per-seed save / load; unknown seed = empty log', () => {
     const st = new MemStorage();
     const ts = createTapeLogStore(st);

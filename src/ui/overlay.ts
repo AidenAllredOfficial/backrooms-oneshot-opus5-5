@@ -60,6 +60,7 @@ export function createDebugOverlay(): DebugOverlay {
 
 export interface Hud {
   readonly el: HTMLElement;
+  setSeed(seedText: string): void;
   /** interactable targeted: a verb ('Try door') shows the OSD bracket + 'E  TRY DOOR'; null hides it */
   setCue(verb: string | null): void;
   /** brief feedback after pressing E ('Locked', 'Nothing here'); replaces the cue for `ms` */
@@ -116,6 +117,7 @@ export function createHud(seedText: string, onRecChange?: (on: boolean) => void)
   };
   return {
     el: root,
+    setSeed(value) { seedText = value; lastMin = -1; lastSec = -1; },
     setCue(verb) {
       if (verb === cueVerbCur) return;
       cueVerbCur = verb;

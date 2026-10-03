@@ -174,12 +174,16 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
   function clearTargets(): void {
     if (!targets || !renderer) return;
     const prevRT = renderer.getRenderTarget();
+    const prevFace = renderer.getActiveCubeFace(), prevLevel = renderer.getActiveMipmapLevel();
     renderer.getClearColor(clearColor);
     const prevAlpha = renderer.getClearAlpha();
-    renderer.setClearColor(0x000000, 0);
-    for (const rt of targets) { renderer.setRenderTarget(rt); renderer.clear(true, false, false); }
-    renderer.setClearColor(clearColor, prevAlpha);
-    renderer.setRenderTarget(prevRT);
+    try {
+      renderer.setClearColor(0x000000, 0);
+      for (const rt of targets) { renderer.setRenderTarget(rt); renderer.clear(true, false, false); }
+    } finally {
+      renderer.setClearColor(clearColor, prevAlpha);
+      renderer.setRenderTarget(prevRT, prevFace, prevLevel);
+    }
     pendShiftX = pendShiftZ = 0;
     texX = win.originX;
     texZ = win.originZ;
@@ -244,12 +248,16 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
     uniforms.uShift.value.set(first ? pendShiftX : 0, first ? pendShiftZ : 0);
     uniforms.uPrev.value = targets[cur].texture;
     const prevRT = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace(), prevLevel = r.getActiveMipmapLevel();
     const prevClear = r.autoClear;
-    r.autoClear = false; // the triangle covers every texel
-    r.setRenderTarget(targets[1 - cur]);
-    r.render(scene, cam);
-    r.setRenderTarget(prevRT);
-    r.autoClear = prevClear;
+    try {
+      r.autoClear = false; // the triangle covers every texel
+      r.setRenderTarget(targets[1 - cur]);
+      r.render(scene, cam);
+    } finally {
+      r.setRenderTarget(prevRT, prevFace, prevLevel);
+      r.autoClear = prevClear;
+    }
     cur = 1 - cur;
     if (first) { pending.length = 0; pendingFoam.length = 0; pendShiftX = pendShiftZ = 0; texX = win.originX; texZ = win.originZ; }
     steps++;
@@ -298,6 +306,15 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
     if (imp && pending.length < RIPPLE.MAX_IMPULSES) pending.push(imp);
   });
   const offTeleport = bus.on('teleport', () => { api.reset(); });
+  const offStorey = bus.on('storeyChanged', () => { api.reset(); });
+  const worldChanged = (): void => {
+    // A stationary window must see water and wall data arriving or leaving with the stream.
+    maskCi = maskCj = maskPlane = NaN;
+    scanWait = dripWait = 0;
+    uw.reset();
+  };
+  const offLoaded = bus.on('chunkLoaded', worldChanged);
+  const offUnloaded = bus.on('chunkUnloaded', worldChanged);
 
   const api: WaterRipples = {
     update(r, dtSim, t, st, world) {
@@ -354,8 +371,8 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
       if (active && dtSim > 0) {
         acc += dtSim;
         let n = Math.floor(acc / RIPPLE.DT);
-        if (n > RIPPLE.MAX_STEPS) { n = RIPPLE.MAX_STEPS; acc = RIPPLE.DT; }
         acc -= n * RIPPLE.DT;
+        n = Math.min(n, RIPPLE.MAX_STEPS); // drop excess whole steps, keep the interpolation remainder
         if (st.waterDepth > RIPPLE.WAKE_MIN_DEPTH && st.speed < RIPPLE.WAKE_MIN_SPEED && swayDue(lastSway, t)) {
           // idle sway: the body rocks back and forth, alternating pushes
           const sgn = Math.floor(t / RIPPLE.SWAY_PERIOD) % 2 === 0 ? 1 : -1;
@@ -418,6 +435,9 @@ export function createWaterRipples(globals: MaterialGlobals, q: QualityConfig, b
     dispose() {
       offFoot();
       offTeleport();
+      offStorey();
+      offLoaded();
+      offUnloaded();
       disposeTargets();
       uw.reset();
       mask.dispose();

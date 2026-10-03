@@ -4,6 +4,7 @@
 
 import './style.css';
 import { createLocationPanel, type LocationPanel, type LocationPanelCallbacks } from './locationPanel.ts';
+import { createCurtain } from './curtain.ts';
 import type { SettingsStore } from '../app/settingsStore.ts';
 import { el } from './dom.ts';
 import { createLoadingScreen, createPhaseList } from './loading.ts';
@@ -89,17 +90,9 @@ export function createUI(root: HTMLElement, o: UIOptions): UI {
   const PASS_KEYS = ['Escape', 'F3', 'F4'];
   window.addEventListener('keydown', (e) => { if (promptGo && !e.repeat && !PASS_KEYS.includes(e.code)) go(e); });
 
-  let fadeTimer = 0;
   return {
     layer, phases, loading, title, pause, settings, location: locationPanel, overlay, hud,
-    curtain(opacity, ms) {
-      clearTimeout(fadeTimer);
-      curtainEl.style.transition = ms > 0 ? `opacity ${ms}ms ease` : 'none';
-      // force the transition start from the current computed value
-      void curtainEl.offsetWidth;
-      curtainEl.style.opacity = String(opacity);
-      return new Promise((resolve) => { fadeTimer = window.setTimeout(resolve, Math.max(0, ms)); });
-    },
+    curtain: createCurtain(curtainEl),
     showPrompt(label, onGo) {
       promptText.textContent = label;
       promptGo = onGo;

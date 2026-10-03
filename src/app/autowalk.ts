@@ -34,18 +34,21 @@ function countEvents(core: AppCore): { footsteps: () => number; storeys: () => n
   return { footsteps: () => footsteps, storeys: () => storeys, dispose: () => { a(); b(); } };
 }
 
-let activeCancel: ((why: string) => void) | null = null;
+const activeWalks = new WeakMap<AppCore, { driver: InputDriver; cancel(why: string): void }>();
+
+/** Complete an active measurement before its world or frame hooks are replaced. */
+export function cancelWalk(core: AppCore, why = 'walk cancelled'): void { activeWalks.get(core)?.cancel(why); }
 
 function install(core: AppCore, driver: InputDriver, hook: (frameMs: number) => boolean, cancel: (why: string) => void): void {
-  activeCancel?.('superseded by a new walk');
-  activeCancel = cancel;
+  cancelWalk(core, 'superseded by a new walk');
+  activeWalks.set(core, { driver, cancel });
   core.driver = driver;
   core.hooks.push(hook);
 }
 
 function uninstall(core: AppCore, driver: InputDriver): void {
   if (core.driver === driver) core.driver = null;
-  activeCancel = null;
+  if (activeWalks.get(core)?.driver === driver) activeWalks.delete(core);
 }
 
 // ---------------------------------------------------------------- autowalk
@@ -121,6 +124,7 @@ export function runAutowalk(core: AppCore, o: { distance: number; speed?: number
     let cancelled = false;
     const hook = (frameMs: number): boolean => {
       if (cancelled) return true;
+      if (core.clock.paused || !core.debug.ready) return false;
       const p = s.player.state;
       const dx = p.x - px, dz = p.z - pz;
       const d = Math.sqrt(dx * dx + dz * dz);
@@ -214,6 +218,7 @@ export function runWalk(core: AppCore, path: { x: number; z: number }[], speed?:
     let cancelled = false;
     const hook = (frameMs: number): boolean => {
       if (cancelled) return true;
+      if (core.clock.paused || !core.debug.ready) return false;
       ms += frameMs;
       const p = pts[i];
       if (p) {

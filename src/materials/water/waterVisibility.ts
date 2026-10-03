@@ -56,9 +56,10 @@ export interface WaterVisibility {
 /** `now`: the wall clock in ms (injectable for tests). */
 export function createWaterVisibility(now: () => number = () => performance.now()): WaterVisibility {
   const free: WebGLQuery[] = [];
-  const pending: { q: WebGLQuery; at: number }[] = [];
+  const pending: { q: WebGLQuery; at: number; generation: number }[] = [];
   let active: WebGLQuery | null = null;
   let activeAt = 0;
+  let generation = 0, activeGeneration = 0;
   let lastSeen = -Infinity;
   let broken = false; // no query support: always visible
   const api: WaterVisibility = {
@@ -70,11 +71,12 @@ export function createWaterVisibility(now: () => number = () => performance.now(
       gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, q);
       active = q;
       activeAt = now();
+      activeGeneration = generation;
     },
     after(gl) {
       if (!active) return;
       gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
-      pending.push({ q: active, at: activeAt });
+      pending.push({ q: active, at: activeAt, generation: activeGeneration });
       active = null;
     },
     poll(gl) {
@@ -84,15 +86,16 @@ export function createWaterVisibility(now: () => number = () => performance.now(
       for (; n < pending.length; n++) {
         const p = pending[n];
         if (!gl.getQueryParameter(p.q, gl.QUERY_RESULT_AVAILABLE)) break;
-        if (gl.getQueryParameter(p.q, gl.QUERY_RESULT)) lastSeen = Math.max(lastSeen, p.at);
+        if (p.generation === generation && gl.getQueryParameter(p.q, gl.QUERY_RESULT)) lastSeen = Math.max(lastSeen, p.at);
         free.push(p.q);
       }
       if (n > 0) pending.splice(0, n);
-      if (pending.length > 0 && t - pending[0].at > WATER_VIS_TUNE.OVERDUE_MS) lastSeen = t;
+      if (pending.some((p) => p.generation === generation && t - p.at > WATER_VIS_TUNE.OVERDUE_MS)) lastSeen = t;
       return t - lastSeen <= WATER_VIS_TUNE.HOLD_MS;
     },
     reset() {
       lastSeen = -Infinity;
+      generation++;
     },
     get pending() { return pending.length; },
   };

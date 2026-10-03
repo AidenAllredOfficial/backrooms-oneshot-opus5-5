@@ -81,9 +81,16 @@ export function createInput(canvas: HTMLCanvasElement, settings: Settings): Inpu
     for (let i = 0; i < gps.length; i++) if (gps[i]?.connected) padsConnected++;
   } catch { /* getGamepads blocked (permissions policy) */ }
   const onPadOn = (): void => { padsConnected++; };
-  const onPadOff = (): void => { padsConnected = Math.max(0, padsConnected - 1); };
+  const resetPad = (): void => {
+    pad.a = pad.b = pad.x = pad.l3 = pad.start = pad.back = false;
+    padCrouchLatch = padSprintLatch = false;
+  };
+  const onPadOff = (): void => { padsConnected = Math.max(0, padsConnected - 1); resetPad(); };
   const autostart = (() => {
-    try { return new URLSearchParams(location.search).get('autostart') === '1'; } catch { return false; }
+    try {
+      const value = new URLSearchParams(location.search).get('autostart');
+      return value !== null && ['1', 'true', 'yes', 'on', ''].includes(value.trim().toLowerCase());
+    } catch { return false; }
   })();
 
   const isLocked = (): boolean => document.pointerLockElement === canvas;
@@ -94,12 +101,21 @@ export function createInput(canvas: HTMLCanvasElement, settings: Settings): Inpu
   };
   const typingTarget = (e: KeyboardEvent): boolean => {
     const t = e.target as HTMLElement | null;
-    return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    return !!t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
   };
 
   const onKeyDown = (e: KeyboardEvent): void => {
     if (typingTarget(e)) return;
     const c = e.code;
+    const chord = e.ctrlKey || e.metaKey;
+    if (isLocked()) {
+      if (isCtrl(c) && ctrlCrouchEnabled()) e.preventDefault();
+      // Ctrl+S / Ctrl+D / Ctrl+F ... would open a browser dialog and drop pointer lock mid-walk. The browser action
+      // is swallowed but WASD still move (a Ctrl held out of crouch habit must not freeze the player).
+      if (chord && GAME_LETTER_KEYS.has(c)) e.preventDefault();
+    }
+    if (chord && c === 'KeyC' && !ctrlCrouchEnabled()) return;
+    if (chord && GAME_LETTER_KEYS.has(c) && !MOVE_KEYS.has(c)) return;
     if (!e.repeat) {
       if (c === 'KeyF') flash = true;
       else if (c === 'KeyE') interact = true;
@@ -110,19 +126,16 @@ export function createInput(canvas: HTMLCanvasElement, settings: Settings): Inpu
       else if (c === 'F4') action('debugView');
     }
     if (c === 'F3' || c === 'F4' || c === 'Space' || c.startsWith('Arrow')) e.preventDefault();
-    const chord = e.ctrlKey || e.metaKey;
-    if (isLocked()) {
-      if (isCtrl(c) && ctrlCrouchEnabled()) e.preventDefault();
-      // Ctrl+S / Ctrl+D / Ctrl+F ... would open a browser dialog and drop pointer lock mid-walk. The browser action
-      // is swallowed but WASD still move (a Ctrl held out of crouch habit must not freeze the player).
-      if (chord && GAME_LETTER_KEYS.has(c)) e.preventDefault();
-    }
-    if (chord && c === 'KeyC' && !ctrlCrouchEnabled()) return; // Ctrl+C is not crouch (it is copy) outside fullscreen
-    if (chord && GAME_LETTER_KEYS.has(c) && !MOVE_KEYS.has(c)) return;
     down.add(c);
   };
   const onKeyUp = (e: KeyboardEvent): void => { down.delete(e.code); };
-  const onBlur = (): void => { down.clear(); };
+  const onBlur = (): void => {
+    down.clear();
+    dx = dy = 0;
+    flash = interact = sprintLatch = crouchLatch = false;
+    lastPoll = -1;
+    resetPad();
+  };
   const onMouseMove = (e: MouseEvent): void => {
     if (!isLocked() && !autostart) return;
     if (dropNextMove) { dropNextMove = false; return; }
@@ -130,7 +143,7 @@ export function createInput(canvas: HTMLCanvasElement, settings: Settings): Inpu
     dx += Math.max(-MAX_MOUSE_DELTA, Math.min(MAX_MOUSE_DELTA, mx));
     dy += Math.max(-MAX_MOUSE_DELTA, Math.min(MAX_MOUSE_DELTA, my));
   };
-  const onLockChange = (): void => { if (isLocked()) dropNextMove = true; else down.clear(); };
+  const onLockChange = (): void => { if (isLocked()) dropNextMove = true; else onBlur(); };
   const onClick = (): void => { if (!isLocked()) src.lock(); };
 
   // radial deadzone, rescaled so the output starts at 0 on the deadzone edge; result in dz[0], dz[1] (no allocation)
@@ -153,7 +166,7 @@ export function createInput(canvas: HTMLCanvasElement, settings: Settings): Inpu
       if (!g || !g.connected) continue;
       if (!gp || (g.mapping === 'standard' && gp.mapping !== 'standard')) gp = g;
     }
-    if (!gp) return;
+    if (!gp) { resetPad(); return; }
     const ax = gp.axes;
     deadzone(ax[0] ?? 0, ax[1] ?? 0);
     const lx = dz[0], ly = dz[1];

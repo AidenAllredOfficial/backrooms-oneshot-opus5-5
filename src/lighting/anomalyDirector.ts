@@ -54,6 +54,7 @@ export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, s
   const sparkEv: GameEvents['spark'] = { x: 0, y: 0, z: 0, strength: 0 };
   const anomalyEv: GameEvents['anomaly'] = { kind: '', phase: 'start', x: 0, z: 0 };
   let prevT = NaN;
+  let storey = -1;
   // spark dip
   let dipId = -1;
   let dipUntil = -1;
@@ -145,6 +146,11 @@ export function createAnomalyDirector(bus: GameBus, lighting: LightingRuntime, s
       sparks.update(Infinity);
     },
     update(t, dt, player, world) {
+      if (player.s !== storey || t < prevT) {
+        // A clock rewind or storey switch must not carry the previous view's lights or sparks into the new one.
+        this.reset();
+        storey = player.s;
+      }
       sparks.update(t);
       if (!(t > prevT) || t - prevT > 1) {
         // first frame, frozen/rewound clock or a long hitch: no retroactive bursts

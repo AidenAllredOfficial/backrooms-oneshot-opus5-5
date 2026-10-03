@@ -260,7 +260,8 @@ export interface WorldStreamer {
   isReady(radiusChunks: number, needFull: boolean): boolean;
   /** Player-facing readiness (boot / teleport gate): the chunk data (collision) of the player's chunk and every
    * current-storey tile within `nearM` metres of the player, or inside the view frustum within `viewM` metres, is
-   * resident (full-baked when needFull). Far tiles fade in afterwards behind the haze / edge fog. */
+   * resident (full-baked when needFull), limited to the preset's stream radius and edge-fog visibility.
+   * Far tiles fade in afterwards behind the haze / edge fog. */
   isReadyNear(nearM: number, viewM: number, needFull: boolean): boolean;
   isIdle(): boolean;
   /** radius change: re-desire; BakeQuality change: await pool.reinit(init) then rebuild everything */

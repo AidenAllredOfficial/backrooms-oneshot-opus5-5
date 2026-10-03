@@ -154,6 +154,18 @@ describe('findNearest', () => {
     expect(t.findSpawn(1).s).toBe(1);
     expect(t.towersNear(0, 0, 0).length).toBe(1);
   });
+
+  it('test scenes support clear-floor snapping at explicit coordinates', () => {
+    const t = createWorldGen(opts(1, { testScene: 'cornell' }));
+    const spawn = t.findSpawn(0);
+    const clear = t.findNearest('clear', { s: 0, x: spawn.x, z: spawn.z }, 2);
+    expect(clear).not.toBeNull();
+    expect(clear?.reason).toContain('clear:');
+    const { l, c } = cellOf(t, clear as SpawnPoint);
+    expect(cellWalkable(l, c)).toBe(true);
+    expect(clear?.y).toBe(l.floorCm[c] / 100);
+    expect(t.findNearest('clear', { s: 0, x: clear!.x, z: clear!.z }, 2)).toMatchObject({ x: clear!.x, z: clear!.z });
+  });
 });
 
 describe('QA views (R2 B9)', () => {

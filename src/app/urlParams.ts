@@ -243,12 +243,13 @@ export function parseLaunchParams(search: string, settings: Settings, randomSeed
   const yaw = num('yaw');
   const yawDeg = num('yawDeg');
   if (yaw !== null) out.yaw = yaw;
-  else if (yawDeg !== null) out.yaw = (yawDeg * Math.PI) / 180;
+  else if (yawDeg !== null) out.yaw = (yawDeg / 180) * Math.PI;
   if (yaw !== null && yawDeg !== null) w.push('yawDeg: ignored because yaw is given');
   const pitch = num('pitch');
   const pitchDeg = num('pitchDeg');
-  const pRad = pitch ?? (pitchDeg === null ? null : (pitchDeg * Math.PI) / 180);
+  const pRad = pitch ?? (pitchDeg === null ? null : (pitchDeg / 180) * Math.PI);
   out.pitch = clampNum(pitch !== null ? 'pitch' : 'pitchDeg', pRad, LIMITS.pitch[0], LIMITS.pitch[1]);
+  if (pitch !== null && pitchDeg !== null) w.push('pitchDeg: ignored because pitch is given');
   out.fov = clampNum('fov', num('fov'), LIMITS.fov[0], LIMITS.fov[1]);
 
   // ---- destinations
@@ -326,13 +327,14 @@ export function parseLaunchParams(search: string, settings: Settings, randomSeed
   return out;
 }
 
-/** Inverse for the pause menu's "Copy location link" (seed/s/x/z/yaw/pitch). */
-export function locationSearch(seedText: string, s: StoreyId, x: number, z: number, yaw: number, pitch: number): string {
+/** Inverse for the pause menu's "Copy location link". Height is optional for older callers. */
+export function locationSearch(seedText: string, s: StoreyId, x: number, z: number, yaw: number, pitch: number, y?: number): string {
   const p = new URLSearchParams();
   p.set('seed', seedText);
   p.set('s', String(s));
   p.set('x', x.toFixed(2));
   p.set('z', z.toFixed(2));
+  if (y !== undefined && Number.isFinite(y)) p.set('y', y.toFixed(3));
   p.set('yaw', yaw.toFixed(3));
   p.set('pitch', pitch.toFixed(3));
   return `?${p.toString()}`;

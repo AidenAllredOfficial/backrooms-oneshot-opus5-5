@@ -5,7 +5,7 @@
 // up. A RADIO cycles stations on interact (R2): each press sweeps the dial (the tuning one-shot plays over a 0.5 s gap)
 // onto the next of its 4 station renders; the press after the last station switches it off, the next one back on.
 
-import { hash3 } from '../core/rng.ts';
+import { hash4 } from '../core/rng.ts';
 import { EmitterKind, type EmitterKindId } from '../core/ids.ts';
 import type { EmitterRef, WorldQuery } from '../core/runtime.ts';
 import { synthKey, type SynthRequest } from './dsp/dispatch.ts';
@@ -23,11 +23,12 @@ const LOOP_S = 8;
 const LEVEL: readonly number[] = [0.3, 0.16, 0.2, 0.16, 0.25, 0.22, 0.2, 0.5, 0.14];
 const NAMES: readonly string[] = ['DRIP', 'VENT', 'PIPE', 'MACHINE', 'WATER', 'STEAM', 'RADIO', 'PHONE', 'BUZZ'];
 
-const emitterKey = (kind: number, x: number, z: number): number => hash3(kind, Math.round(x * 4), Math.round(z * 4));
+const emitterKey = (storey: number, kind: number, x: number, z: number): number => hash4(storey, kind, Math.round(x * 4), Math.round(z * 4));
 
 class Slot {
   key = -1;
   kind = 0;
+  storey = 0;
   x = 0; y = 0; z = 0;
   seed = 0;
   level = 0;
@@ -83,7 +84,7 @@ export class Emitters {
       const eu = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const phone = kind === EmitterKind.PHONE;
       if (eu > (phone ? PHONE_RANGE : RANGE)) continue;
-      const key = emitterKey(kind, ref.wx, ref.wz);
+      const key = emitterKey(world.storey, kind, ref.wx, ref.wz);
       if (this.stopped.has(key)) continue;
       if (phone && Math.hypot(dx, dz) <= PHONE_STOP) {
         this.stopped.add(key);
@@ -117,7 +118,7 @@ export class Emitters {
       const s = this.free();
       if (!s) break;
       const ref = this.refs[this.cIdx[k]];
-      if (this.start(s, ref, this.cKey[k])) this.cPick[k] = 2;
+      if (this.start(s, ref, this.cKey[k], world.storey)) this.cPick[k] = 2;
     }
     for (const s of this.slots) {
       if (s.key < 0 || !s.voice) continue;
@@ -131,13 +132,13 @@ export class Emitters {
     return null;
   }
 
-  private start(s: Slot, ref: EmitterRef, key: number): boolean {
+  private start(s: Slot, ref: EmitterRef, key: number, storey: number): boolean {
     const env = this.env;
     const kind = ref.e.kind;
     const variant = ((ref.e.seed >>> 0) + (this.station.get(key) ?? 0)) & 3;
     const buf = env.bank.ensure(Emitters.request(kind, variant, env.mains), 3);
     if (!buf) return false;
-    s.key = key; s.kind = kind; s.x = ref.wx; s.y = ref.wy; s.z = ref.wz; s.seed = ref.e.seed;
+    s.key = key; s.kind = kind; s.storey = storey; s.x = ref.wx; s.y = ref.wy; s.z = ref.wz; s.seed = ref.e.seed;
     const phone = kind === EmitterKind.PHONE;
     const v = new Voice(env.ctx, env.graph.buses[kind === EmitterKind.WATER || kind === EmitterKind.DRIP ? 'water' : 'amb'], {
       hrtf: env.hrtf, rolloff: phone ? 0.5 : 1,
@@ -149,6 +150,8 @@ export class Emitters {
     s.srcGain = env.ctx.createGain();
     s.srcGain.connect(v.gain);
     s.src = startLoop(env.ctx, buf, s.srcGain, rate, phone ? 0 : unit(s.seed, 22));
+    const sourceGain = s.srcGain;
+    s.src.onended = (): void => { sourceGain.disconnect(); };
     s.rate = env.graph.registerRate(s.src.playbackRate, rate);
     v.level = (LEVEL[kind] ?? 0.2) * Math.max(0.05, ref.e.gain);
     env.spatial.resolve(s.x, s.y, s.z, s.res);
@@ -162,30 +165,33 @@ export class Emitters {
     const env = this.env;
     if (s.voice) s.voice.release(fade);
     stopSource(s.src, env.ctx.currentTime + fade + 0.02);
+    if (!s.src) s.srcGain?.disconnect(); // a retuned station may still be waiting for its buffer
     env.graph.unregisterRate(s.rate);
     s.rate = null; s.voice = null; s.src = null; s.srcGain = null; s.key = -1;
   }
 
-  /** Nearest RADIO within r of (x, z): a voiced slot, else a resident emitter. Key -1 when none. */
-  private nearestRadio(x: number, z: number, r: number): { key: number; seed: number; slot: Slot | null } {
-    let best: Slot | null = null, bd = r * r;
+  /** Nearest resident emitter, including candidates that have no allocated voice. */
+  private nearest(kind: EmitterKindId, x: number, z: number, r: number): { key: number; seed: number; slot: Slot | null } {
+    const world = this.env.spatial.world;
+    const storey = world?.storey ?? 0;
+    let key = -1, seed = 0, best: Slot | null = null, bd = r * r;
     for (const s of this.slots) {
-      if (s.key < 0 || s.kind !== EmitterKind.RADIO) continue;
+      if (s.key < 0 || s.kind !== kind || s.storey !== storey) continue;
       const d = (s.x - x) * (s.x - x) + (s.z - z) * (s.z - z);
-      if (d <= bd) { bd = d; best = s; }
+      if (d <= bd) { bd = d; key = s.key; seed = s.seed; best = s; }
     }
-    if (best) return { key: best.key, seed: best.seed, slot: best };
-    const w = this.env.spatial.world;
-    if (!w) return { key: -1, seed: 0, slot: null };
-    const n = w.emittersNear(x, z, r, this.refs);
-    let bk = -1, seed = 0, bdd = Infinity;
-    for (let i = 0; i < n && i < this.refs.length; i++) {
-      const e = this.refs[i];
-      if (e.e.kind !== EmitterKind.RADIO) continue;
-      const d = (e.wx - x) * (e.wx - x) + (e.wz - z) * (e.wz - z);
-      if (d < bdd) { bdd = d; bk = emitterKey(EmitterKind.RADIO, e.wx, e.wz); seed = e.e.seed; }
+    if (world) {
+      const n = world.emittersNear(x, z, r, this.refs);
+      for (let i = 0; i < n && i < this.refs.length; i++) {
+        const e = this.refs[i];
+        if (e.e.kind !== kind) continue;
+        const d = (e.wx - x) * (e.wx - x) + (e.wz - z) * (e.wz - z);
+        if (d > bd) continue;
+        bd = d; key = emitterKey(storey, kind, e.wx, e.wz); seed = e.e.seed;
+        best = this.slots.find((s) => s.key === key) ?? null;
+      }
     }
-    return { key: bk, seed, slot: null };
+    return { key, seed, slot: best };
   }
 
   /** Radio interaction (see header): 'tune' = moved to the next station (the new one starts after TUNE_GAP),
@@ -193,7 +199,7 @@ export class Emitters {
    * 'none' = no radio within r. */
   cycleRadio(x: number, z: number, r: number): RadioAction {
     const env = this.env;
-    const hit = this.nearestRadio(x, z, r);
+    const hit = this.nearest(EmitterKind.RADIO, x, z, r);
     if (hit.key < 0) return 'none';
     const key = hit.key;
     if (this.stopped.has(key)) {
@@ -236,6 +242,7 @@ export class Emitters {
       if (s.key !== key || s.srcGain !== g) return; // released or retuned again meanwhile
       const at = Math.max(env.ctx.currentTime, t + TUNE_GAP);
       s.src = startLoop(env.ctx, buf, g, 1, unit(s.seed + next, 22));
+      s.src.onended = (): void => { g.disconnect(); };
       s.rate = env.graph.registerRate(s.src.playbackRate, 1);
       g.gain.setValueAtTime(0, at);
       g.gain.linearRampToValueAtTime(1, at + 0.15);
@@ -248,29 +255,10 @@ export class Emitters {
 
   /** Stop (for good) the nearest emitter of `kind` within r of (x, z): phone picked up, radio switched off. */
   silenceNearest(kind: EmitterKindId, x: number, z: number, r: number): void {
-    let best: Slot | null = null, bd = r * r;
-    for (const s of this.slots) {
-      if (s.key < 0 || s.kind !== kind) continue;
-      const d = (s.x - x) * (s.x - x) + (s.z - z) * (s.z - z);
-      if (d <= bd) { bd = d; best = s; }
-    }
-    if (best) {
-      this.stopped.add(best.key);
-      this.release(best, 0.06);
-      return;
-    }
-    // not voiced right now: remember the nearest candidate so it never starts
-    const w = this.env.spatial.world;
-    if (!w) return;
-    const n = w.emittersNear(x, z, r, this.refs);
-    let bk = -1, bdd = Infinity;
-    for (let i = 0; i < n && i < this.refs.length; i++) {
-      const e = this.refs[i];
-      if (e.e.kind !== kind) continue;
-      const d = (e.wx - x) * (e.wx - x) + (e.wz - z) * (e.wz - z);
-      if (d < bdd) { bdd = d; bk = emitterKey(kind, e.wx, e.wz); }
-    }
-    if (bk >= 0) this.stopped.add(bk);
+    const hit = this.nearest(kind, x, z, r);
+    if (hit.key < 0) return;
+    this.stopped.add(hit.key);
+    if (hit.slot) this.release(hit.slot, 0.06);
   }
 
   stopAll(fade: number): void { for (const s of this.slots) if (s.key >= 0) this.release(s, fade); }

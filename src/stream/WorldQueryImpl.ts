@@ -13,7 +13,7 @@
 // are expanded by PLAYER.radius). It finds rendered surfaces: SolidFlag.VIRTUAL boxes (the keep-out column over a
 // deep-water NOWALK cell, a pit's catch floor) are skipped, and a NOWALK cell keeps its floor plane (the pool bottom).
 
-import { CELL, CHUNK_CELLS, CHUNK_SIZE, PLAYER, STD_CEIL_CM, STOREY_PITCH, TOWER_SPAN, WALL_T } from '../core/constants.ts';
+import { CELL, CHUNK_CELL_COUNT, CHUNK_CELLS, CHUNK_SIZE, PLAYER, STD_CEIL_CM, STOREY_PITCH, TOWER_SPAN, WALL_T } from '../core/constants.ts';
 import { EDGE_SOUND, edgeOccludesAt } from '../core/edges.ts';
 import {
   cellToChunk, exIdx, ezIdx, tileKeyStr, tileOfPoint, worldToCell, type ChunkKey,
@@ -44,9 +44,12 @@ export interface ChunkData {
   readonly towers: readonly number[]; // towerGroups(layout): bakeGroups of periodic tower content (cached: no per-query alloc)
 }
 
-/** Smi-range numeric key (no string allocation on lookups). Collides only for chunks 32768 apart; the stored
- * key is verified on lookup. */
-export const chunkNumKey = (cx: number, cz: number): number => (cx & 0x7fff) * 0x8000 + (cz & 0x7fff);
+export type ChunkMapKey = number | string;
+/** Nearby chunks use a Smi key without allocating. Distant coordinates use their full coordinates so a
+ * teleport or portal can keep both destinations resident without overwriting chunks 32768 apart. */
+export const chunkMapKey = (cx: number, cz: number): ChunkMapKey =>
+  cx >= -16384 && cx < 16384 && cz >= -16384 && cz < 16384
+    ? (cx & 0x7fff) * 0x8000 + (cz & 0x7fff) : `${cx}:${cz}`;
 
 export function createChunkData(layout: ChunkLayout, collision: ChunkCollision): ChunkData {
   const k = layout.key;
@@ -78,10 +81,11 @@ export function createChunkData(layout: ChunkLayout, collision: ChunkCollision):
 
 /** One storey's query data set: registered chunk data by (cx, cz). */
 export class StoreyData {
-  readonly map = new Map<number, ChunkData>();
+  readonly map = new Map<ChunkMapKey, ChunkData>();
   private lastCx = NaN;
   private lastCz = NaN;
   private last: ChunkData | null = null;
+  private stampId = 0;
   // chunk-coordinate bounds of the registered chunks (lazy; range queries clamp to them, so a huge or non-finite
   // radius can never turn into an unbounded loop)
   private bDirty = true;
@@ -107,26 +111,35 @@ export class StoreyData {
 
   get(cx: number, cz: number): ChunkData | null {
     if (cx === this.lastCx && cz === this.lastCz) return this.last;
-    const d = this.map.get(chunkNumKey(cx, cz));
+    const d = this.map.get(chunkMapKey(cx, cz));
     const r = d !== undefined && d.key.cx === cx && d.key.cz === cz ? d : null;
     this.lastCx = cx; this.lastCz = cz; this.last = r;
     return r;
   }
   set(d: ChunkData): void {
-    this.map.set(chunkNumKey(d.key.cx, d.key.cz), d);
+    this.map.set(chunkMapKey(d.key.cx, d.key.cz), d);
     this.lastCx = NaN;
     this.bDirty = true;
   }
   delete(cx: number, cz: number): boolean {
     const d = this.get(cx, cz);
     if (!d) return false;
-    this.map.delete(chunkNumKey(cx, cz));
+    this.map.delete(chunkMapKey(cx, cz));
     this.lastCx = NaN;
     this.bDirty = true;
     return true;
   }
   get size(): number { return this.map.size; }
   clear(): void { this.map.clear(); this.lastCx = NaN; this.bDirty = true; }
+  /** Queries over the same data share a stamp sequence so their box deduplication cannot alias. */
+  nextStamp(): number {
+    this.stampId = (this.stampId + 1) >>> 0;
+    if (this.stampId === 0) {
+      for (const d of this.map.values()) d.stamp.fill(0);
+      this.stampId = 1;
+    }
+    return this.stampId;
+  }
 }
 
 // ---------------------------------------------------------------- helpers
@@ -182,12 +195,7 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
   const dataOf = (): StoreyData => deps.data(deps.storey());
   /** A fresh per-box dedupe stamp (boxesNear, raycast). */
   const nextStamp = (): void => {
-    stampId = (stampId + 1) >>> 0;
-    if (stampId === 0) {
-      // wrapped: clear every stamp so stale ids cannot alias
-      for (const s of [0, 1, 2] as StoreyId[]) for (const d of deps.data(s).map.values()) d.stamp.fill(0);
-      stampId = 1;
-    }
+    stampId = dataOf().nextStamp();
   };
 
   const locateCell = (gi: number, gj: number): ChunkData | null => {
@@ -296,6 +304,16 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
     // clamped to the registered chunks: huge / infinite ranges stay bounded; NaN ranges visit nothing
     const cx0 = Math.max(cellToChunk(worldToCell(x0)), sd.minCx), cx1 = Math.min(cellToChunk(worldToCell(x1)), sd.maxCx);
     const cz0 = Math.max(cellToChunk(worldToCell(z0)), sd.minCz), cz1 = Math.min(cellToChunk(worldToCell(z1)), sd.maxCz);
+    if (!(cx0 <= cx1 && cz0 <= cz1)) return;
+    // Bounds alone do not bound work when a portal keeps distant chunks resident. Scan loaded chunks instead
+    // of the empty space between them for large or sparse ranges.
+    if ((cx1 - cx0 + 1) * (cz1 - cz0 + 1) > sd.size * 4) {
+      for (const d of sd.map.values()) {
+        if (d.key.cx < cx0 || d.key.cx > cx1 || d.key.cz < cz0 || d.key.cz > cz1) continue;
+        if (!fn(d)) return;
+      }
+      return;
+    }
     for (let cz = cz0; cz <= cz1; cz++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         const d = sd.get(cx, cz);
@@ -636,6 +654,22 @@ export function createWorldQuery(deps: WorldQueryDeps): WorldQuery {
       const gi0 = Math.max(worldToCell(x - r), sd.minCx * CHUNK_CELLS), gi1 = Math.min(worldToCell(x + r), sd.maxCx * CHUNK_CELLS + CHUNK_CELLS - 1);
       const gj0 = Math.max(worldToCell(z - r), sd.minCz * CHUNK_CELLS), gj1 = Math.min(worldToCell(z + r), sd.maxCz * CHUNK_CELLS + CHUNK_CELLS - 1);
       const rr = r * r;
+      if (!(gi0 <= gi1 && gj0 <= gj1)) return 0;
+      if ((gi1 - gi0 + 1) * (gj1 - gj0 + 1) > sd.size * CHUNK_CELL_COUNT) {
+        for (const d of sd.map.values()) {
+          const b = d.collision.boxes;
+          for (let o = 0; o < b.length; o += 6) {
+            const x0 = b[o] + d.ox, z0 = b[o + 2] + d.oz, x1 = b[o + 3] + d.ox, z1 = b[o + 5] + d.oz;
+            const ddx = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
+            const ddz = z < z0 ? z0 - z : z > z1 ? z - z1 : 0;
+            if (ddx * ddx + ddz * ddz > rr) continue;
+            if (n >= cap) return n;
+            const w = n++ * 6;
+            out[w] = x0; out[w + 1] = b[o + 1]; out[w + 2] = z0; out[w + 3] = x1; out[w + 4] = b[o + 4]; out[w + 5] = z1;
+          }
+        }
+        return n;
+      }
       for (let gj = gj0; gj <= gj1; gj++) {
         for (let gi = gi0; gi <= gi1; gi++) {
           const d = locateCell(gi, gj);

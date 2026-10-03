@@ -340,7 +340,8 @@ export function createLoop(core: AppCore, onFrame: (frameMs: number) => void): L
       let timeScale = 1;
       if (core.driver) {
         s.input.poll(drain);
-        core.driver.drive(st, query, input, realDt);
+        clearInput(input);
+        if (!clock.paused) core.driver.drive(st, query, input, realDt);
         timeScale = core.driver.timeScale;
       } else if (playing) {
         s.input.poll(input);

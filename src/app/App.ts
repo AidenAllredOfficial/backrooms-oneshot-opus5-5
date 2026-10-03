@@ -54,8 +54,9 @@ import { isIntegratedRenderer, rendererString, resolveQuality, resolveQualityNam
 import { UnsupportedError, createRenderer, pixelRatioFor, primeGpuContext } from './renderer.ts';
 import { createSettingsStore } from './settingsStore.ts';
 import type { SettingsStore } from './settingsStore.ts';
-import { LOCATION_KEYS, locationLinkSearch } from './locationLink.ts';
+import { LOCATION_KEYS, locationLinkSearch, sharedLocationSearch } from './locationLink.ts';
 import { loadRefusal, locationSearch, parseLaunchParams, worldChanged } from './urlParams.ts';
+import { cancelWalk } from './autowalk.ts';
 import { createDynamicResolution } from '../post/DynamicResolution.ts';
 import { getCaptureControl } from '../stream/ChunkStreamer.ts';
 
@@ -124,8 +125,11 @@ export function createApp(root: HTMLElement): App {
   const continueStore = createContinueStore(local);
   const tapeStore = createTapeLogStore(local);
   const params = parseLaunchParams(location.search, settings.get(), randomSeedText());
-  const enterOnReady = session?.getItem(ENTER_FLAG) === '1' && !params.autostart;
-  session?.removeItem(ENTER_FLAG);
+  let enterOnReady = false;
+  try {
+    enterOnReady = session?.getItem(ENTER_FLAG) === '1' && !params.autostart;
+    session?.removeItem(ENTER_FLAG);
+  } catch { /* storage may become unavailable after the initial probe */ }
 
   const origConsoleError = console.error.bind(console);
   let logEvent: ((line: string) => void) | null = null; // the debug API's events() log, once it exists
@@ -428,6 +432,7 @@ export function createApp(root: HTMLElement): App {
     audioGainTarget = audioStarted ? TITLE_GAIN : 0;
     core.sys?.audio.setPaused(true); // the title hears the muffled distance
     ui.hud.hideTransient();
+    cancelWalk(core, 'returned to title');
     setMode('title');
     core.attract = createAutopilot((hashString(params.seedText) ^ 0x5eed) >>> 0, () => core.clock.t);
     if (document.pointerLockElement) document.exitPointerLock();
@@ -436,14 +441,14 @@ export function createApp(root: HTMLElement): App {
   };
 
   const reloadWith = (search: string, enter: boolean): void => {
-    if (enter) session?.setItem(ENTER_FLAG, '1');
+    try { if (enter) session?.setItem(ENTER_FLAG, '1'); } catch { /* private mode */ }
     leaving = true;
     location.search = search;
   };
 
   let changingTape = false;
   const changeTape = async (search: string): Promise<void> => {
-    if (changingTape || lost) return;
+    if (changingTape || loadingShot || lost) return;
     changingTape = true;
     try {
       // Keep the current video/audio controls, replacing only world and starting-position parameters.
@@ -461,6 +466,7 @@ export function createApp(root: HTMLElement): App {
       saveContinue();
       setMode('entering');
       core.attract = null;
+      cancelWalk(core, 'world changed');
       core.driver = null;
       ui.title.hide(); ui.pause.hide(); ui.hidePrompt(); ui.hud.hideTransient();
       core.clock.paused = true;
@@ -473,6 +479,7 @@ export function createApp(root: HTMLElement): App {
       settings.set({ lastSeed: params.seedText });
       history.replaceState(null, '', `?${next}`);
       ui.title.setSeed(params.seedText, storeyTitle(params.s ?? 0));
+      ui.hud.setSeed(params.seedText);
       ui.phases.reset();
       ui.phases.setPhase('world');
       ui.loading.show(ui.phases, params.seedText);
@@ -546,10 +553,13 @@ export function createApp(root: HTMLElement): App {
       core.debug.readyPhase = 'spawn';
       const newWorld = worldChanged(params, next);
       Object.assign(params, next); // the new shot's params, warnings included (stats().warnings is per shot)
+      ui.title.setSeed(params.seedText, storeyTitle(params.s ?? 0));
+      ui.hud.setSeed(params.seedText);
       core.warnings.length = 0;
       core.errors.length = 0;
       handle.resetLog();
       // everything the debug API and evals can change, as a fresh boot of this preset has it
+      cancelWalk(core, 'shot loaded');
       core.driver = null;
       core.attract = null;
       core.hooks.length = 0;
@@ -602,7 +612,7 @@ export function createApp(root: HTMLElement): App {
   /** Reload at the player's current place (lost GPU context): same seed, storey, position and view. */
   const resumeHere = (): void => {
     const st = core.sys?.player.state;
-    let search = st ? locationSearch(params.seedText, st.s, st.x, st.z, st.yaw, st.pitch) : `?seed=${encodeURIComponent(params.seedText)}`;
+    let search = st ? sharedLocationSearch(params, st) : `?seed=${encodeURIComponent(params.seedText)}`;
     const cur = new URLSearchParams(location.search);
     const keep = new URLSearchParams();
     for (const k of RESUME_KEEP) { const v = cur.get(k); if (v !== null) keep.set(k, v); }
@@ -617,6 +627,7 @@ export function createApp(root: HTMLElement): App {
     lostWhilePlaying = mode === 'play' || mode === 'paused' || mode === 'entering';
     core.renderer?.setAnimationLoop(null); // nothing runs (player, streamer, audio updates) until the reload
     core.clock.paused = true;
+    cancelWalk(core, 'GPU context lost');
     core.driver = null;
     const s = core.sys;
     if (s) {
@@ -657,8 +668,9 @@ export function createApp(root: HTMLElement): App {
     if (!audioStarted) { startAudio(); audioGainTarget = 1; humAt = performance.now(); }
     s.audio.setPaused(false);
     const st = s.player.state;
-    const target: TeleportTarget = dest ?? { x: s.spawn.x, z: s.spawn.z, s: s.spawn.s, yaw: s.spawn.yaw, pitch: s.spawn.pitch };
-    if (dest !== null || Math.hypot(st.x - target.x, st.z - target.z) > 0.25 || st.s !== target.s) {
+    const target: TeleportTarget = dest ?? { x: s.spawn.x, y: s.spawn.y, z: s.spawn.z, s: s.spawn.s, yaw: s.spawn.yaw, pitch: s.spawn.pitch };
+    if (dest !== null || Math.hypot(st.x - target.x, st.z - target.z) > 0.25 || st.s !== target.s ||
+      (target.y !== undefined && Number.isFinite(target.y) && Math.abs(st.y - target.y) > 0.01)) {
       await teleportPlayer(core, target);
     }
     const wait = humAt + HUM_LEAD_MS - performance.now();
@@ -670,7 +682,9 @@ export function createApp(root: HTMLElement): App {
     if (!s.input.locked) ui.showPrompt('Click to look around', () => s.input.lock());
     // the tape opens on where you are; first play also gets the controls strip
     disc.capZone = -1; disc.capS = -1; disc.candT = 0; disc.lastS = -1;
-    if (params.hud && local?.getItem(ONBOARD_KEY) !== '1') {
+    let onboarded = false;
+    try { onboarded = local?.getItem(ONBOARD_KEY) === '1'; } catch { /* private mode */ }
+    if (params.hud && !onboarded) {
       setTimeout(() => {
         if (mode !== 'play' && mode !== 'paused') return;
         ui.hud.hint(ONBOARD_TEXT, ONBOARD_MS);
@@ -692,7 +706,7 @@ export function createApp(root: HTMLElement): App {
           void enter({ x: cp.x, y: cp.y, z: cp.z, s: cp.s, yaw: cp.yaw, pitch: 0 }).catch((e: unknown) => core.fail(e));
         } else {
           settings.set({ lastSeed: cp.seedText });
-          void changeTape(locationSearch(cp.seedText, cp.s, cp.x, cp.z, cp.yaw, 0)).catch(() => undefined);
+          void changeTape(locationSearch(cp.seedText, cp.s, cp.x, cp.z, cp.yaw, 0, cp.y)).catch(() => undefined);
         }
       },
       onSeed: (seed) => {
@@ -725,7 +739,7 @@ export function createApp(root: HTMLElement): App {
       locationLink: () => {
         const st = core.sys?.player.state;
         if (!st) return location.href;
-        return `${location.origin}${location.pathname}${locationSearch(params.seedText, st.s, st.x, st.z, st.yaw, st.pitch)}`;
+        return `${location.origin}${location.pathname}${sharedLocationSearch(params, st)}`;
       },
       onQuit: quitToTitle,
       sound: uiSound,

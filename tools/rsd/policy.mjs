@@ -10,8 +10,10 @@ import { LONG_PRESETS, NO_MEMO_PRESETS, parseSize } from '../lib/capture.mjs';
  * `r`: the request ({ size, wait, evals, qa }).
  */
 export function canonicalShot(shot, search, r) {
-  const p = [...new URLSearchParams(search)].filter(([k]) => k !== 'autostart' && k !== 'noprime')
-    .map(([k, v]) => `${k}=${v}`).sort();
+  const params = new URLSearchParams(search);
+  // sort() keeps duplicate values in order: the game reads the first occurrence.
+  params.sort();
+  const p = [...params].filter(([k]) => k !== 'autostart' && k !== 'noprime');
   const { width, height } = parseSize(shot.size ?? r.size);
   return [p, shot.page ?? '', `${width}x${height}`, shot.wait ?? r.wait ?? null, r.evals ?? [], shot.eval ?? [], shot.captures ?? null,
     shot.expect ?? null, shot.diff ?? null, !!r.qa, new URLSearchParams(String(shot.params ?? '')).get('autostart') === '0'];

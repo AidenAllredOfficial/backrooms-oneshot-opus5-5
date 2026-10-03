@@ -51,6 +51,24 @@ function input(n: number, x: number, z: number, d: [number, number, number], dt 
 }
 
 describe('flashlight bounce', () => {
+  it('keeps unit cone rays when the right vector is parallel to a vertical beam or the axis is zero', () => {
+    for (const vertical of [true, false]) {
+      const w = world();
+      const raycast = w.raycast!;
+      const directions: number[][] = [];
+      w.raycast = (ox, oy, oz, dx, dy, dz, range, hit) => {
+        directions.push([dx, dy, dz]);
+        return raycast(ox, oy, oz, dx, dy, dz, range, hit);
+      };
+      const inp = input(8, 3, 20, vertical ? [0, -1, 0] : [0, 0, 0]);
+      inp.rx = 0; inp.ry = -1; inp.rz = 0;
+      createFlashlightBounce().update(inp, w, uniforms());
+      expect(directions).toHaveLength(8);
+      for (const d of directions) expect(Math.hypot(...d)).toBeCloseTo(1, 12);
+      expect(new Set(directions.map((d) => d.join(','))).size).toBe(8);
+    }
+  });
+
   it('bins: 1 / 4 / 8 VPLs whose fluxes and solid angles add up to the whole rendered cone', () => {
     const total = beamFluxLm(0, FLASHLIGHT_OPTICS.CONE, 4000, true);
     const omega = 2 * Math.PI * (1 - Math.cos(FLASHLIGHT_OPTICS.CONE));

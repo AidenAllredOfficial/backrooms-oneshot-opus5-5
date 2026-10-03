@@ -23,6 +23,7 @@ export interface FrameStats {
 }
 
 export function createFrameStats(capacity = 2048): FrameStats {
+  capacity = Number.isFinite(capacity) ? Math.max(1, Math.floor(capacity)) : 2048;
   const ms = new Float64Array(capacity);
   const cpu = new Float64Array(capacity);
   const at = new Float64Array(capacity);
@@ -41,7 +42,7 @@ export function createFrameStats(capacity = 2048): FrameStats {
     get count() { return count; },
     summary(window = 120) {
       if (count === 0) return { fps: 0, avg: 0, p95: 0, max: 0, max5s: 0, cpuMs: 0 };
-      const n = Math.min(window, count);
+      const n = Math.min(Number.isFinite(window) ? Math.max(1, Math.floor(window)) : 120, count);
       if (sortBuf.length < n) sortBuf = new Float64Array(n);
       let sum = 0, mx = 0, cpuSum = 0;
       for (let k = 0; k < n; k++) {
@@ -177,13 +178,18 @@ export interface PerfRecorder {
 export function createPerfRecorder(seconds: number): PerfRecorder {
   const dur = Math.max(0.1, Math.min(600, Number.isFinite(seconds) ? seconds : 5));
   const cap = Math.ceil(dur * 500) + 16;
-  const ms = new Float64Array(cap);
+  let ms = new Float64Array(cap);
   let n = 0, elapsed = 0, draws = 0, tris = 0, gpuSum = 0, gpuN = 0;
   let done = false;
   return {
     frame(frameMs, drawCalls, triangles, gpuMs) {
       if (done) return true;
-      if (n < cap) ms[n++] = frameMs;
+      if (n === ms.length) {
+        const grown = new Float64Array(ms.length * 2);
+        grown.set(ms);
+        ms = grown;
+      }
+      ms[n++] = frameMs;
       elapsed += frameMs;
       draws += drawCalls;
       tris += triangles;

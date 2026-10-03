@@ -46,6 +46,22 @@ function glitchLayout(s: StoreyId): ChunkLayout {
 }
 
 describe('glitch walls', () => {
+  it('enabling fly mode cancels a pending glitch warp', async () => {
+    const w = new TestWorld().add(glitchLayout(0)).add(glitchLayout(1));
+    const { bus, ev } = recordingBus();
+    const host = new TestHost(w);
+    host.prefetched = new Set([0]);
+    const p = createPlayerSystem(spawnAt(10.5 * CELL, 15.0, yawOf(0, 1)), DEFAULT_SETTINGS, bus, host);
+    await frames(p, w, bus, 180, input({ moveZ: 1 }));
+    expect(ev.glitch?.length).toBeGreaterThan(0);
+    expect((p as unknown as { debug: PlayerSystemDebug }).debug.warping).toBe(true);
+    p.setFly(true);
+    host.prefetched.add(1);
+    await frames(p, w, bus, 30, input({ moveZ: 1 }));
+    expect(p.state.s).toBe(0);
+    expect(host.switches).toEqual([]);
+    expect((p as unknown as { debug: PlayerSystemDebug }).debug.warping).toBe(false);
+  });
   it('never passes through; 1.2 s of pushing triggers exactly one glitch and a warp to (s+1)%3', async () => {
     const w = new TestWorld().add(glitchLayout(0)).add(glitchLayout(1));
     let t = 0;
@@ -187,6 +203,18 @@ function elevatorLayout(s: StoreyId): ChunkLayout {
 }
 
 describe('elevator', () => {
+  it('enabling fly mode cancels an elevator ride before its storey switch', async () => {
+    const w = new TestWorld().add(elevatorLayout(0)).add(elevatorLayout(1));
+    const { bus } = recordingBus();
+    const host = new TestHost(w);
+    const p = createPlayerSystem(spawnAt(12.6, 13.2, 0), DEFAULT_SETTINGS, bus, host);
+    await frames(p, w, bus, 240, input());
+    expect((p as unknown as { debug: PlayerSystemDebug }).debug.elevatorPhase).toBe('ride');
+    p.setFly(true);
+    await frames(p, w, bus, 240, input());
+    expect(p.state.s).toBe(0);
+    expect(host.switches).toEqual([]);
+  });
   it('rides: dwell 2 s -> doorsClosing -> ride (switch at 3 s) -> doorsOpening; doors block while closed', async () => {
     const w = new TestWorld().add(elevatorLayout(0)).add(elevatorLayout(1));
     let t = 0;

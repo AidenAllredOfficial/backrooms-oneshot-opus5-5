@@ -8,12 +8,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { gunzipSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { bakeQualityOf, QUALITY } from '../../src/core/quality.ts';
 import type { WorkerInit, WorkerRequest } from '../../src/core/worker.ts';
 import { createHandlerState, handleRequest } from '../../src/workers/handler.ts';
 import {
-  bakeFromBuild, buffersOf, canonicalJson, codeOf, decodeEntry, encodeEntry, entryPath, keyText, nsOf, parseFeatures,
+  bakeFromBuild, buffersOf, canonicalJson, codeOf, createCacheWriter, decodeEntry, encodeEntry, entryPath, keyText, nsOf, parseFeatures,
 } from '../../src/workers/tileCache.ts';
 import {
   bundleHash, cacheHashes, createTileStore, PUT_INFLIGHT, TILE_ENTRY, tileCacheHandler, WORLD_ENTRY, workerCodeHash,
@@ -50,6 +50,73 @@ describe('cache entry codec', () => {
     expect(Array.from(back.d.e)).toEqual([-1, 2]);
     expect(back.d.f).toBe('x');
   });
+
+  it('rejects truncated data even when its underlying ArrayBuffer contains more bytes', () => {
+    const encoded = encodeEntry({ a: new Uint16Array([1, 2]) });
+    const base = Math.ceil((4 + new DataView(encoded.buffer).getUint32(0, true)) / 8) * 8;
+    expect(() => decodeEntry(encoded.subarray(0, base + 3))).toThrow(/typed array range/);
+    expect(() => decodeEntry(encoded.subarray(0, 3))).toThrow(/header/);
+    const corrupt = encoded.slice();
+    new DataView(corrupt.buffer).setUint32(0, corrupt.length, true);
+    expect(() => decodeEntry(corrupt)).toThrow(/header/);
+  });
+
+  it('refuses invalid constructors, ranges and number tags instead of decoding corrupt cache entries', () => {
+    const descriptor = { $ta: 'Uint16Array', o: 0, n: 0 };
+    for (const value of [
+      { ...descriptor, $ta: 'constructor' }, { ...descriptor, o: -8 }, { ...descriptor, o: 0.5 },
+      { ...descriptor, n: -2 }, { ...descriptor, n: 1 }, { ...descriptor, n: 2 }, { $n: '17' },
+    ]) expect(() => decodeEntry(encodeEntry(value))).toThrow(/tileCache:/);
+  });
+
+  it('decodes entries from a nonzero byte offset without including surrounding bytes', () => {
+    const value = { a: new Float32Array([1, -2, 3]), b: new Uint8Array([4, 5]) };
+    const encoded = encodeEntry(value), padded = new Uint8Array(encoded.length + 23);
+    padded.fill(0xaa);
+    padded.set(encoded, 11);
+    expect(decodeEntry(padded.subarray(11, 11 + encoded.length))).toEqual(value);
+  });
+
+  it('preserves own prototype-named fields without changing decoded object prototypes', () => {
+    const value = JSON.parse('{"__proto__":{"t":"layout"},"constructor":"payload"}') as Record<string, unknown>;
+    const decoded = decodeEntry(encodeEntry(value)) as Record<string, unknown>;
+    expect(Object.hasOwn(decoded, '__proto__')).toBe(true);
+    expect(decoded.__proto__).toEqual({ t: 'layout' });
+    expect(decoded.constructor).toBe('payload');
+    expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+    expect(isDeepStrictEqual(decoded, value)).toBe(true);
+    const transported = structuredClone(decoded);
+    expect(Object.hasOwn(transported, '__proto__')).toBe(true);
+    expect(isDeepStrictEqual(transported, value)).toBe(true);
+  });
+});
+
+describe('cache writer failures', () => {
+  it('drops a failed nested worker and clears pending writes when postMessage throws', () => {
+    const w = { postMessage() { throw new Error('writer cannot receive'); }, terminate: vi.fn(), onmessage: null, onerror: null, onmessageerror: null };
+    const writer = createCacheWriter(() => w as unknown as Worker);
+    vi.stubGlobal('self', { location: { origin: 'http://localhost' } });
+    try {
+      expect(() => writer.store({ ns: '', key: 'f'.repeat(40) }, encodeEntry({ t: 'ready', job: 1 }))).not.toThrow();
+      expect(writer.pending).toBe(0);
+      expect(w.terminate).toHaveBeenCalledOnce();
+      expect(w.onmessage).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('retires a writer that cannot deserialize responses instead of keeping every write pending', () => {
+    const w = { postMessage() {}, terminate: vi.fn(), onmessage: null, onerror: null, onmessageerror: null } as unknown as Worker;
+    const writer = createCacheWriter(() => w);
+    // The worker resolves URLs before sending. Use a local worker location for this Node regression.
+    vi.stubGlobal('self', { location: { origin: 'http://localhost' } });
+    try {
+      writer.store({ ns: '', key: 'f'.repeat(40) }, encodeEntry({ t: 'ready', job: 1 }));
+      expect(writer.pending).toBe(1);
+      w.onmessageerror?.({} as MessageEvent);
+      expect(writer.pending).toBe(0);
+      expect(w.terminate).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
 });
 
 describe('cache keys', () => {
@@ -73,6 +140,12 @@ describe('cache keys', () => {
     const shuffled = { lighting: 'full', key: { q: 3, cz: 2, cx: 1, s: 0 }, job: 99, t: 'build' } as Extract<WorkerRequest, { t: 'build' }>;
     expect(keyText(init(), shuffled, codes)).toBe(keyText(init(), build, codes));
     expect(canonicalJson({ b: 1, a: [{ d: 1, c: 2 }] })).toBe('{"a":[{"c":2,"d":1}],"b":1}');
+  });
+
+  it('includes own prototype-named fields in canonical keys at every nesting level', () => {
+    const value = JSON.parse('{"__proto__":{"t":"layout"},"constructor":"payload"}') as Record<string, unknown>;
+    expect(canonicalJson(value)).toBe('{"__proto__":{"t":"layout"},"constructor":"payload"}');
+    expect(canonicalJson({ value })).not.toBe(canonicalJson({ value: { constructor: 'payload' } }));
   });
 
   it('namespaces by the first 12 hex digits of the code hash; flat URLs without the feature', () => {

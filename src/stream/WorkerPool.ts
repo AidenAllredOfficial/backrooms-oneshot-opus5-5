@@ -162,7 +162,8 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
 
   const dispatch = (s: Slot, j: Job): void => {
     s.job = j;
-    s.w.postMessage(j.req);
+    try { s.w.postMessage(j.req); }
+    catch (e) { onCrash(s, `postMessage failed: ${e instanceof Error ? e.message : String(e)}`); }
   };
 
   /** Assign queued jobs to idle workers: repeatedly take the best job; it goes to its home worker if that one is
@@ -216,7 +217,10 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
   const onMessage = (s: Slot, res: WorkerResponse): void => {
     if (s.initJob !== 0 && res.job === s.initJob) {
       // the init we are waiting for (an older init's reply is ignored: a newer one is still queued behind it)
-      if (res.t === 'error') console.error(`[WorkerPool] worker ${s.index} init failed: ${res.message}`);
+      if (res.t !== 'ready') {
+        onCrash(s, res.t === 'error' ? `init failed: ${res.message}` : `init answered with '${res.t}' instead of 'ready'`);
+        return;
+      }
       s.initJob = 0;
       retireIfDone(s);
       checkInitDone();
@@ -227,6 +231,10 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
     if (j === null || j.id !== res.job) {
       // reply to a superseded init or to an unknown job: ignore
       if (res.t === 'error' && j === null) console.error(`[WorkerPool] worker ${s.index}: ${res.message}`);
+      return;
+    }
+    if (res.t !== 'error' && res.t !== (j.req.t === 'init' ? 'ready' : j.req.t)) {
+      onCrash(s, `${j.req.t} answered with '${res.t}'`);
       return;
     }
     s.job = null;
@@ -242,19 +250,16 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
     console.error(`[WorkerPool] worker ${s.index} error: ${message}`);
     if (s.dead) return;
     const j = s.job;
-    s.job = null;
+    const starting = s.initJob !== 0;
     if (j && !j.dropped) j.reject(new Error(`worker ${s.index} crashed while running ${j.req.t}: ${message}`));
-    if (s.initJob !== 0 && j === null) {
-      // uncaught error before the worker acknowledged `init`: the handler catches everything, so this is a script
-      // load / evaluation failure. The worker is unusable: take it out of rotation.
-      stop(s);
-      if (slots.every((x) => x.dead)) {
-        failAll(new Error(`[WorkerPool] every worker failed to start (last error: ${message})`));
-        return;
-      }
-      checkInitDone();
+    // An error does not prove that the worker can accept another job. In particular a crash while a cancelled
+    // job is running can prevent its queued init from ever replying. Retire it and release all init waiters.
+    stop(s);
+    if (liveSlots().length === 0) {
+      failAll(new Error(`[WorkerPool] every worker failed${starting ? ' to start' : ''} (last error: ${message})`));
+      return;
     }
-    retireIfDone(s);
+    checkInitDone();
     pump();
   };
 
@@ -270,7 +275,8 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
   const sendInit = (s: Slot, it: WorkerInit): void => {
     const id = nextId++;
     s.initJob = id;
-    s.w.postMessage({ t: 'init', job: id, init: it } satisfies WorkerRequest);
+    try { s.w.postMessage({ t: 'init', job: id, init: it } satisfies WorkerRequest); }
+    catch (e) { onCrash(s, `init postMessage failed: ${e instanceof Error ? e.message : String(e)}`); }
   };
 
   const waitInit = (): Promise<void> =>
@@ -292,7 +298,11 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
     slots.push(s);
     sendInit(s, currentInit);
   };
-  for (let i = 0; i < n; i++) addSlot();
+  try { for (let i = 0; i < n; i++) addSlot(); }
+  catch (e) {
+    for (const s of slots) if (!s.dead) stop(s);
+    return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+  }
 
   const pool: WorkerPool = {
     get size() { return liveSlots().length; },
@@ -342,7 +352,8 @@ export function createWorkerPool(size: number, init: WorkerInit, factory?: () =>
       const want = Math.max(1, target | 0);
       const L = liveSlots().slice();
       if (want > L.length) {
-        for (let i = L.length; i < want; i++) addSlot();
+        try { for (let i = L.length; i < want; i++) addSlot(); }
+        catch (e) { return Promise.reject(e instanceof Error ? e : new Error(String(e))); }
         return waitInit();
       }
       // retire the newest workers (the oldest keep their warm layout caches)

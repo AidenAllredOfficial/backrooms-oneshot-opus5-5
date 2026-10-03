@@ -193,4 +193,72 @@ describe('input', () => {
     expect([o.moveX, o.moveZ, o.crouch]).toEqual([1, -1, false]);
     t.inp.dispose();
   });
+
+  it('Ctrl and Meta shortcuts never queue flashlight or interaction actions', () => {
+    const t = setup();
+    t.inp.lock();
+    for (const mods of [{ ctrlKey: true }, { metaKey: true }]) {
+      for (const code of ['KeyF', 'KeyE']) {
+        t.win.fire('keydown', { code, repeat: false, target: null, ...mods, preventDefault() {} });
+      }
+    }
+    const o = t.poll();
+    expect([o.flashlightPressed, o.interactPressed]).toEqual([false, false]);
+    t.inp.dispose();
+  });
+
+  it.each(['blur', 'pointerlockchange'])('clears toggles and queued actions when %s releases control', (event) => {
+    const t = setup();
+    t.inp.setSettings({ ...DEFAULT_SETTINGS, toggleSprint: true, toggleCrouch: true });
+    t.inp.lock();
+    t.mouse(300, 300); // discarded lock jump
+    t.mouse(20, 5);
+    t.key('KeyW'); t.key('ShiftLeft'); t.key('KeyC'); t.key('KeyF'); t.key('KeyE');
+    if (event === 'blur') t.win.fire(event, {});
+    else { t.doc.pointerLockElement = null; t.doc.fire(event, {}); }
+    const o = t.poll();
+    expect([o.moveX, o.moveZ, o.lookDX, o.lookDY, o.sprint, o.crouch, o.flashlightPressed, o.interactPressed])
+      .toEqual([0, 0, 0, 0, false, false, false, false]);
+    t.key('KeyW');
+    expect(t.poll().sprint).toBe(false);
+    t.inp.dispose();
+  });
+
+  it('leaves native selects and editable controls to the browser', () => {
+    const t = setup();
+    for (const target of [{ tagName: 'SELECT' }, { tagName: 'DIV', isContentEditable: true }]) {
+      for (const code of ['KeyW', 'KeyF', 'KeyE', 'ArrowDown']) {
+        t.win.fire('keydown', { code, repeat: false, target, preventDefault() { throw new Error('native control intercepted'); } });
+      }
+    }
+    const o = t.poll();
+    expect([o.moveZ, o.flashlightPressed, o.interactPressed]).toEqual([0, false, false]);
+    t.inp.dispose();
+  });
+
+  it.each(['true', 'YES', 'on', ''])('honours autostart=%s for unlocked mouse look', (value) => {
+    const t = setup(`?autostart=${value}`);
+    t.mouse(7, 2);
+    expect([t.poll().lookDX, t.poll().lookDX]).toEqual([7, 0]);
+    t.inp.dispose();
+  });
+
+  it('disconnecting a gamepad clears its crouch latch and button edges before reconnecting', () => {
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0, touched: false }));
+    const pad = { connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons };
+    vi.stubGlobal('navigator', { getGamepads: () => pad.connected ? [pad] : [] });
+    const t = setup();
+    t.inp.setSettings({ ...DEFAULT_SETTINGS, toggleCrouch: true });
+    buttons[0].pressed = buttons[1].pressed = true;
+    expect([t.poll().crouch, t.poll().interactPressed]).toEqual([true, false]);
+    pad.connected = false;
+    t.win.fire('gamepaddisconnected', {});
+    t.poll();
+    pad.connected = true;
+    buttons[1].pressed = false;
+    t.win.fire('gamepadconnected', {});
+    const o = t.poll();
+    expect([o.crouch, o.interactPressed]).toEqual([false, true]);
+    t.inp.dispose();
+  });
 });

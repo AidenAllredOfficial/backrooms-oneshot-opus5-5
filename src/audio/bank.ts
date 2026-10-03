@@ -40,6 +40,7 @@ export class BufferBank {
           const w = new Worker(new URL('./dspWorker.ts', import.meta.url), { type: 'module' });
           w.onmessage = (e: MessageEvent<{ id: number; chans?: Float32Array[]; error?: string }>): void => this.onDone(e.data);
           w.onerror = (): void => this.fallBack();
+          w.onmessageerror = (): void => this.fallBack();
           this.workers.push(w);
           this.busy.push(0);
         }
@@ -57,6 +58,7 @@ export class BufferBank {
 
   /** Render (or reuse) a buffer. Lower priority number = sooner. */
   request(req: SynthRequest, priority = 5): Promise<AudioBuffer> {
+    if (this.disposed) return Promise.reject(new Error('Audio buffer bank is disposed'));
     const key = synthKey(req);
     const b = this.buffers.get(key);
     if (b) return Promise.resolve(b);
@@ -69,7 +71,7 @@ export class BufferBank {
       this.queue.splice(i, 0, job);
     });
     this.inflight.set(key, p);
-    p.catch(() => this.inflight.delete(key));
+    p.catch(() => { if (this.inflight.get(key) === p) this.inflight.delete(key); });
     this.pump();
     return p;
   }
@@ -119,7 +121,12 @@ export class BufferBank {
         const id = this.nextId++;
         this.waiting.set(id, { job, w });
         this.busy[w]++;
-        this.workers[w].postMessage({ id, req: job.req, sampleRate: this.sampleRate });
+        try {
+          this.workers[w].postMessage({ id, req: job.req, sampleRate: this.sampleRate });
+        } catch {
+          this.fallBack();
+          return;
+        }
       }
       this.settle();
       return;
@@ -156,8 +163,13 @@ export class BufferBank {
     this.waiting.delete(d.id);
     this.busy[entry.w] = Math.max(0, this.busy[entry.w] - 1);
     const job = entry.job;
-    if (d.chans) this.finish(job, d.chans);
-    else { this.inflight.delete(job.key); job.reject(new Error(d.error ?? 'dsp job failed')); }
+    try {
+      if (d.chans) this.finish(job, d.chans);
+      else throw new Error(d.error ?? 'dsp job failed');
+    } catch (e) {
+      this.inflight.delete(job.key);
+      job.reject(e);
+    }
     this.pump();
   }
 
@@ -178,7 +190,9 @@ export class BufferBank {
     for (const w of this.workers) { try { w.terminate(); } catch { /* ignore */ } }
     this.workers = [];
     this.busy.length = 0;
-    for (const e of this.waiting.values()) this.queue.unshift(e.job);
+    // Keep startup essentials ahead of background work after a worker failure.
+    this.queue.unshift(...Array.from(this.waiting.values(), (e) => e.job));
+    this.queue.sort((a, b) => a.priority - b.priority);
     this.waiting.clear();
     this.pump();
   }
@@ -189,12 +203,19 @@ export class BufferBank {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     for (const w of this.workers) { try { w.terminate(); } catch { /* ignore */ } }
     this.workers = [];
     this.buffers.clear();
+    const error = new Error('Audio buffer bank is disposed');
+    for (const job of this.queue) job.reject(error);
+    for (const { job } of this.waiting.values()) job.reject(error);
     this.queue.length = 0;
     this.waiting.clear();
+    this.inflight.clear();
+    this.busy.length = 0;
+    this.inlineScheduled = false;
     this.settle();
   }
 }

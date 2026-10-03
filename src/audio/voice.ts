@@ -122,5 +122,10 @@ export function stopSource(s: AudioBufferSourceNode | null, when = 0): void {
   try { s.stop(when); } catch { /* already stopped */ }
   const d = (): void => { try { s.disconnect(); } catch { /* ignore */ } };
   if (when <= 0) d();
-  else s.onended = d;
+  else {
+    const ended = s.onended;
+    s.onended = (event): void => {
+      try { ended?.call(s, event); } finally { d(); }
+    };
+  }
 }

@@ -80,7 +80,9 @@ export function createTapeLogStore(storage: Storage | null): TapeLogStore {
     try {
       const txt = storage.getItem(TAPE_LOG_KEY);
       const v = txt === null ? null : (JSON.parse(txt) as unknown);
-      return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+      // Seeds are arbitrary strings, including object prototype property names.
+      return Object.assign(Object.create(null) as Record<string, unknown>,
+        typeof v === 'object' && v !== null && !Array.isArray(v) ? v : {});
     } catch {
       return {};
     }
@@ -92,7 +94,7 @@ export function createTapeLogStore(storage: Storage | null): TapeLogStore {
     save(seedText, log) {
       const v = validateTapeLog(log);
       if (!storage || !v || seedText.trim() === '' || seedText.length > 64) return;
-      const all = readAll();
+      const all = Object.assign(Object.create(null) as Record<string, unknown>, readAll());
       all[seedText] = { ...v, updatedAt: Date.now() };
       const keys = Object.keys(all);
       if (keys.length > TAPE_LOG_MAX) {

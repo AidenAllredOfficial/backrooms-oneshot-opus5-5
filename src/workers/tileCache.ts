@@ -50,7 +50,7 @@ export const isCacheable = (r: WorkerRequest): r is Cacheable =>
 /** Requests answered by the world stage alone (keyed by the world hash, independent of the bake settings). */
 export const isWorldRequest = (r: WorkerRequest): boolean => r.t === 'layout' || r.t === 'spawn' || r.t === 'find';
 
-const TYPED: Record<string, new (b: ArrayBuffer) => ArrayBufferView> = {
+const TYPED: Record<string, { new (b: ArrayBuffer): ArrayBufferView; BYTES_PER_ELEMENT: number }> = {
   Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array,
 };
 
@@ -68,7 +68,7 @@ export function encodeEntry(value: unknown): Uint8Array<ArrayBuffer> {
       return { $ta: v.constructor.name, o, n: bytes.byteLength };
     }
     if (Array.isArray(v)) return v.map(walk);
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const [k, x] of Object.entries(v)) if (x !== undefined) out[k] = walk(x);
     return out;
   };
@@ -83,24 +83,34 @@ export function encodeEntry(value: unknown): Uint8Array<ArrayBuffer> {
 }
 
 export function decodeEntry(bytes: Uint8Array): unknown {
+  if (bytes.byteLength < 4) throw new Error('tileCache: truncated entry header');
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const hlen = dv.getUint32(0, true);
+  if (hlen > bytes.byteLength - 4) throw new Error('tileCache: truncated entry header');
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + hlen))) as unknown;
-  const base = (4 + hlen + 7) & ~7;
+  const base = Math.ceil((4 + hlen) / 8) * 8;
+  if (base > bytes.byteLength) throw new Error('tileCache: truncated entry padding');
   const walk = (v: unknown): unknown => {
     if (v === null || typeof v !== 'object') return v;
     if (Array.isArray(v)) return v.map(walk);
     const r = v as Record<string, unknown>;
-    if (typeof r.$n === 'string') return Number(r.$n);
-    if (typeof r.$ta === 'string') {
-      const C = TYPED[r.$ta];
-      if (!C) throw new Error(`tileCache: unknown typed array ${r.$ta}`);
-      const start = bytes.byteOffset + base + (r.o as number);
-      return new C(bytes.buffer.slice(start, start + (r.n as number)) as ArrayBuffer);
+    if (typeof r.$n === 'string') {
+      if (!['NaN', 'Infinity', '-Infinity'].includes(r.$n)) throw new Error('tileCache: invalid non-finite number');
+      return Number(r.$n);
     }
-    const out: Record<string, unknown> = {};
+    if (typeof r.$ta === 'string') {
+      if (!Object.hasOwn(TYPED, r.$ta)) throw new Error(`tileCache: unknown typed array ${r.$ta}`);
+      const C = TYPED[r.$ta], o = r.o as number, n = r.n as number;
+      if (!Number.isSafeInteger(o) || o < 0 || o % 8 !== 0 || !Number.isSafeInteger(n) || n < 0 || n % C.BYTES_PER_ELEMENT !== 0 || o + n > bytes.byteLength - base) {
+        throw new Error('tileCache: invalid typed array range');
+      }
+      const start = bytes.byteOffset + base + o;
+      return new C(bytes.buffer.slice(start, start + n) as ArrayBuffer);
+    }
+    const out = Object.create(null) as Record<string, unknown>;
     for (const [k, x] of Object.entries(r)) out[k] = walk(x);
-    return out;
+    // Spread defines own properties, including '__proto__', while returning ordinary transport objects.
+    return { ...out };
   };
   return walk(header);
 }
@@ -118,7 +128,7 @@ export function canonicalJson(v: unknown): string {
   return JSON.stringify(v, (_k, x: unknown) => {
     if (x === null || typeof x !== 'object' || Array.isArray(x)) return x;
     const o = x as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(o).sort()) out[k] = o[k];
     return out;
   });
@@ -217,12 +227,21 @@ export interface CacheWriter { store(a: CacheAddr, encoded: Uint8Array<ArrayBuff
 export function createCacheWriter(spawn: () => Worker | null): CacheWriter {
   let w: Worker | null | undefined;
   let pending = 0;
+  const failed = (): void => {
+    if (w) {
+      w.onmessage = w.onerror = w.onmessageerror = null;
+      w.terminate();
+    }
+    w = null;
+    pending = 0;
+  };
   const writer = (): Worker | null => {
     if (w !== undefined) return w;
     try { w = spawn(); } catch { w = null; }
     if (w) {
       w.onmessage = () => { pending = Math.max(0, pending - 1); };
-      w.onerror = () => { w = null; pending = 0; };
+      w.onerror = failed;
+      w.onmessageerror = failed;
     }
     return w;
   };
@@ -234,7 +253,10 @@ export function createCacheWriter(spawn: () => Worker | null): CacheWriter {
       if (pending >= WRITER_MAX_PENDING) return;
       pending++;
       const raw = WRITER_RAW && CACHE_FEATURES.raw;
-      ww.postMessage({ url: entryUrl(a), bytes: encoded, raw }, [encoded.buffer]);
+      try { ww.postMessage({ url: entryUrl(a), bytes: encoded, raw }, [encoded.buffer]); }
+      catch {
+        failed();
+      }
     },
   };
 }

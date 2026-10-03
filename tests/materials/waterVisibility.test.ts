@@ -23,6 +23,32 @@ function fakeGl(): QueryGl & { queries: FakeQuery[]; active: FakeQuery | null; d
 }
 
 describe('water visibility', () => {
+  it('ignores in-flight visible and overdue queries from before a reset', () => {
+    let t = 0;
+    const v = createWaterVisibility(() => t);
+    const gl = fakeGl();
+    v.enabled = true;
+    gl.drawVisible = true;
+    v.before(gl); v.after(gl);
+    v.reset();
+    t += WATER_VIS_TUNE.OVERDUE_MS + 1;
+    expect(v.poll(gl)).toBe(false);
+    gl.resolveAll();
+    expect(v.poll(gl)).toBe(false);
+    expect(v.pending).toBe(0);
+    v.before(gl); v.after(gl); gl.resolveAll();
+    expect(v.poll(gl)).toBe(true);
+  });
+
+  it('also drops a query that was active during a reset', () => {
+    const v = createWaterVisibility(() => 0);
+    const gl = fakeGl();
+    v.enabled = true; gl.drawVisible = true;
+    v.before(gl); v.reset(); v.after(gl); gl.resolveAll();
+    expect(v.poll(gl)).toBe(false);
+    expect(v.pending).toBe(0);
+  });
+
   it('reports water only after a query with samples resolves, and holds it for HOLD_MS', () => {
     let t = 1000;
     const v = createWaterVisibility(() => t);

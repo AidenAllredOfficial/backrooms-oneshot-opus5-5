@@ -173,6 +173,87 @@ describe('WorkerPool', () => {
     pool.dispose();
   });
 
+  it('does not admit workers whose init handler returned an error', async () => {
+    const ws: FakeWorker[] = [];
+    const p = createWorkerPool(2, init(), () => { const w = new FakeWorker(); ws.push(w); return w as unknown as Worker; });
+    ws[0].answer((req) => ({ t: 'error', job: req.job, message: 'invalid world options', stack: '' }));
+    ws[1].answer();
+    const pool = await p;
+    expect(pool.size).toBe(1);
+    expect(ws[0].terminated).toBe(true);
+    const h = pool.submit(ascii(1), 0);
+    ws[1].answer();
+    await expect(h.promise).resolves.toMatchObject({ t: 'ascii' });
+    pool.dispose();
+
+    const only = new FakeWorker();
+    const failed = createWorkerPool(1, init(), () => only as unknown as Worker);
+    only.answer((req) => ({ t: 'error', job: req.job, message: 'init rejected', stack: '' }));
+    await expect(failed).rejects.toThrow(/init rejected/);
+    expect(only.terminated).toBe(true);
+  });
+
+  it('retires a crashed running worker and rejects queued jobs if no worker remains', async () => {
+    const { pool, ws } = await makePool(1);
+    const running = pool.submit(ascii(1), 0);
+    const queued = pool.submit(ascii(2), 1);
+    ws[0].onerror?.({ message: 'worker terminated', preventDefault() {} } as unknown as ErrorEvent);
+    await expect(running.promise).rejects.toThrow(/worker terminated/);
+    await expect(queued.promise).rejects.toThrow(/every worker failed/);
+    expect(ws[0].terminated).toBe(true);
+    expect(pool.size).toBe(0);
+    expect(pool.queued()).toBe(0);
+    pool.dispose();
+  });
+
+  it('reinit rejects instead of hanging when its cancelled in-flight worker crashes', async () => {
+    const { pool, ws } = await makePool(1);
+    let settled = false;
+    const running = pool.submit(ascii(1), 0);
+    running.promise.then(() => { settled = true; }, () => { settled = true; });
+    const ready = pool.reinit(init(2));
+    ws[0].onerror?.({ message: 'crash during old job', preventDefault() {} } as unknown as ErrorEvent);
+    await expect(ready).rejects.toThrow(/crash during old job/);
+    await flush();
+    expect(settled).toBe(false);
+    expect(pool.busy()).toBe(0);
+    pool.dispose();
+  });
+
+  it('turns synchronous postMessage failures into rejected jobs and removes the unusable worker', async () => {
+    const { pool, ws } = await makePool(1);
+    ws[0].postMessage = () => { throw new Error('cannot clone request'); };
+    const h = pool.submit(ascii(1), 0);
+    await expect(h.promise).rejects.toThrow(/cannot clone request/);
+    expect(ws[0].terminated).toBe(true);
+    expect(pool.busy()).toBe(0);
+    pool.dispose();
+
+    const w = new FakeWorker();
+    w.postMessage = () => { throw new Error('init cannot be cloned'); };
+    await expect(createWorkerPool(1, init(), () => w as unknown as Worker)).rejects.toThrow(/no live worker/);
+    expect(w.terminated).toBe(true);
+  });
+
+  it('cleans up earlier workers when a later factory call throws', async () => {
+    const w = new FakeWorker();
+    let count = 0;
+    await expect(createWorkerPool(2, init(), () => {
+      if (count++ > 0) throw new Error('worker construction denied');
+      return w as unknown as Worker;
+    })).rejects.toThrow(/worker construction denied/);
+    expect(w.terminated).toBe(true);
+  });
+
+  it('rejects a response with the correct job id but the wrong response type', async () => {
+    const { pool, ws } = await makePool(1);
+    const h = pool.submit(ascii(1), 0);
+    ws[0].answer((req) => ({ t: 'ready', job: req.job }));
+    await expect(h.promise).rejects.toThrow(/ascii answered with 'ready'/);
+    expect(ws[0].terminated).toBe(true);
+    pool.dispose();
+  });
+
   it('reinit cancels queued jobs, drops in-flight results and resolves after all workers reply', async () => {
     const { pool, ws } = await makePool(2);
     let settled = 0;

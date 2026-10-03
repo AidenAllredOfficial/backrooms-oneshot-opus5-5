@@ -201,7 +201,7 @@ export function bootKey(shot, search, { size, hc = PAGE_HC, bootKeys = null } = 
   const p = new URLSearchParams(search);
   const keys = [...new Set([...(bootKeys ?? BOOT_PARAM_KEYS), ...EXTRA_BOOT_KEYS])].sort();
   const { width, height } = parseSize(shot.size ?? size);
-  return JSON.stringify([shot.page ?? '', `${width}x${height}`, hc, ...keys.map((k) => [k, p.getAll(k).join(',')])]);
+  return JSON.stringify([shot.page ?? '', `${width}x${height}`, hc, ...keys.map((k) => [k, p.getAll(k)])]);
 }
 
 /**

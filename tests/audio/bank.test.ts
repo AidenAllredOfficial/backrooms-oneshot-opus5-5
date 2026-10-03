@@ -25,6 +25,7 @@ class FakeWorker {
   static all: FakeWorker[] = [];
   onmessage: ((e: { data: { id: number; chans?: Float32Array[]; error?: string } }) => void) | null = null;
   onerror: (() => void) | null = null;
+  onmessageerror: (() => void) | null = null;
   readonly jobs: { id: number; req: SynthRequest }[] = [];
   terminated = false;
   constructor() { FakeWorker.all.push(this); }
@@ -102,5 +103,85 @@ describe('BufferBank pending() / idle()', () => {
     const idle = bank.idle();
     bank.dispose();
     expect(await settlesWithin(idle, 20)).toBe(true);
+    expect(bank.pending()).toBe(0);
+  });
+
+  it('dispose() rejects queued and in-flight requests, and rejects later requests', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const bank = new BufferBank(ctx());
+    const requests = Array.from({ length: FakeWorker.all.length + 2 }, (_, i) => bank.request(tink(i)));
+    const settled = Promise.allSettled(requests);
+    bank.dispose();
+    expect(await settlesWithin(settled, 20)).toBe(true);
+    expect((await settled).every((r) => r.status === 'rejected')).toBe(true);
+    await expect(bank.request(tink(100))).rejects.toThrow('disposed');
+    expect(bank.pending()).toBe(0);
+    await bank.idle();
+  });
+
+  it('rejects an invalid worker result and continues processing other jobs', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const bank = new BufferBank(ctx());
+    const invalid = bank.request(tink(50));
+    const rejected = expect(invalid).rejects.toThrow();
+    const first = FakeWorker.all[0];
+    expect(() => first.onmessage!({ data: { id: first.jobs[0].id, chans: [] } })).not.toThrow();
+    await rejected;
+    const valid = bank.request(tink(51));
+    first.onmessage!({ data: { id: first.jobs[1].id, chans: [new Float32Array(64)] } });
+    await expect(valid).resolves.toBeDefined();
+    await bank.idle();
+    expect(bank.jobs).toBe(1);
+    bank.dispose();
+  });
+
+  it('keeps an immediate retry deduplicated when the previous rejection callback runs', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const bank = new BufferBank(ctx());
+    const initial = bank.request(tink(54));
+    const rejected = expect(initial).rejects.toThrow('failed');
+    const worker = FakeWorker.all[0];
+    worker.onmessage!({ data: { id: worker.jobs[0].id, error: 'failed' } });
+    const retry = bank.request(tink(54));
+    await rejected;
+    expect(bank.request(tink(54))).toBe(retry);
+    worker.onmessage!({ data: { id: worker.jobs[1].id, chans: [new Float32Array(64)] } });
+    await retry;
+    await bank.idle();
+    bank.dispose();
+  });
+
+  it('falls back to inline synthesis when posting a worker job throws', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const bank = new BufferBank(ctx());
+    FakeWorker.all[0].postMessage = (): never => { throw new Error('worker unavailable'); };
+    let result!: Promise<AudioBuffer>;
+    expect(() => { result = bank.request(tink(52)); }).not.toThrow();
+    await expect(result).resolves.toBeDefined();
+    expect(FakeWorker.all.every((w) => w.terminated)).toBe(true);
+    await bank.idle();
+    bank.dispose();
+  });
+
+  it('falls back when a worker message cannot be decoded', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const bank = new BufferBank(ctx());
+    const result = bank.request(tink(53));
+    FakeWorker.all[0].onmessageerror!();
+    await expect(result).resolves.toBeDefined();
+    await bank.idle();
+    bank.dispose();
+  });
+
+  it('preserves job priorities when worker jobs are requeued', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const bank = new BufferBank(ctx());
+    const order: number[] = [];
+    const background = FakeWorker.all.map((_, i) => bank.request(tink(60 + i), 10).then(() => { order.push(60 + i); }));
+    const essential = bank.request(tink(70), 0).then(() => { order.push(70); });
+    FakeWorker.all[0].onerror!();
+    await Promise.all([...background, essential]);
+    expect(order[0]).toBe(70);
+    bank.dispose();
   });
 });

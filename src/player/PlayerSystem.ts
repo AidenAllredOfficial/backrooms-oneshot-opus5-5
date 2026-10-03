@@ -308,7 +308,13 @@ export function createPlayerSystem(spawn: SpawnPoint, settings: Settings, bus: G
       if (state.fly === on) return;
       state.fly = on;
       state.vy = 0;
-      if (on) { extra.yMin = NaN; extra.yMax = NaN; state.onGround = false; }
+      if (on) {
+        warp.cancel(ctx);
+        tower.reset(ctx);
+        elevator.reset(ctx);
+        glitch.reset();
+        extra.yMin = NaN; extra.yMax = NaN; state.onGround = false;
+      }
       else { state.onGround = false; spawnCheck = true; }
     },
   };

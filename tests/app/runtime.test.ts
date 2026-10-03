@@ -44,6 +44,15 @@ describe('clock', () => {
 });
 
 describe('frame statistics', () => {
+  it('invalid capacities and summary windows still produce finite frame statistics', () => {
+    for (const capacity of [0, -1, NaN, 2.5]) {
+      const fs = createFrameStats(capacity);
+      fs.push(16, 2, 1000);
+      for (const window of [0, -1, NaN, 0.5]) {
+        expect(fs.summary(window)).toMatchObject({ avg: 16, p95: 16, max: 16, cpuMs: 2 });
+      }
+    }
+  });
   it('avg / p95 / max / max5s / fps', () => {
     const fs = createFrameStats(1024);
     let now = 0;
@@ -86,6 +95,15 @@ describe('frame statistics', () => {
     expect(rep.drawCalls).toBe(100);
     expect(rep.triangles).toBe(5000);
     expect(rep.gpuMs).toBeNull();
+  });
+  it('records every frame above its initial sample allocation', () => {
+    const r = createPerfRecorder(0.1);
+    let frames = 0;
+    while (!r.frame(0.125, 100, 5000, 1)) frames++;
+    const rep = r.report();
+    expect(frames + 1).toBe(800);
+    expect(rep).toMatchObject({ frames: 800, seconds: 0.1, fps: 8000, drawCalls: 100, triangles: 5000, gpuMs: 1 });
+    expect(rep.frameMs.avg).toBe(0.125);
   });
 });
 

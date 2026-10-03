@@ -60,4 +60,23 @@ describe('startup jobs', () => {
     expect(r.jobs).toHaveLength(3);
     expect(r.jobs[1].cancelled).toBe(true);
   });
+
+  it('does not reuse a preview preload for a full-lighting request of the same tile', () => {
+    const r = rig();
+    r.preload(request, 0);
+    const h = r.pool.submit({ ...request, lighting: 'full' }, -10);
+    expect(r.jobs).toHaveLength(2);
+    expect(h).toBe(r.jobs[1].handle);
+    expect(r.jobs[1].request).toMatchObject({ lighting: 'full' });
+    r.clear();
+    expect(r.jobs[0].cancelled).toBe(true);
+    expect(r.jobs[1].cancelled).toBe(false);
+  });
+
+  it('can reuse a full-lighting preload for a preview request without repeating the build', () => {
+    const r = rig();
+    r.preload({ ...request, lighting: 'full' }, 0);
+    expect(r.pool.submit(request, -10)).toBe(r.jobs[0].handle);
+    expect(r.jobs).toHaveLength(1);
+  });
 });

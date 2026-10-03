@@ -6,6 +6,8 @@ import { createLoop } from '../../src/app/loop.ts';
 import type { AppCore } from '../../src/app/appState.ts';
 import { createPlayerState } from '../../src/core/player.ts';
 import type { ChunkLayout } from '../../src/core/layout.ts';
+import type { PlayerInput } from '../../src/core/player.ts';
+import type { PlayerInputExt } from '../../src/player/controller.ts';
 
 function fixture() {
   const camera = new THREE.PerspectiveCamera();
@@ -61,6 +63,29 @@ function waterFixture() {
 }
 
 describe('render loop camera ordering', () => {
+  it('clears prior keyboard state before an automation driver writes input', () => {
+    const f = fixture();
+    f.sys.input.poll = (out?: PlayerInput) => { if (out) (out as PlayerInputExt).up = true; };
+    const inputs: boolean[] = [];
+    f.sys.player.update = (_dt?: number, out?: PlayerInput) => { inputs.push((out as PlayerInputExt).up === true); };
+    f.step();
+    f.core.driver = { timeScale: 1, drive(_s, _w, out) { out.moveZ = 1; } };
+    f.step();
+    expect(inputs).toEqual([true, false]);
+    expect(f.errors).toEqual([]);
+  });
+
+  it('suspends driver decisions while paused', () => {
+    const f = fixture();
+    const drive = vi.fn();
+    f.core.driver = { timeScale: 1, drive };
+    f.core.clock.paused = true;
+    f.step();
+    expect(drive).not.toHaveBeenCalled();
+    f.core.clock.paused = false;
+    f.step();
+    expect(drive).toHaveBeenCalledTimes(1);
+  });
   it('publishes this frame\'s pose and matrices before streaming and lighting during normal play', () => {
     const f = fixture();
     f.step();

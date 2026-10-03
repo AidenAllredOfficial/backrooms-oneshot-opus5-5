@@ -235,3 +235,52 @@ describe('WorldQueryImpl', () => {
     expect(q.floorAt(5, 5, 0)).toBe(0);
   });
 });
+
+describe('distant resident chunks', () => {
+  it('independent query consumers do not mistake each other\'s box stamps for their own', () => {
+    const sd = new StoreyData();
+    const l = plain({ s: 0, cx: 0, cz: 0 });
+    sd.set(createChunkData(l, collisionOf(l.key, [{ b: [1, 0, 1, 3, 1, 3], flags: SolidFlag.COLLIDE }])));
+    const deps = { storey: () => 0 as const, data: () => sd };
+    const a = createWorldQuery(deps), b = createWorldQuery(deps);
+    const out = new Float32Array(6);
+    expect(a.boxesNear(2, 2, 1, out)).toBe(1);
+    expect(b.boxesNear(2, 2, 1, out)).toBe(1);
+    expect(a.boxesNear(2, 2, 1, out)).toBe(1);
+    expect(b.boxesNear(2, 2, 1, out)).toBe(1);
+  });
+
+  it('keeps chunks 32768 apart independently registered and deletes only the requested chunk', () => {
+    const sd = new StoreyData();
+    const a = plain({ s: 0, cx: 0, cz: 0 });
+    const b = plain({ s: 0, cx: 32768, cz: 0 }, 50);
+    sd.set(createChunkData(a, collisionOf(a.key, [])));
+    sd.set(createChunkData(b, collisionOf(b.key, [])));
+    expect(sd.size).toBe(2);
+    expect(sd.get(0, 0)?.layout).toBe(a);
+    expect(sd.get(32768, 0)?.layout).toBe(b);
+    expect(sd.delete(0, 0)).toBe(true);
+    expect(sd.get(32768, 0)?.layout).toBe(b);
+    expect(sd.size).toBe(1);
+  });
+
+  it('range queries visit loaded chunks without walking the empty space between distant destinations', () => {
+    const sd = new StoreyData();
+    for (const cx of [0, 1_000_000]) {
+      const l = plain({ s: 0, cx, cz: 0 });
+      l.fixtures.push(fixture(cx + 1, 2, 2, 2));
+      l.emitters.push({ kind: 0, x: 2, y: 2, z: 2, gain: 1, seed: cx + 1 });
+      sd.set(createChunkData(l, collisionOf(l.key, [{ b: [1, 0, 1, 3, 1, 3], flags: SolidFlag.COLLIDE }])));
+    }
+    const q = createWorldQuery({ storey: () => 0, data: () => sd });
+    const fixtures: FixtureRef[] = [];
+    const emitters: Parameters<typeof q.emittersNear>[3] = [];
+    const boxes = new Float32Array(12);
+    expect(q.fixturesNear(0, 0, Infinity, fixtures)).toBe(2);
+    expect(q.emittersNear(0, 0, Infinity, emitters)).toBe(2);
+    expect(q.boxesNear(0, 0, Infinity, boxes)).toBe(2);
+    expect(q.boxesNear(0, 0, CHUNK_SIZE * 500_000, boxes)).toBe(1);
+    expect(q.fixturesNear(0, 0, CHUNK_SIZE * 500_000, fixtures)).toBe(1);
+    expect(q.floorAt(CHUNK_SIZE * 1_000_000 + 5, 5, 0)).toBe(0);
+  });
+});

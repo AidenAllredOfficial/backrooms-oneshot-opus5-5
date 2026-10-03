@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { deflateSync } from 'node:zlib';
 
 // the tools are untyped .mjs: imported through a non-literal specifier (typed any)
 const TOOLS = path.resolve(import.meta.dirname, '../../tools');
@@ -60,6 +61,12 @@ describe('boot keys and execution order', () => {
     expect(needsFreshPage(s('seed=1&autostart=0'))).toBe(true);
     expect(needsFreshPage(s('a=1', { page: 'harness/post.html' }))).toBe(true);
     expect(isGameShot(s('seed=1'))).toBe(true);
+  });
+
+  it('keeps literal commas distinct from repeated boot parameters', () => {
+    const key = (search: string) => bootKey(s(search), search, { size: '1600x900' });
+    expect(key('quality=high,low')).not.toBe(key('quality=high&quality=low'));
+    expect(key('quality=high&quality=low')).not.toBe(key('quality=low&quality=high'));
   });
 
   it('groups by boot key in first-appearance order and sorts groups by seed, s, x, z', () => {
@@ -119,6 +126,35 @@ describe('png codec', () => {
     expect(d.max).toBe(20);
     expect(d.madPct).toBeCloseTo(mad(a, b) * 100, 3);
     expect(pixelDiff(a, a)).toEqual({ px: 0, px8: 0, max: 0, madPct: 0 });
+  });
+
+  it('rejects missing ends and chunks extending past the file', () => {
+    const png = encodePNG(1, 1, new Uint8Array(3));
+    expect(() => decodePNG(png.subarray(0, -12))).toThrow('incomplete PNG');
+    const truncated = Buffer.from(png);
+    truncated.writeUInt32BE(png.length, 33);
+    expect(() => decodePNG(truncated)).toThrow('truncated PNG chunk');
+  });
+
+  it('rejects incomplete pixels and invalid row filters instead of returning a misleading image', () => {
+    const png = encodePNG(1, 1, new Uint8Array(3));
+    const withPixels = (raw: number[]) => {
+      const data = deflateSync(Buffer.from(raw));
+      const chunk = Buffer.alloc(data.length + 12);
+      chunk.writeUInt32BE(data.length);
+      chunk.write('IDAT', 4, 'latin1');
+      data.copy(chunk, 8);
+      return Buffer.concat([png.subarray(0, 33), chunk, png.subarray(-12)]);
+    };
+    expect(() => decodePNG(withPixels([0, 1, 2]))).toThrow('truncated PNG pixels');
+    expect(() => decodePNG(withPixels([5, 1, 2, 3]))).toThrow('unsupported PNG filter 5');
+  });
+
+  it('rejects invalid encoder dimensions, channel counts and short pixel arrays', () => {
+    expect(() => encodePNG(0, 1, new Uint8Array())).toThrow('invalid PNG dimensions');
+    expect(() => encodePNG(1.5, 1, new Uint8Array(6))).toThrow('invalid PNG dimensions');
+    expect(() => encodePNG(1, 1, new Uint8Array(2), { channels: 2 })).toThrow('unsupported PNG channels');
+    expect(() => encodePNG(2, 2, new Uint8Array(3))).toThrow('truncated PNG pixels');
   });
 });
 

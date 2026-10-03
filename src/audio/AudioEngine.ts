@@ -225,11 +225,12 @@ export function createAudioSystem(bus: GameBus, settings: Settings, q: QualityCo
         const t0 = performance.now();
         await preload(s);
         await resumed;
+        if (disposed || sys !== s) return;
         stats.state = s.ctx.state;
         log(`audio started (${s.ctx.sampleRate} Hz, ${s.ctx.state}, essentials ${Math.round(performance.now() - t0)} ms)`);
         nextProp = nextAlloc = nextProbe = 0;
         nextMeter = s.ctx.currentTime + METER_DT / 2;
-      })();
+      })().catch((e: unknown) => { starting = null; throw e; });
       return starting;
     },
 

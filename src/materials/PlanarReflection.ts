@@ -42,7 +42,7 @@ const MIN_CAMERA_CLEARANCE = 0.02; // m above the plane; below it the mirror is 
 
 /** Build the reflection camera for a horizontal mirror at y = planeY (pure maths, exported for tests). */
 export function setupReflectionCamera(camera: THREE.PerspectiveCamera, planeY: number, out: THREE.PerspectiveCamera, scratch: ReflScratch): void {
-  camera.updateMatrixWorld();
+  camera.updateWorldMatrix(true, false);
   const { camPos, dir, target, up, plane, clip, q } = scratch;
   camPos.setFromMatrixPosition(camera.matrixWorld);
   // mirror the eye, the look-at target and the up vector about y = planeY
@@ -162,7 +162,7 @@ export function createPlanarReflection(globals: MaterialGlobals, q: QualityConfi
     get materials() { return [mips.material]; },
     update(renderer, scene, camera, waterY) {
       if (scale <= 0 || waterY === null) { globals.reflOn.value = 0; return; }
-      camera.updateMatrixWorld();
+      camera.updateWorldMatrix(true, false);
       const camY = camera.matrixWorld.elements[13];
       if (camY < waterY + MIN_CAMERA_CLEARANCE) { globals.reflOn.value = 0; return; }
       // no water pixel passed the depth test lately (every plane in reach is behind a wall): no mirror

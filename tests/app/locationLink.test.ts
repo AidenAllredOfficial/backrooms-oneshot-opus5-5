@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { locationLinkSearch } from '../../src/app/locationLink.ts';
+import { locationLinkSearch, sharedLocationSearch } from '../../src/app/locationLink.ts';
 import { locationSearch, parseLaunchParams } from '../../src/app/urlParams.ts';
 import { DEFAULT_SETTINGS } from '../../src/core/settings.ts';
 
 describe('location links', () => {
+  it('copies generation overrides and height so the pasted link resolves to the same world', () => {
+    const params = parseLaunchParams('?seed=custom&forceZone=OFFICE&forceMood=DARK&forceLandmark=ATRIUM&testScene=cornell&lights=dead', DEFAULT_SETTINGS);
+    const search = sharedLocationSearch(params, { s: 1, x: 12, y: -1.325, z: 14, yaw: 1, pitch: 0 });
+    const next = parseLaunchParams(locationLinkSearch(`https://example.com/${search}`), DEFAULT_SETTINGS);
+    for (const key of ['seedText', 'forceZone', 'forceMood', 'forceLandmark', 'testScene', 'lights'] as const) {
+      expect(next[key]).toBe(params[key]);
+    }
+    expect(next.y).toBe(-1.325);
+    expect(next.warnings).toEqual([]);
+  });
   it('round trips a copied location, including encoded seed text and a negative pose', () => {
     const search = locationSearch('a tape & #7', 2, -123.45, 678.9, -2.345, -0.25);
     const loaded = locationLinkSearch(`https://example.com/backrooms/${search}`);

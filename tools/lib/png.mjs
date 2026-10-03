@@ -5,25 +5,37 @@ import { deflateSync, inflateSync } from 'node:zlib';
 export function decodePNG(buf) {
   const sig = [137, 80, 78, 71, 13, 10, 26, 10];
   for (let i = 0; i < 8; i++) if (buf[i] !== sig[i]) throw new Error('not a PNG');
-  let off = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0;
+  let off = 8, w = 0, h = 0, depth = 0, ctype = 0, interlace = 0, headerSeen = false, ended = false;
   const idat = [];
   while (off < buf.length) {
+    if (buf.length - off < 12) throw new Error('truncated PNG chunk');
     const len = buf.readUInt32BE(off);
+    if (len > buf.length - off - 12) throw new Error('truncated PNG chunk');
     const type = buf.toString('latin1', off + 4, off + 8);
     const data = buf.subarray(off + 8, off + 8 + len);
-    if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); depth = data[8]; ctype = data[9]; interlace = data[12]; }
+    if (type === 'IHDR') {
+      if (off !== 8 || headerSeen || len !== 13) throw new Error('invalid PNG header');
+      headerSeen = true;
+      w = data.readUInt32BE(0); h = data.readUInt32BE(4); depth = data[8]; ctype = data[9]; interlace = data[12];
+      if (w === 0 || h === 0 || data[10] !== 0 || data[11] !== 0) throw new Error('invalid PNG header');
+    } else if (!headerSeen) throw new Error('missing PNG header');
     else if (type === 'IDAT') idat.push(data);
-    else if (type === 'IEND') break;
+    else if (type === 'IEND') { if (len !== 0) throw new Error('invalid PNG end'); ended = true; break; }
     off += 12 + len;
   }
+  if (!headerSeen || !ended || idat.length === 0) throw new Error('incomplete PNG');
   if (depth !== 8 || interlace !== 0) throw new Error(`unsupported PNG (depth ${depth}, interlace ${interlace})`);
   const ch = ctype === 6 ? 4 : ctype === 2 ? 3 : ctype === 4 ? 2 : ctype === 0 ? 1 : 0;
   if (!ch) throw new Error(`unsupported PNG colour type ${ctype}`);
-  const raw = inflateSync(Buffer.concat(idat));
   const stride = w * ch;
+  const expected = (stride + 1) * h;
+  if (!Number.isSafeInteger(expected)) throw new Error('invalid PNG dimensions');
+  const raw = inflateSync(Buffer.concat(idat), { maxOutputLength: expected });
+  if (raw.length !== expected) throw new Error('truncated PNG pixels');
   const px = new Uint8Array(stride * h);
   for (let y = 0; y < h; y++) {
     const f = raw[y * (stride + 1)];
+    if (f > 4) throw new Error(`unsupported PNG filter ${f}`);
     const src = y * (stride + 1) + 1;
     const dst = y * stride;
     for (let x = 0; x < stride; x++) {
@@ -70,6 +82,11 @@ function chunk(type, data) {
 
 /** Encodes RGB (3 channels) or RGBA (4) pixels as a PNG (filter 0 per row; zlib `level`). */
 export function encodePNG(w, h, pixels, { channels = 3, level = 3 } = {}) {
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w <= 0 || h <= 0 || w > 0xffffffff || h > 0xffffffff || !Number.isSafeInteger(w * h * channels)) {
+    throw new Error('invalid PNG dimensions');
+  }
+  if (channels !== 3 && channels !== 4) throw new Error(`unsupported PNG channels ${channels}`);
+  if (!(pixels instanceof Uint8Array) || pixels.length < w * h * channels) throw new Error('truncated PNG pixels');
   const stride = w * channels;
   const raw = Buffer.alloc((stride + 1) * h);
   for (let y = 0; y < h; y++) {

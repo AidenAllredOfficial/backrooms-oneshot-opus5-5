@@ -30,6 +30,12 @@ describe('capture memo', () => {
     expect(key({ search: 'zone=LOBBY&seed=7&autostart=1' })).toBe(key());
   });
 
+  it('preserves duplicate parameter precedence and unambiguous key/value boundaries', () => {
+    expect(key({ search: 'quality=high&quality=low' })).not.toBe(key({ search: 'quality=low&quality=high' }));
+    expect(key({ search: 'a%3Db=c' })).not.toBe(key({ search: 'a=b%3Dc' }));
+    expect(key({ search: 'quality=high&seed=1&quality=low' })).toBe(key({ search: 'seed=1&quality=high&quality=low' }));
+  });
+
   it('is off for fresh shots, timing presets, evals and memo:false', () => {
     expect(memoAllowed({ params: 'seed=1' }, R)).toBe(true);
     expect(memoAllowed({ params: 'seed=1', fresh: true }, R)).toBe(false);

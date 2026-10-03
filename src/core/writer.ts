@@ -42,8 +42,9 @@ export class GeometryWriter {
   private max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
 
   constructor(initialVertices = 4096) {
-    this.cap = initialVertices;
-    this.icap = initialVertices * 2;
+    if (!Number.isSafeInteger(initialVertices) || initialVertices < 0) throw new RangeError('GeometryWriter: initialVertices must be a nonnegative integer');
+    this.cap = Math.max(1, initialVertices);
+    this.icap = this.cap * 2;
     this.pos = new Float32Array(this.cap * 3);
     this.nor = new Int8Array(this.cap * 4);
     this.uv = new Float32Array(this.cap * 2);

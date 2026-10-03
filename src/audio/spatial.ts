@@ -93,6 +93,7 @@ export class Spatializer {
   /** Step one cell further from the listener along the field (for "moving away" sources). Returns false at a
    * dead end. `cell` = [x, z] cell centre, updated in place. */
   stepAway(rng: Rng, cell: [number, number]): boolean {
+    if (!this.world) return false;
     const f = this.field;
     const k = fieldIndex(f, cellOf(cell[0]), cellOf(cell[1]));
     if (k < 0) return false;
@@ -105,6 +106,11 @@ export class Spatializer {
       const nk = nj * f.size + ni;
       const d = f.dist[nk];
       if (!(d < Infinity) || d <= d0) continue;
+      const gi = f.gi0 + i, gj = f.gj0 + j;
+      const edge = dd === 0 ? this.world.edgeSound('x', gi + 1, gj)
+        : dd === 1 ? this.world.edgeSound('x', gi, gj)
+        : dd === 2 ? this.world.edgeSound('z', gi, gj + 1) : this.world.edgeSound('z', gi, gj);
+      if (!(edge > 0) || !this.world.cellWalkable(f.gi0 + ni, f.gj0 + nj)) continue;
       const s = d + rng.float() * 0.5;
       if (s > bestScore) { bestScore = s; best = nk; }
     }

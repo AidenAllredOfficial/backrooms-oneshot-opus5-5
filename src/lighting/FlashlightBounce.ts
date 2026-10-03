@@ -339,13 +339,19 @@ export function createFlashlightBounce(): FlashlightBounce {
       }
       // beam frame: axis d, right r (orthogonalised), up = r x d
       let dx = inp.dx, dy = inp.dy, dz = inp.dz;
-      const dl = Math.hypot(dx, dy, dz) || 1;
-      dx /= dl; dy /= dl; dz /= dl;
+      const dl = Math.hypot(dx, dy, dz);
+      if (dl < 1e-6) { dx = 0; dy = 0; dz = -1; }
+      else { dx /= dl; dy /= dl; dz /= dl; }
       let rx = inp.rx, ry = inp.ry, rz = inp.rz;
       const rd = rx * dx + ry * dy + rz * dz;
       rx -= rd * dx; ry -= rd * dy; rz -= rd * dz;
       let rl = Math.hypot(rx, ry, rz);
-      if (rl < 1e-6) { rx = -dz; ry = 0; rz = dx; rl = Math.hypot(rx, rz) || 1; } // looking straight up / down
+      if (rl < 1e-6) {
+        // A parallel right vector needs a perpendicular fallback, including a vertical beam.
+        if (Math.abs(dy) < 0.9) { rx = -dz; ry = 0; rz = dx; }
+        else { rx = dy; ry = -dx; rz = 0; }
+        rl = Math.hypot(rx, ry, rz);
+      }
       rx /= rl; ry /= rl; rz /= rl;
       const ux = ry * dz - rz * dy, uy = rz * dx - rx * dz, uz = rx * dy - ry * dx;
       const snap = !(inp.dt > 0) || inp.dt > 0.25 || !wasOn;

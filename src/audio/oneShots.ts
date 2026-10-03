@@ -44,6 +44,7 @@ const cellOf = (m: number): number => Math.floor(m / CELL + 1e-7);
 export class OneShots {
   private readonly env: AudioEnv;
   private readonly active: Active[] = [];
+  private readonly flat = new Map<AudioBufferSourceNode, () => void>();
   private readonly pool: SourceResolution[] = [];
   emitters: Emitters | null = null;
   world: WorldQuery | null = null;
@@ -99,11 +100,14 @@ export class OneShots {
     p.pan.value = Math.max(-1, Math.min(1, pan));
     src.connect(g).connect(p).connect(env.graph.buses[bus]);
     const entry = env.graph.registerRate(src.playbackRate, rate);
-    src.onended = (): void => {
+    const finish = (): void => {
+      this.flat.delete(src);
       env.graph.unregisterRate(entry);
       try { src.disconnect(); g.disconnect(); p.disconnect(); } catch { /* ignore */ }
     };
+    src.onended = finish;
     src.start(Math.max(env.ctx.currentTime, when));
+    this.flat.set(src, finish);
     return true;
   }
 
@@ -244,6 +248,7 @@ export class OneShots {
 
   stopAll(): void {
     for (let i = this.active.length - 1; i >= 0; i--) this.retire(i);
+    for (const [src, finish] of this.flat) { stopSource(src); finish(); }
     stopSource(this.rideSrc);
     this.rideSrc = null;
   }

@@ -120,7 +120,7 @@ export function createWorldGen(opts: WorldGenOptions): WorldGen {
         const q = query.trim().toLowerCase();
         if (q === 'spawn') return testSceneSpawn(scene, from.s, seed);
         if (q === 'tower' && scene === 'tower') return testSceneSpawn(scene, from.s, seed);
-        if (q !== 'safe') return null;
+        if (q !== 'safe' && q !== 'clear') return null;
       }
       return findNearestImpl(spawnWorld, query, from, maxChunks);
     },

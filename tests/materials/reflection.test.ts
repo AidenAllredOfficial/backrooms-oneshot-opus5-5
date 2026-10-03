@@ -36,6 +36,22 @@ const CASES: [number, number, number, number, number, number][] = [
 ];
 
 describe('WP9 planar reflection maths', () => {
+  it('updates a parented camera before reading its world position and orientation', () => {
+    const cam = mainCamera(0, 1.62, 0, 0, -0.4);
+    const rig = new THREE.Group();
+    rig.add(cam);
+    rig.position.set(20, 3, 30);
+    rig.rotation.y = 0.7;
+    const refl = new THREE.PerspectiveCamera();
+    setupReflectionCamera(cam, -0.1, refl, createReflScratch());
+    expect(refl.position.toArray()).toEqual([20, 2 * -0.1 - 4.62, 30]);
+    const mainDir = new THREE.Vector3(), reflDir = new THREE.Vector3();
+    cam.getWorldDirection(mainDir); refl.getWorldDirection(reflDir);
+    expect(reflDir.x).toBeCloseTo(mainDir.x, 9);
+    expect(reflDir.y).toBeCloseTo(-mainDir.y, 9);
+    expect(reflDir.z).toBeCloseTo(mainDir.z, 9);
+  });
+
   it('reflMatrix * viewPos(X) equals the mirrored camera\'s image of the reflected point', () => {
     const scratch = createReflScratch();
     for (const [x, y, z, yaw, pitch, planeY] of CASES) {

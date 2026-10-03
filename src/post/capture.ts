@@ -85,6 +85,7 @@ export function createDisplayCapture(width: number, height: number): DisplayCapt
   quad.frustumCulled = false;
   const scene = new THREE.Scene();
   scene.add(quad);
+  let disposed = false;
   const targets = new Map<string, THREE.WebGLRenderTarget>();
   const targetFor = (w: number, h: number): THREE.WebGLRenderTarget => {
     const key = `${w}x${h}`;
@@ -107,10 +108,14 @@ export function createDisplayCapture(width: number, height: number): DisplayCapt
     u.uTaps.value = Math.max(1, Math.min(8, Math.ceil(foot / 1.5)));
     quad.material = downMat;
     const prev = renderer.getRenderTarget();
-    renderer.setRenderTarget(rt);
-    renderer.render(scene, cam);
-    renderer.setRenderTarget(prev);
-    quad.material = blitMat;
+    const face = renderer.getActiveCubeFace(), level = renderer.getActiveMipmapLevel();
+    try {
+      renderer.setRenderTarget(rt);
+      renderer.render(scene, cam);
+    } finally {
+      renderer.setRenderTarget(prev, face, level);
+      quad.material = blitMat;
+    }
   };
 
   return {
@@ -126,14 +131,19 @@ export function createDisplayCapture(width: number, height: number): DisplayCapt
     warm(renderer) {
       renderDown(renderer, targetFor(1, 1), 1, 1);
     },
-    read(renderer, w, h) {
+    async read(renderer, w, h) {
+      if (disposed) throw new Error('display capture disposed');
+      if (!Number.isFinite(w) || !Number.isFinite(h)) throw new RangeError('capture dimensions must be finite');
       const W = Math.max(1, Math.floor(w)), H = Math.max(1, Math.floor(h));
       const rt = targetFor(W, H);
       renderDown(renderer, rt, W, H);
       const px = new Uint8Array(W * H * 4);
-      return renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H, px).then(() => px);
+      await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H, px);
+      return px;
     },
     dispose() {
+      if (disposed) return;
+      disposed = true;
       display.dispose();
       for (const rt of targets.values()) rt.dispose();
       targets.clear();

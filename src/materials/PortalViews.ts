@@ -7,10 +7,12 @@ import { MRT_PASS, REFL_PASS, WIRE_PX, setWirePixel } from './shared.ts';
 
 /** Share the viewer's perspective, with the near plane cutting away the blind backing pocket. */
 export function setupPortalCamera(camera: THREE.PerspectiveCamera, a: PortalFrame, b: PortalFrame, out: THREE.PerspectiveCamera): void {
-  camera.updateMatrixWorld();
-  const p = throughPortal(a, b, camera.position.x, camera.position.y, camera.position.z);
+  camera.updateWorldMatrix(true, false);
+  const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+  const p = throughPortal(a, b, eye.x, eye.y, eye.z);
   out.position.set(p.x, p.y, p.z);
-  out.quaternion.copy(camera.quaternion).premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), portalRotation(a, b)));
+  camera.getWorldQuaternion(out.quaternion);
+  out.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), portalRotation(a, b)));
   out.near = camera.near; out.far = camera.far; out.layers.mask = camera.layers.mask;
   out.updateMatrixWorld(); out.projectionMatrix.copy(camera.projectionMatrix);
   const plane = new THREE.Plane(new THREE.Vector3(b.nx, 0, b.nz), -(b.x * b.nx + b.z * b.nz));

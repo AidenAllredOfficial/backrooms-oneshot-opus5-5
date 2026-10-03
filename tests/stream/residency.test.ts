@@ -222,6 +222,22 @@ function rig(q: QualityConfig = { ...QUALITY.low, streamRadius: 1 }, start: Stor
 const C = CHUNK_SIZE;
 
 describe('residency state machine', () => {
+  it.each([0, 1])('near readiness does not require never-streamed chunks beyond radius %i', async (streamRadius) => {
+    const r = rig({ ...QUALITY.low, streamRadius });
+    const x = 57, z = 0.6; // seed 7's actual spawn, 39 m from the never-streamed northern ring-2 chunk
+    r.tick(x, z);
+    expect(r.st.isReadyNear(20, 40, false)).toBe(false);
+    await r.answerLayouts();
+    await r.answerBuilds();
+    await r.answerBakes();
+    for (let i = 0; i < 200; i++) r.tick(x, z, 20);
+    expect(r.st.isIdle()).toBe(true);
+    expect(r.st.isReady(streamRadius, true)).toBe(true);
+    expect(r.st.chunkLoaded({ s: 0, cx: 1, cz: -(streamRadius + 1) })).toBe(false);
+    expect(r.st.isReadyNear(20, 40, false)).toBe(true);
+    r.st.dispose();
+  });
+
   it('requests layouts + builds for the desired set, own chunk first', () => {
     const r = rig();
     r.tick(C / 2, C / 2);
@@ -707,6 +723,21 @@ describe('residency state machine', () => {
     await fd;
     expect(spawned).toEqual(point);
     expect(found).toBe(null);
+  });
+
+  it('dispose cancels pending queries and ignores their late responses when the shared pool stays alive', async () => {
+    const r = rig({ ...QUALITY.low, streamRadius: 0 });
+    let settled = 0;
+    void r.st.spawn(0).then(() => { settled++; }, () => { settled++; });
+    void r.st.findNearest('safe', { s: 0, x: 1, z: 2 }, 4).then(() => { settled++; }, () => { settled++; });
+    const spawn = r.pool.pending('spawn')[0], find = r.pool.pending('find')[0];
+    r.st.dispose();
+    expect(spawn.cancelled).toBe(true);
+    expect(find.cancelled).toBe(true);
+    spawn.resolve({ t: 'spawn', job: spawn.id, result: { s: 0, x: 3, y: 0, z: 4, yaw: 0 } } as unknown as WorkerResponse);
+    find.resolve({ t: 'find', job: find.id, result: null });
+    await flush();
+    expect(settled).toBe(0);
   });
 
   it('a full bake that keeps failing leaves the preview and does not block isReady(needFull)', async () => {
